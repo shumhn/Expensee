@@ -1,0 +1,19 @@
+{
+  "name": "private-payroll-keeper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keeper service for Private Payroll v2",
+  "scripts": {
+    "start": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@inco/solana-sdk": "^0.0.2",
+    "@noble/curves": "^1.9.0",
+    "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.30",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
