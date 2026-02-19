@@ -8,10 +8,10 @@ skip-lint = false
 [programs.devnet]
 delegation_program = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
 inco_lightning = "5sjEbPiqgZrYwR31ahR6Uk9wf5awoX61YGg7jExQSwaj"
-payroll = "CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh"
+payroll = "AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE"
 
 [programs.localnet]
-payroll = "CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh"
+payroll = "AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE"
 
 [registry]
 url = "https://api.apr.dev"
@@ -21,7 +21,7 @@ cluster = "devnet"
 wallet = "keys/payroll-authority.json"
 
 [scripts]
-test = "echo 'No legacy root tests configured. Use app/scripts and keeper runbook checks.'"
+test = "anchor test"
 
 [test]
 startup_wait = 10000
