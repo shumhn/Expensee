@@ -18,7 +18,7 @@ It enforces:
 
 ## Required env
 
-Copy and edit `services/keeper/.env.example`.
+Copy and edit `backend/keeper/.env.example`.
 
 Critical required values:
 - `KEEPER_RPC_URL`
@@ -42,9 +42,9 @@ cd app
 npm install
 
 set -a
-source services/keeper/.env.example
+source backend/keeper/.env.example
 set +a
-npx ts-node services/keeper/src/index.ts
+npx ts-node backend/keeper/src/index.ts
 ```
 
 ## Operational notes

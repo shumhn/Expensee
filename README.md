@@ -1,6 +1,8 @@
 # Expensee — Confidential Streaming Payroll on Solana
 
 > **Real-time salary streaming with full privacy.** Salaries accrue every second via **MagicBlock Ephemeral Rollups** for high-speed execution, encrypted end-to-end using **Inco Lightning's** Fully Homomorphic Encryption (FHE). Nobody — not coworkers, not competitors, not even on-chain observers — can see what anyone earns.
+> 
+> 🏆 **Expensee's Core Innovation:** Unlike other protocols that rely on unreliable devnet Zero-Knowledge (ZK) proofs for withdrawals, Expensee introduces a highly-optimized off-chain **Keeper Architecture**. This ensures 100% reliable Inco FHE decryption, payout calculation, and MagicBlock TEE delegation. Coupled with a **V2 Smart Contract Refactor** that stripped out V1 bloat, Expensee is faster, cheaper, and more dependable.
 
 ---
 
@@ -534,7 +536,7 @@ expensee/
 │               ├── stream_config.rs # BusinessStreamConfigV2
 │               └── withdraw.rs     # WithdrawRequestV2
 │
-├── app/                             # Next.js frontend
+├── frontend/                             # Next.js frontend
 │   ├── pages/
 │   │   ├── index.tsx               # Landing page
 │   │   ├── employer.tsx            # 5-step employer wizard (1,200+ lines)
@@ -608,7 +610,7 @@ anchor deploy -p payroll --provider.cluster devnet
 ### 2. Configure Environment
 
 ```bash
-cp app/.env.example app/.env.local
+cp frontend/.env.example frontend/.env.local
 ```
 
 Key variables:
@@ -631,7 +633,7 @@ Visit `http://localhost:3000`
 ### 4. Start the Keeper Service
 
 ```bash
-cd services/keeper
+cd backend/keeper
 cp .env.example .env
 # Set KEEPER_PAYER_KEYPAIR_PATH, KEEPER_PROGRAM_ID, etc.
 npm install
@@ -649,13 +651,13 @@ npm start
 #### Mint Helper (Devnet)
 ```bash
 # Mint confidential tokens
-node app/scripts/mint-payusd.cjs <TOKEN_ACCOUNT> <AMOUNT>
+node frontend/scripts/mint-payusd.cjs <TOKEN_ACCOUNT> <AMOUNT>
 
 # Mint public USDC
-node app/scripts/mint-public-usdc.cjs <WALLET> <AMOUNT>
+node frontend/scripts/mint-public-usdc.cjs <WALLET> <AMOUNT>
 
 # Register token metadata (so Phantom shows "pUSDC")
-node app/scripts/register-token-metadata.cjs
+node frontend/scripts/register-token-metadata.cjs
 ```
 
 ---

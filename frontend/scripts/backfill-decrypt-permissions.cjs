@@ -9,8 +9,8 @@
  *
  * Usage:
  *   cd /path/to/expensee
- *   set -a; source services/keeper/.env; set +a
- *   node app/scripts/backfill-decrypt-permissions.cjs
+ *   set -a; source backend/keeper/.env; set +a
+ *   node frontend/scripts/backfill-decrypt-permissions.cjs
  *
  * Env:
  *   KEEPER_PAYER_KEYPAIR_PATH — owner/authority keypair (must be the business owner)

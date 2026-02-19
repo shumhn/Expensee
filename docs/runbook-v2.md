@@ -22,12 +22,12 @@ anchor deploy -p payroll --provider.cluster devnet
 
 Update program ID in:
 - `/Users/sumangiri/Desktop/expensee/Anchor.toml`
-- `/Users/sumangiri/Desktop/expensee/app/.env.local`
-- keeper env: `/Users/sumangiri/Desktop/expensee/services/keeper/.env`
+- `/Users/sumangiri/Desktop/expensee/frontend/.env.local`
+- keeper env: `/Users/sumangiri/Desktop/expensee/backend/keeper/.env`
 
 ## 3. Configure app
 
-From `/Users/sumangiri/Desktop/expensee/app/.env.local.example`, fill required:
+From `/Users/sumangiri/Desktop/expensee/frontend/.env.local.example`, fill required:
 - `NEXT_PUBLIC_SOLANA_RPC_URL` (use a normal Solana devnet RPC)
 - `NEXT_PUBLIC_PAYROLL_PROGRAM_ID`
 - `NEXT_PUBLIC_INCO_PROGRAM_ID`
@@ -48,9 +48,9 @@ npm run dev
 
 ## 4. Configure keeper
 
-Use `/Users/sumangiri/Desktop/expensee/services/keeper/.env.example`.
+Use `/Users/sumangiri/Desktop/expensee/backend/keeper/.env.example`.
 
-Note: keeper reuses the Inco SDK installed under `app/`, so run `npm install` in `app/` before starting the keeper.
+Note: keeper reuses the Inco SDK installed under `frontend/`, so run `npm install` in `frontend/` before starting the keeper.
 
 Mandatory:
 - `KEEPER_RPC_URL` (TX RPC; recommend `https://devnet-router.magicblock.app`)
@@ -72,7 +72,7 @@ Optional:
 
 Run:
 ```bash
-cd services/keeper
+cd backend/keeper
 npm install
 npm start
 ```
@@ -93,11 +93,11 @@ Employer:
 Optional quick setup script (creates vault/stream + optional mint+deposit if you control mint authority):
 ```bash
 cd /Users/sumangiri/Desktop/expensee
-set -a; source /Users/sumangiri/Desktop/expensee/services/keeper/.env; set +a
+set -a; source /Users/sumangiri/Desktop/expensee/backend/keeper/.env; set +a
 SETUP_MINT_AUTHORITY_KEYPAIR_PATH=/Users/sumangiri/Desktop/expensee/keys/payroll-authority.json \
 SETUP_MINT_UI=100 \
 SETUP_DEPOSIT_UI=50 \
-node /Users/sumangiri/Desktop/expensee/app/scripts/setup-v2-stream.cjs
+node /Users/sumangiri/Desktop/expensee/frontend/scripts/setup-v2-stream.cjs
 ```
 
 Employee:
@@ -140,5 +140,5 @@ Notes:
 
 - Keeper process liveness.
 - Pending withdraw requests backlog.
-- Dead-letter growth rate: `/Users/sumangiri/Desktop/expensee/services/keeper/dead-letter.log`.
+- Dead-letter growth rate: `/Users/sumangiri/Desktop/expensee/backend/keeper/dead-letter.log`.
 - RPC latency/error rate.

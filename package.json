@@ -12,12 +12,12 @@
   "author": "Expensee Team",
   "license": "MIT",
   "scripts": {
-    "dev": "cd app && npm run dev",
-    "build": "anchor build && cd app && npm run build",
+    "dev": "cd frontend && npm run dev",
+    "build": "anchor build && cd frontend && npm run build",
     "test": "anchor test",
-    "lint": "cd app && npm run lint",
+    "lint": "cd frontend && npm run lint",
     "deploy": "anchor deploy",
-    "keeper:dev": "set -a && . services/keeper/.env && set +a && npx ts-node -P services/keeper/tsconfig.json services/keeper/src/index.ts"
+    "keeper:dev": "set -a && . backend/keeper/.env && set +a && npx ts-node -P backend/keeper/tsconfig.json backend/keeper/src/index.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",

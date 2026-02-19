@@ -118,9 +118,9 @@ function resolveKeeperFilePath(filePath: string): string {
   const cwdNormalized = process.cwd().replace(/\\/g, '/');
   let candidate = normalized;
 
-  // Avoid resolving to ".../services/keeper/services/keeper/*" when running from services/keeper.
-  if (normalized.startsWith('services/keeper/') && cwdNormalized.endsWith('/services/keeper')) {
-    candidate = normalized.slice('services/keeper/'.length);
+  // Avoid resolving to ".../backend/keeper/backend/keeper/*" when running from backend/keeper.
+  if (normalized.startsWith('backend/keeper/') && cwdNormalized.endsWith('/backend/keeper')) {
+    candidate = normalized.slice('backend/keeper/'.length);
   }
 
   return path.resolve(candidate);

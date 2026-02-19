@@ -32,7 +32,7 @@ npm run dev
 
 ### Keeper
 ```bash
-cd /Users/sumangiri/Desktop/expensee/services/keeper
+cd /Users/sumangiri/Desktop/expensee/backend/keeper
 npm install
 set -a; source .env; set +a
 npm start
@@ -49,11 +49,11 @@ If you want to bootstrap accounts + stream from the terminal (and optionally min
 
 ```bash
 cd /Users/sumangiri/Desktop/expensee
-set -a; source /Users/sumangiri/Desktop/expensee/services/keeper/.env; set +a
+set -a; source /Users/sumangiri/Desktop/expensee/backend/keeper/.env; set +a
 SETUP_MINT_AUTHORITY_KEYPAIR_PATH=/Users/sumangiri/Desktop/expensee/keys/payroll-authority.json \
 SETUP_MINT_UI=100 \
 SETUP_DEPOSIT_UI=50 \
-node /Users/sumangiri/Desktop/expensee/app/scripts/setup-v2-stream.cjs
+node /Users/sumangiri/Desktop/expensee/frontend/scripts/setup-v2-stream.cjs
 ```
 
 ---
@@ -77,8 +77,8 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
    - If you created/own the mint authority, you can mint to your source token account:
      ```bash
      cd /Users/sumangiri/Desktop/expensee
-     set -a; source app/.env.local; set +a
-     DEST_TOKEN_ACCOUNT=YOUR_SOURCE_TOKEN_ACCOUNT AMOUNT=100 node app/scripts/mint-payusd.cjs
+     set -a; source frontend/.env.local; set +a
+     DEST_TOKEN_ACCOUNT=YOUR_SOURCE_TOKEN_ACCOUNT AMOUNT=100 node frontend/scripts/mint-payusd.cjs
      ```
      If your mint authority is not `~/.config/solana/id.json`, set:
      - `MINT_AUTHORITY_KEYPAIR_PATH=/path/to/keypair.json`
@@ -91,9 +91,9 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
        npx ts-node scripts/create-new-mint.ts
        ```
      - Update `NEXT_PUBLIC_PAYUSD_MINT` in:
-       - `/Users/sumangiri/Desktop/expensee/app/.env.local`
-       - `/Users/sumangiri/Desktop/expensee/services/keeper/.env` (via `NEXT_PUBLIC_PAYUSD_MINT` only if you reference it elsewhere; keeper uses on-chain vault mint)
-     - Restart app + keeper, then mint to your source token account using `app/scripts/mint-payusd.cjs`.
+       - `/Users/sumangiri/Desktop/expensee/frontend/.env.local`
+       - `/Users/sumangiri/Desktop/expensee/backend/keeper/.env` (via `NEXT_PUBLIC_PAYUSD_MINT` only if you reference it elsewhere; keeper uses on-chain vault mint)
+     - Restart app + keeper, then mint to your source token account using `frontend/scripts/mint-payusd.cjs`.
 6. **Deposit to Vault**
    - Paste your source token account
    - Choose amount
