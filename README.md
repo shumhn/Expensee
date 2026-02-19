@@ -61,53 +61,45 @@
 
 ## Problem Statement
 
-Crypto payroll is broken by a fundamental contradiction: **blockchains are transparent, but salaries must be private.**
+Crypto payroll is broken by a fundamental contradiction: **blockchains are transparent, but corporate payroll must be private and compliant.**
 
-Today, if a company pays employees on-chain, every salary — the CEO's, the intern's, everyone's — is publicly visible. Competitors can reverse-engineer your compensation strategy. Coworkers can see pay gaps. Recruiters can target your highest-paid engineers. This single issue is why **the vast majority of companies refuse to adopt crypto payroll**, despite its advantages in speed, global reach, and lower fees.
+Today, if a company pays employees on a public ledger, competitors can reverse-engineer compensation strategies, poach top talent, and map out the corporate structure. To truly adopt blockchain technology for its speed and global reach, companies need an impenetrable privacy shield.
 
-Meanwhile, the 300M+ freelancers and remote workers in the global gig economy face a different problem: **they wait weeks to get paid**. Traditional payroll batches payments on rigid weekly or monthly cycles. Cross-border wire transfers take 3–5 business days and cost 3–7% in fees. Workers in developing economies — who need money the most — wait the longest.
+However, existing privacy protocols (like Bagel) over-correct by encrypting *everything* using heavy Zero-Knowledge Proofs or Fully Homomorphic Encryption (FHE), including the company's identity and headcount. This breaks the **Cost Basis audit trails** required for IRS Accountable Plans and Form 1099-DA.
 
-Even "earned wage access" products (like Earnin or DailyPay) that attempt to solve this charge predatory fees and don't actually change when employers release funds.
-
-**The core problem:** There is no payroll system that is simultaneously *private*, *real-time*, and *on-demand* — until now.
+**The core problem:** 2026 demands a perfect balance. Companies need absolute privacy for their employees' salaries, but verifiable openness for their corporate tax accounting. Expensee is the first protocol to strike this exact balance.
 
 ---
 
-## Potential Impact
+## The 2026 Privacy Stack (Expensee's Solution)
 
-- **$9.4 trillion** is processed in global payroll annually — yet virtually none of it happens on-chain because of privacy concerns.
-- **300M+ freelancers** worldwide lack access to real-time pay and verifiable income proofs.
-- **73% of employees** report financial stress from waiting for payday (PwC).
-- Companies with **global remote teams** spend 5–15% of payroll cost on cross-border transfer fees and currency conversion.
+Expensee implements a pragmatic privacy architecture designed specifically for real-world FinTech adoption:
 
-Expensee unlocks crypto payroll for the first time by removing the privacy barrier. If even 1% of global payroll moves on-chain with confidential streaming, that represents a **$94B opportunity**.
+| Category | The "Private" Side (Hidden) | The "Open" Side (Verifiable) |
+|---|---|---|
+| **Identity** | **Employee Wallets:** Hidden via instant SHA-256 Auth Hashes. | **Employer Wallets:** Configured as public PDAs to verify corporate entity. |
+| **Compensation**| **Salaries & Accruals:** 100% encrypted via Inco FHE. | **Total Headcount:** Left as public integers for instant UI loading. |
+| **Taxes** | **Individual Payouts:** Encrypted confidential transfers. | **Audit Trails:** Public withdrawal TxHashes linkable to Web3 accounting software. |
 
-Beyond payroll, the same technology pattern — *confidential real-time token streams* — applies to:
-- **DAO contributor payments** (private compensation within public organizations)
-- **Creator royalty streaming** (real-time revenue splits without exposing deal terms)
-- **B2B SaaS billing** (continuous payment streams replacing monthly invoices)
-- **Insurance claim payouts** (streaming settlements without public disclosure)
+By offloading the orchestration to a resilient **Node.js Keeper Backend**, Expensee provides the speed of Web2 with the cryptographic guarantees of Web3.
 
 ---
 
 ## Business Case
 
-### For Companies (Employers)
-| Today | With Expensee |
-|-------|---------------|
-| On-chain payroll exposes everyone's salary | **All compensation is encrypted** — salary rates, accruals, and transfers are invisible on-chain |
-| Paying global teams takes 3–5 days and 3–7% fees | **Instant settlement** on Solana — sub-second finality, near-zero fees |
-| Payroll runs weekly or monthly in rigid batches | **Continuous streaming** — salary accrues every second, automatically |
-| No compliance controls for crypto payments | **Emergency pause**, fixed payout destinations, optional sanctions screening |
-| Raises and bonuses are visible in payroll transactions | **Private raises and bonuses** — only the employee can see the change |
+### Why a Company WANTS to use Expensee
+- **Stop Competitor Poaching:** Because salaries are encrypted with Inco FHE, competitors cannot see how much your top engineers make.
+- **Global Reach & Speed:** Sub-second salary streaming via MagicBlock TEE, with instant, zero-border stablecoin payouts.
+- **Tax Compliance Ready:** Because the Corporate Treasury PDA is verifiable, CFOs can plug Expensee into Request Finance or QuickBooks to automate Form 1099-DA cost-basis tracking.
+- **Zero-Knowledge UI:** Hashing employee identities (instead of FHE-encrypting them) means the dashboard loads instantly, without massive gas fees.
 
 ### For Workers (Employees)
 | Today | With Expensee |
 |-------|---------------|
 | Wait until payday to access earned wages | **Request payout anytime** — your money, your schedule |
-| No way to prove income without sharing bank statements | **Verifiable encrypted earnings** — prove income without exposing exact salary |
-| Salary visible to anyone scanning the blockchain | **Only you can see your earnings** — decrypt with your wallet, nobody else can |
-| Watch a number go up once a month | **Live earnings ticker** — watch your salary grow every second in real time |
+| Bank statements required for income proof | **Verifiable encrypted earnings** — cryptographically prove your income |
+| Salary visible on public ledgers | **Only you can see your earnings** — decrypt with your wallet, nobody else can |
+| Watch a number go up once a month | **Live earnings ticker** — watch your salary grow strictly off-chain via MagicBlock TEE |
 
 ---
 
