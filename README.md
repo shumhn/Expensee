@@ -1,8 +1,12 @@
-# Expensee — Confidential Streaming Payroll on Solana
+# OnyxFii — The payroll engine for the next generation of builders.
 
-> **Real-time salary streaming with full privacy.** Salaries accrue every second via **MagicBlock Ephemeral Rollups** for high-speed execution, encrypted end-to-end using **Inco Lightning's** Fully Homomorphic Encryption (FHE). Nobody — not coworkers, not competitors, not even on-chain observers — can see what anyone earns.
+Top Web3 talent refuses to wait 30 days for a wire transfer, and they won't work for a company that doxxes their salary on a public ledger. **OnyxFii** lets you stream USDC globally in real-time, secured by unbreakable FHE privacy.
+
+> **Built for Founders.** Protect your corporate treasury from competitor poaching with military-grade FHE encryption. 
 > 
-> 🏆 **Expensee's Core Innovation:** Unlike other protocols that rely on unreliable devnet Zero-Knowledge (ZK) proofs for withdrawals, Expensee introduces a highly-optimized off-chain **Keeper Architecture**. This ensures 100% reliable Inco FHE decryption, payout calculation, and MagicBlock TEE delegation. Coupled with a **V2 Smart Contract Refactor** that stripped out V1 bloat, Expensee is faster, cheaper, and more dependable.
+> **Loved by Talent.** Sub-second MagicBlock streaming means your team watches their salary tick up live and withdraws whenever they want.
+>
+> 🏆 **OnyxFii's Core Innovation:** Unlike other protocols that rely on heavy ZK proofs, OnyxFii introduces a highly-optimized off-chain **Keeper Architecture**. This ensures 100% reliable Inco FHE decryption, payout calculation, and MagicBlock TEE delegation.
 
 ---
 
@@ -67,13 +71,13 @@ Today, if a company pays employees on a public ledger, competitors can reverse-e
 
 However, existing privacy protocols (like Bagel) over-correct by encrypting *everything* using heavy Zero-Knowledge Proofs or Fully Homomorphic Encryption (FHE), including the company's identity and headcount. This breaks the **Cost Basis audit trails** required for IRS Accountable Plans and Form 1099-DA.
 
-**The core problem:** 2026 demands a perfect balance. Companies need absolute privacy for their employees' salaries, but verifiable openness for their corporate tax accounting. Expensee is the first protocol to strike this exact balance.
+**The core problem:** 2026 demands a perfect balance. Companies need absolute privacy for their employees' salaries, but verifiable openness for their corporate tax accounting. OnyxFii is the first protocol to strike this exact balance.
 
 ---
 
-## The 2026 Privacy Stack (Expensee's Solution)
+## The 2026 Privacy Stack (OnyxFii's Solution)
 
-Expensee implements a pragmatic privacy architecture designed specifically for real-world FinTech adoption:
+OnyxFii implements a pragmatic privacy architecture designed specifically for real-world FinTech adoption:
 
 | Category | The "Private" Side (Hidden) | The "Open" Side (Verifiable) |
 |---|---|---|
@@ -81,25 +85,23 @@ Expensee implements a pragmatic privacy architecture designed specifically for r
 | **Compensation**| **Salaries & Accruals:** 100% encrypted via Inco FHE. | **Total Headcount:** Left as public integers for instant UI loading. |
 | **Taxes** | **Individual Payouts:** Encrypted confidential transfers. | **Audit Trails:** Public withdrawal TxHashes linkable to Web3 accounting software. |
 
-By offloading the orchestration to a resilient **Node.js Keeper Backend**, Expensee provides the speed of Web2 with the cryptographic guarantees of Web3.
+By offloading the orchestration to a resilient **Node.js Keeper Backend**, OnyxFii provides the speed of Web2 with the cryptographic guarantees of Web3.
 
 ---
 
-## Business Case
+## The OnyxFii Advantage (Business Case)
 
-### Why a Company WANTS to use Expensee
-- **Stop Competitor Poaching:** Because salaries are encrypted with Inco FHE, competitors cannot see how much your top engineers make.
-- **Global Reach & Speed:** Sub-second salary streaming via MagicBlock TEE, with instant, zero-border stablecoin payouts.
-- **Tax Compliance Ready:** Because the Corporate Treasury PDA is verifiable, CFOs can plug Expensee into Request Finance or QuickBooks to automate Form 1099-DA cost-basis tracking.
-- **Zero-Knowledge UI:** Hashing employee identities (instead of FHE-encrypting them) means the dashboard loads instantly, without massive gas fees.
+### 1. Stop Competitor Poaching (Built for Founders)
+If you pay your team on a public Solana contract, your competitors can see exactly who your top engineers are and outbid you. OnyxFii uses Inco FHE to perfectly encrypt your cap-table. The public sees a treasury; only your employees see their pay. **Keep your talent. Encrypt your payroll.**
 
-### For Workers (Employees)
-| Today | With Expensee |
-|-------|---------------|
-| Wait until payday to access earned wages | **Request payout anytime** — your money, your schedule |
-| Bank statements required for income proof | **Verifiable encrypted earnings** — cryptographically prove your income |
-| Salary visible on public ledgers | **Only you can see your earnings** — decrypt with your wallet, nobody else can |
-| Watch a number go up once a month | **Live earnings ticker** — watch your salary grow strictly off-chain via MagicBlock TEE |
+### 2. Win the Bidding War for Talent (Loved by Builders)
+The best developers in the world don't want to wait until "the end of the month." Offer them **Liquid Salary streams.** OnyxFii delegates to MagicBlock so their pay ticks up every second. It costs you nothing, but it makes you the coolest company they've ever worked for. **Pay them instantly. Retain them forever.**
+
+### 3. Borderless Settlement (The Global Pitch)
+No more SWIFT wire failures to developers in India or Brazil. No more currency conversion limits. Just raw, instant stablecoin settlement. **Zero banks. Infinite reach.**
+
+### 4. Zero-Knowledge Compliance (Accountant Approved)
+Total privacy is illegal. OnyxFii is built for the real world. While individual salaries are encrypted in the Vaults, the overarching corporate entity maintains a verifiable **Audit Trail** on Solana, making IRS Form 1099-DA compliance a one-click export.
 
 ---
 
@@ -512,7 +514,7 @@ erDiagram
 ## Directory Structure
 
 ```
-expensee/
+onyxfii/
 ├── programs/
 │   └── payroll/
 │       └── src/
@@ -737,4 +739,4 @@ On devnet, this is a custodial bridge where the backend signs mint/escrow operat
 
 ---
 
-*Built by the Expensee Team for the future of private payments on Solana.*
+*Built by the OnyxFii Team for the future of private payments on Solana.*
