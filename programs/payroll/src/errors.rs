@@ -1,0 +1,100 @@
+use anchor_lang::prelude::*;
+
+#[error_code]
+pub enum PayrollError {
+    #[msg("Invalid amount")]
+    InvalidAmount,
+
+    #[msg("Invalid ciphertext")]
+    InvalidCiphertext,
+
+    #[msg("Invalid timestamp")]
+    InvalidTimestamp,
+
+    #[msg("Employee is not active")]
+    InactiveEmployee,
+
+    #[msg("Employee is already delegated to TEE")]
+    AlreadyDelegated,
+
+    #[msg("Employee is not delegated to TEE")]
+    NotDelegated,
+
+    #[msg("Insufficient funds in vault")]
+    InsufficientFunds,
+
+    #[msg("Unauthorized")]
+    Unauthorized,
+
+    #[msg("Ciphertext too large")]
+    CiphertextTooLarge,
+
+    #[msg("Unauthorized keeper")]
+    UnauthorizedKeeper,
+
+    #[msg("Invalid settlement interval")]
+    InvalidSettleInterval,
+
+    #[msg("Invalid stream index")]
+    InvalidStreamIndex,
+
+    #[msg("Invalid payout destination")]
+    InvalidPayoutDestination,
+
+    #[msg("Settlement called too soon")]
+    SettleTooSoon,
+
+    #[msg("Stream is paused")]
+    StreamPaused,
+
+    #[msg("Invalid employee auth hash")]
+    InvalidEmployeeAuthHash,
+
+    #[msg("Invalid pause reason")]
+    InvalidPauseReason,
+
+    #[msg("No accrued balance to settle")]
+    NoAccruedBalance,
+
+    #[msg("Invalid employee signer for this stream")]
+    InvalidEmployeeSigner,
+
+    #[msg("Invalid withdraw request")]
+    InvalidWithdrawRequest,
+
+    #[msg("Withdraw request is not pending")]
+    WithdrawNotPending,
+
+    #[msg("Stream is delegated; commit+undelegate first")]
+    StreamDelegated,
+
+    #[msg("Withdraw requester does not match stream auth")]
+    InvalidWithdrawRequester,
+
+    #[msg("Invalid rate history account")]
+    InvalidRateHistory,
+
+    #[msg("Rate history is full")]
+    RateHistoryFull,
+
+    #[msg("Invalid Inco token account")]
+    InvalidIncoTokenAccount,
+
+    #[msg("Invalid Inco allowance account")]
+    InvalidIncoAllowanceAccount,
+
+    #[msg("Invalid period bounds: end must be after start")]
+    InvalidPeriodBounds,
+
+    #[msg("Stream period has ended")]
+    StreamPeriodEnded,
+
+    #[msg("Invalid keeper pubkey")]
+    InvalidKeeper,
+
+    #[msg("Accrual must be fresh (within 30s) before settle")]
+    AccrualNotFresh,
+
+    #[msg("Instruction is deprecated; use v2 withdraw flow")]
+    DeprecatedInstruction,
+}
