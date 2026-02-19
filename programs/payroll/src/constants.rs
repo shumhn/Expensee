@@ -34,9 +34,6 @@ pub const BUSINESS_SEED: &[u8] = b"business";
 /// Vault PDA seed - owns the token account
 pub const VAULT_SEED: &[u8] = b"vault";
 
-/// Employee PDA seed - INDEX-BASED (no employee pubkey!)
-pub const EMPLOYEE_SEED: &[u8] = b"employee";
-
 /// Vault token account seed
 pub const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
 

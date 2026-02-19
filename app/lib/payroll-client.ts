@@ -1,24 +1,20 @@
 /**
- * Payroll Program Client
+ * Payroll Program Client (v2)
  *
  * Integrates with the deployed Confidential Streaming Payroll program.
- * Program ID: CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh
+ * Program ID: AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE
  *
  * Architecture:
  * - Business PDA: ["business", owner_pubkey]
  * - Vault PDA: ["vault", business_pubkey]
- * - Employee PDA: ["employee", business_pubkey, employee_index (u64)]
+ * - Employee Stream PDA: ["employee_v2", business_pubkey, stream_index (u64)]
  *
  * Features:
  * - Register business with confidential vault
  * - Deposit encrypted tokens to vault via CPI
- * - Add employees with encrypted salary (INDEX-based for privacy)
- * - TEE streaming via MagicBlock delegation
- * - Withdrawals (auto/manual/simple)
- *
- * v2 status:
- * - New integrations should use v2 stream instructions/accounts.
- * - v1 functions are retained for compatibility only.
+ * - v2 private real-time streaming with MagicBlock TEE
+ * - Withdraw request + keeper settlement
+ * - Deactivate individual streams
  */
 
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
@@ -31,7 +27,7 @@ import { hexToBuffer } from '@inco/solana-sdk/utils';
 // ============================================================
 
 export const PAYROLL_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || 'CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh'
+  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || 'AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE'
 );
 
 export const INCO_LIGHTNING_ID = new PublicKey(
@@ -112,7 +108,7 @@ export function getDemoAddresses() {
 
 const BUSINESS_SEED = Buffer.from('business');
 const VAULT_SEED = Buffer.from('vault');
-const EMPLOYEE_SEED = Buffer.from('employee');
+
 const VAULT_TOKEN_SEED = Buffer.from('vault_token');
 const STREAM_CONFIG_V2_SEED = Buffer.from('stream_config_v2');
 const EMPLOYEE_V2_SEED = Buffer.from('employee_v2');
@@ -192,18 +188,6 @@ const DISCRIMINATORS = {
   // Operations
   deposit: disc([242, 35, 198, 137, 82, 225, 242, 182]),
   admin_withdraw_vault_v2: disc([107, 78, 201, 164, 14, 202, 112, 10]),
-  add_employee: disc([14, 82, 239, 156, 50, 90, 189, 61]),
-
-  // MagicBlock TEE
-  delegate_to_tee: disc([105, 28, 145, 66, 223, 224, 198, 115]),
-  mark_delegated: disc([232, 62, 80, 189, 79, 140, 204, 23]),
-  accrue: disc([23, 76, 128, 149, 229, 247, 72, 228]),
-
-  // Withdrawals
-  auto_payment: disc([70, 182, 75, 1, 94, 203, 191, 222]),
-  manual_withdraw: disc([201, 29, 75, 68, 178, 207, 200, 119]),
-  simple_withdraw: disc([220, 253, 52, 127, 217, 90, 23, 21]),
-  undelegate: disc([131, 148, 180, 198, 91, 104, 42, 238]),
 
   // v2 real-time private payroll
   init_stream_config_v2: disc([189, 68, 68, 47, 176, 124, 45, 106]),
@@ -213,6 +197,7 @@ const DISCRIMINATORS = {
   accrue_v2: disc([109, 173, 74, 232, 133, 35, 206, 149]),
   auto_settle_stream_v2: disc([220, 231, 109, 26, 242, 148, 211, 2]),
   redelegate_stream_v2: disc([231, 62, 146, 164, 236, 234, 43, 88]),
+  deactivate_stream_v2: disc([204, 93, 120, 46, 4, 132, 68, 249]),
   pause_stream_v2: disc([77, 162, 53, 254, 80, 88, 242, 76]),
   resume_stream_v2: disc([57, 120, 86, 179, 230, 106, 181, 161]),
   init_rate_history_v2: disc([199, 217, 121, 94, 112, 222, 26, 240]),
@@ -250,22 +235,6 @@ export function getBusinessPDA(owner: PublicKey): [PublicKey, number] {
 export function getVaultPDA(business: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [VAULT_SEED, business.toBuffer()],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-/**
- * Derive Employee PDA (INDEX-BASED for privacy)
- * Seeds: ["employee", business_pubkey, employee_index (u64 LE)]
- *
- * NOTE: Uses index, NOT employee wallet pubkey!
- * This prevents correlation between on-chain PDAs and employee identities.
- */
-export function getEmployeePDA(business: PublicKey, employeeIndex: number): [PublicKey, number] {
-  const indexBuffer = Buffer.alloc(8);
-  indexBuffer.writeBigUInt64LE(BigInt(employeeIndex));
-  return PublicKey.findProgramAddressSync(
-    [EMPLOYEE_SEED, business.toBuffer(), indexBuffer],
     PAYROLL_PROGRAM_ID
   );
 }
@@ -450,60 +419,6 @@ export async function getVaultAccount(
   };
 }
 
-/**
- * Parse Employee account data
- */
-export interface EmployeeAccount {
-  address: PublicKey;
-  business: PublicKey;
-  employeeIndex: number;
-  encryptedEmployeeId: Uint8Array;
-  encryptedSalaryRate: Uint8Array;
-  encryptedAccrued: Uint8Array;
-  lastAccrualTime: number;
-  isActive: boolean;
-  isDelegated: boolean;
-  bump: number;
-}
-
-export async function getEmployeeAccount(
-  connection: Connection,
-  business: PublicKey,
-  employeeIndex: number
-): Promise<EmployeeAccount | null> {
-  const [employeePDA] = getEmployeePDA(business, employeeIndex);
-  const accountInfo = await getAccountInfoWithFallback(connection, employeePDA);
-
-  if (!accountInfo) {
-    return null;
-  }
-
-  // Employee struct layout:
-  // 0-8: discriminator
-  // 8-40: business (32)
-  // 40-48: employee_index (u64)
-  // 48-80: encrypted_employee_id (32)
-  // 80-112: encrypted_salary_rate (32)
-  // 112-144: encrypted_accrued (32)
-  // 144-152: last_accrual_time (i64)
-  // 152: is_active (1)
-  // 153: is_delegated (1)
-  // 154: bump (1)
-  const data = accountInfo.data;
-
-  return {
-    address: employeePDA,
-    business: new PublicKey(data.slice(8, 40)),
-    employeeIndex: Number(data.readBigUInt64LE(40)),
-    encryptedEmployeeId: data.slice(48, 80),
-    encryptedSalaryRate: data.slice(80, 112),
-    encryptedAccrued: data.slice(112, 144),
-    lastAccrualTime: Number(data.readBigInt64LE(144)),
-    isActive: data[152] === 1,
-    isDelegated: data[153] === 1,
-    bump: data[154],
-  };
-}
 
 /**
  * Parse v2 BusinessStreamConfig account
@@ -1153,195 +1068,6 @@ export async function adminWithdrawVaultV2(
  * @param employeeWallet - Employee's wallet (hashed and encrypted, not stored directly)
  * @param salaryRatePerSecond - Salary per second in Confidential Token (encrypted)
  */
-export async function addEmployee(
-  connection: Connection,
-  wallet: WalletContextState,
-  employeeWallet: PublicKey,
-  salaryRatePerSecond: number
-): Promise<{ txid: string; employeePDA: PublicKey; employeeIndex: number }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-
-  // Get current employee index from business
-  const business = await getBusinessAccount(connection, wallet.publicKey);
-  if (!business) {
-    throw new Error('Business not registered');
-  }
-
-  const employeeIndex = business.nextEmployeeIndex;
-  const [employeePDA] = getEmployeePDA(businessPDA, employeeIndex);
-
-  // Encrypt employee ID (hash of wallet) and salary
-  const encryptedEmployeeId = await hashPubkeyForEmployeeId(employeeWallet);
-  const salaryLamports = BigInt(Math.floor(salaryRatePerSecond * 1_000_000_000));
-  const encryptedSalary = await encryptForInco(salaryLamports);
-
-  // Build instruction data: discriminator + encrypted_employee_id (Vec<u8>) + encrypted_salary (Vec<u8>)
-  const idLen = Buffer.alloc(4);
-  idLen.writeUInt32LE(encryptedEmployeeId.length);
-  const salaryLen = Buffer.alloc(4);
-  salaryLen.writeUInt32LE(encryptedSalary.length);
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.add_employee,
-    idLen, encryptedEmployeeId,
-    salaryLen, encryptedSalary,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false }, // Inco Lightning for registering ciphertext
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-
-  return { txid, employeePDA, employeeIndex };
-}
-
-// ============================================================
-// MagicBlock Delegation (Legacy v1)
-// ============================================================
-
-/**
- * Delegate employee account to a MagicBlock ER validator (legacy v1 path)
- *
- * Once delegated, the TEE auto-accrues salary in real-time.
- */
-export async function delegateToTee(
-  connection: Connection,
-  wallet: WalletContextState,
-  employeeIndex: number,
-  validator: PublicKey = TEE_VALIDATOR
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-  if (validator.equals(MAGICBLOCK_TEE_VALIDATOR_IDENTITY)) {
-    throw new Error(
-      'TEE validator is token-gated on devnet (tee.magicblock.app). Use EU/US/Asia ER validator identity instead.'
-    );
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [employeePDA] = getEmployeePDA(businessPDA, employeeIndex);
-
-  // Verify employee exists and is not already delegated
-  const employee = await getEmployeeAccount(connection, businessPDA, employeeIndex);
-  if (!employee) {
-    throw new Error('Employee not found');
-  }
-  if (employee.isDelegated) {
-    throw new Error('Employee already delegated to TEE');
-  }
-  if (!employee.isActive) {
-    throw new Error('Employee is not active');
-  }
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: validator, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: DISCRIMINATORS.delegate_to_tee,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Undelegate employee from TEE
- */
-export async function undelegate(
-  connection: Connection,
-  wallet: WalletContextState,
-  employeeIndex: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [employeePDA] = getEmployeePDA(businessPDA, employeeIndex);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: DISCRIMINATORS.undelegate,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-// ============================================================
-// Withdrawal Instructions
-// ============================================================
-
-/**
- * Simple withdrawal (no TEE required)
- *
- * For testing: employee signs to claim a specific encrypted amount.
- */
-export async function simpleWithdraw(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  employeeIndex: number,
-  employeeTokenAccount: PublicKey,
-  vaultTokenAccount: PublicKey,
-  amount: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-  const [employeePDA] = getEmployeePDA(businessPDA, employeeIndex);
-
-  // Encrypt amount
-  const amountLamports = BigInt(Math.floor(amount * 1_000_000_000));
-  const encryptedAmount = await encryptForInco(amountLamports);
-
-  // Build instruction data
-  const lengthBytes = Buffer.alloc(4);
-  lengthBytes.writeUInt32LE(encryptedAmount.length);
-  const data = Buffer.concat([DISCRIMINATORS.simple_withdraw, lengthBytes, encryptedAmount]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // employee_signer
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: employeeTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
 
 // ============================================================
 // v2 Private Real-Time Payroll
@@ -2081,6 +1807,42 @@ export async function resumeStreamV2(
   return sendAndConfirmTransaction(connection, wallet, instruction);
 }
 
+/**
+ * Deactivate a single v2 employee stream.
+ *
+ * Owner-only. Sets is_active = false on the stream to stop accrual.
+ * Stream must be undelegated (on base layer) before deactivation.
+ */
+export async function deactivateStreamV2(
+  connection: Connection,
+  wallet: WalletContextState,
+  streamIndex: number
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [businessPDA] = getBusinessPDA(wallet.publicKey);
+  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
+  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
+
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
+      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data: Buffer.concat([DISCRIMINATORS.deactivate_stream_v2, streamIndexBuf]),
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
+}
+
 // ============================================================
 // Helper Functions
 // ============================================================
@@ -2173,179 +1935,13 @@ export function perSecondToMonthly(perSecond: number): number {
   return perSecond * secondsPerMonth;
 }
 
-// ============================================================
-// Employee Detection
-// ============================================================
 
-/**
- * Hash a wallet pubkey to match against employee ID
- * Uses the same algorithm as when adding an employee
- */
-export async function hashWalletForEmployeeId(wallet: PublicKey): Promise<Uint8Array> {
-  const pubkeyBuffer = wallet.toBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', new Uint8Array(pubkeyBuffer));
-  return new Uint8Array(hashBuffer).slice(0, 32);
-}
-
-/**
- * Check if a wallet matches an employee's encrypted ID
- * Supports both 16-byte (legacy-client) and 32-byte (payroll-client) hashes
- */
-export async function isWalletEmployee(
-  wallet: PublicKey,
-  employee: EmployeeAccount
-): Promise<boolean> {
-  const pubkeyBuffer = wallet.toBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', new Uint8Array(pubkeyBuffer));
-  const fullHash = new Uint8Array(hashBuffer);
-  const employeeId = employee.encryptedEmployeeId;
-
-  // Check 32-byte hash match (payroll-client format)
-  let is32ByteMatch = true;
-  for (let i = 0; i < 32 && i < employeeId.length; i++) {
-    if (fullHash[i] !== employeeId[i]) {
-      is32ByteMatch = false;
-      break;
-    }
-  }
-  if (is32ByteMatch) {
-    console.log(`✅ 32-byte hash match for wallet ${wallet.toBase58().slice(0, 8)}...`);
-    return true;
-  }
-
-  // Check 16-byte hash match (legacy-client format - rest should be zeros)
-  let is16ByteMatch = true;
-  for (let i = 0; i < 16; i++) {
-    if (fullHash[i] !== employeeId[i]) {
-      is16ByteMatch = false;
-      break;
-    }
-  }
-  // Verify remaining bytes are zeros (indicating 16-byte format)
-  let restIsZeros = true;
-  for (let i = 16; i < 32 && i < employeeId.length; i++) {
-    if (employeeId[i] !== 0) {
-      restIsZeros = false;
-      break;
-    }
-  }
-  if (is16ByteMatch && restIsZeros) {
-    console.log(`✅ 16-byte hash match for wallet ${wallet.toBase58().slice(0, 8)}...`);
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Find if a wallet is an employee of a business
- * Returns the employee data if found, null otherwise
- */
-export async function findEmployeeByWallet(
-  connection: Connection,
-  business: PublicKey,
-  wallet: PublicKey,
-  maxEmployees: number = 20
-): Promise<{ employee: EmployeeAccount; employeeIndex: number } | null> {
-  console.log(`🔍 Searching for wallet ${wallet.toBase58().slice(0, 8)}... in business ${business.toBase58().slice(0, 8)}...`);
-
-  for (let i = 0; i < maxEmployees; i++) {
-    try {
-      const employee = await getEmployeeAccount(connection, business, i);
-      if (!employee) {
-        console.log(`   Employee #${i}: not found`);
-        continue;
-      }
-
-      console.log(`   Employee #${i}: isActive=${employee.isActive}, checking hash match...`);
-      const isMatch = await isWalletEmployee(wallet, employee);
-
-      if (isMatch) {
-        if (employee.isActive) {
-          console.log(`✅ Found matching ACTIVE employee at index ${i}`);
-          return { employee, employeeIndex: i };
-        } else {
-          console.log(`⚠️ Found matching but INACTIVE employee at index ${i}`);
-        }
-      }
-    } catch (err) {
-      // No employee at this index - this is normal for sparse arrays
-    }
-  }
-  console.log(`❌ No matching employee found for wallet ${wallet.toBase58().slice(0, 8)}...`);
-  return null;
-}
 
 // ============================================================
 // Employee Encrypted Data Extraction
 // ============================================================
 
-/**
- * Extract encrypted accrued salary handle from Employee PDA
- *
- * This reads the encrypted_accrued field from the Employee account
- * and extracts the u128 handle needed for decryption.
- *
- * Employee struct layout:
- * 0-8: discriminator
- * 8-40: business (32)
- * 40-48: employee_index (u64)
- * 48-80: encrypted_employee_id (32)
- * 80-112: encrypted_salary_rate (32)
- * 112-144: encrypted_accrued (32)
- * 144-152: last_accrual_time (i64)
- *
- * The handle is the first 16 bytes of the encrypted field (u128 little-endian).
- */
-export function extractEmployeeAccruedHandle(employee: EmployeeAccount): bigint {
-  const bytes = employee.encryptedAccrued.slice(0, 16);
-  let result = BigInt(0);
-  for (let i = 15; i >= 0; i--) {
-    result = result * BigInt(256) + BigInt(bytes[i]);
-  }
-  return result;
-}
 
-/**
- * Extract encrypted salary rate handle from Employee PDA
- */
-export function extractEmployeeSalaryHandle(employee: EmployeeAccount): bigint {
-  const bytes = employee.encryptedSalaryRate.slice(0, 16);
-  let result = BigInt(0);
-  for (let i = 15; i >= 0; i--) {
-    result = result * BigInt(256) + BigInt(bytes[i]);
-  }
-  return result;
-}
-
-/**
- * Get encrypted handles as hex strings for Inco decryption
- *
- * Returns the accrued and salary rate handles as hex strings
- * that can be passed to Inco's decrypt function.
- */
-export interface EmployeeDecryptHandles {
-  accruedHandle: string;
-  salaryHandle: string;
-  accruedHandleValue: bigint;
-  salaryHandleValue: bigint;
-}
-
-export function getEmployeeDecryptHandles(employee: EmployeeAccount): EmployeeDecryptHandles {
-  const accruedHandleValue = extractEmployeeAccruedHandle(employee);
-  const salaryHandleValue = extractEmployeeSalaryHandle(employee);
-
-  // Convert to decimal strings (Inco SDK expects decimal, not hex)
-  const accruedHandle = accruedHandleValue.toString();
-  const salaryHandle = salaryHandleValue.toString();
-
-  return {
-    accruedHandle,
-    salaryHandle,
-    accruedHandleValue,
-    salaryHandleValue,
-  };
-}
 
 export interface EmployeeStreamV2DecryptHandles {
   accruedHandle: string;
@@ -2378,30 +1974,4 @@ export function getEmployeeStreamV2DecryptHandles(
   };
 }
 
-/**
- * Get employee's encrypted data ready for decryption
- *
- * This fetches the Employee account and extracts encrypted handles
- * for client-side decrypt workflows.
- */
-export async function getEmployeeForDecryption(
-  connection: Connection,
-  business: PublicKey,
-  employeeIndex: number
-): Promise<{
-  employee: EmployeeAccount;
-  handles: EmployeeDecryptHandles;
-  employeePDA: PublicKey;
-} | null> {
-  const employee = await getEmployeeAccount(connection, business, employeeIndex);
-  if (!employee) return null;
 
-  const [employeePDA] = getEmployeePDA(business, employeeIndex);
-  const handles = getEmployeeDecryptHandles(employee);
-
-  return {
-    employee,
-    handles,
-    employeePDA,
-  };
-}

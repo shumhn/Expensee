@@ -9,6 +9,7 @@ import {
   MAGICBLOCK_DELEGATION_PROGRAM,
   adminWithdrawVaultV2,
   addEmployeeStreamV2,
+  deactivateStreamV2,
   grantEmployeeViewAccessV2,
   grantKeeperViewAccessV2,
   createIncoTokenAccount,
@@ -1253,6 +1254,19 @@ export default function EmployerPage() {
                   className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
                 >
                   Initialize Rate History
+                </button>
+                <button
+                  disabled={busy || !v2ConfigExists || streamIndex === null || !streamStatus?.isActive}
+                  onClick={() =>
+                    run('Deactivate stream', async () => {
+                      if (streamIndex === null) throw new Error('Invalid payroll record number');
+                      if (streamStatus?.isDelegated) throw new Error('Undelegate stream before deactivation');
+                      return deactivateStreamV2(connection, wallet, streamIndex);
+                    })
+                  }
+                  className="w-full rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-900 disabled:opacity-50"
+                >
+                  Deactivate Stream
                 </button>
                 <button
                   disabled={busy || !v2ConfigExists || !v2Config}

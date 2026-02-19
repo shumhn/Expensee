@@ -156,244 +156,6 @@ pub struct AdminWithdrawVaultV2<'info> {
 }
 
 // ============================================================
-// V1 Employee Contexts
-// ============================================================
-
-#[derive(Accounts)]
-pub struct AddEmployee<'info> {
-    #[account(mut)]
-    pub owner: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [BUSINESS_SEED, owner.key().as_ref()],
-        bump = business.bump,
-        has_one = owner
-    )]
-    pub business: Account<'info, Business>,
-
-    #[account(
-        init,
-        payer = owner,
-        space = Employee::LEN,
-        seeds = [EMPLOYEE_SEED, business.key().as_ref(), &business.next_employee_index.to_le_bytes()],
-        bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[delegate]
-#[derive(Accounts)]
-pub struct DelegateToTee<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        seeds = [BUSINESS_SEED, business.owner.as_ref()],
-        bump = business.bump
-    )]
-    pub business: Account<'info, Business>,
-
-    /// CHECK: The employee account to delegate
-    #[account(
-        mut,
-        del,
-        seeds = [EMPLOYEE_SEED, business.key().as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    /// CHECK: Optional validator
-    pub validator: Option<AccountInfo<'info>>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct MarkDelegated<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, employee.business.as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-}
-
-#[derive(Accounts)]
-pub struct Accrue<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, employee.business.as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    /// CHECK: Inco Lightning Program
-    #[account(address = INCO_LIGHTNING_ID)]
-    pub inco_lightning_program: AccountInfo<'info>,
-}
-
-#[commit]
-#[derive(Accounts)]
-pub struct AutoPayment<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        seeds = [BUSINESS_SEED, business.owner.as_ref()],
-        bump = business.bump
-    )]
-    pub business: Account<'info, Business>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED, business.key().as_ref()],
-        bump = vault.bump,
-        has_one = business
-    )]
-    pub vault: Account<'info, BusinessVault>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, business.key().as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    /// CHECK: Vault's Inco Token account
-    #[account(mut, address = vault.token_account)]
-    pub vault_token_account: AccountInfo<'info>,
-
-    /// CHECK: Employee's Inco Token account
-    #[account(mut)]
-    pub employee_token_account: AccountInfo<'info>,
-
-    /// CHECK: Inco Token Program
-    pub inco_token_program: AccountInfo<'info>,
-
-    /// CHECK: Inco Lightning Program
-    #[account(address = INCO_LIGHTNING_ID)]
-    pub inco_lightning_program: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[commit]
-#[derive(Accounts)]
-pub struct ManualWithdraw<'info> {
-    /// Employee signs to prove identity
-    #[account(mut)]
-    pub employee_signer: Signer<'info>,
-
-    #[account(
-        seeds = [BUSINESS_SEED, business.owner.as_ref()],
-        bump = business.bump
-    )]
-    pub business: Account<'info, Business>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED, business.key().as_ref()],
-        bump = vault.bump,
-        has_one = business
-    )]
-    pub vault: Account<'info, BusinessVault>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, business.key().as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    /// CHECK: Vault's Inco Token account
-    #[account(mut, address = vault.token_account)]
-    pub vault_token_account: AccountInfo<'info>,
-
-    /// CHECK: Employee's Inco Token account
-    #[account(mut)]
-    pub employee_token_account: AccountInfo<'info>,
-
-    /// CHECK: Inco Token Program
-    pub inco_token_program: AccountInfo<'info>,
-
-    /// CHECK: Inco Lightning Program
-    #[account(address = INCO_LIGHTNING_ID)]
-    pub inco_lightning_program: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-/// Simple withdrawal context (no MagicBlock TEE required)
-/// Employee signs to claim their salary
-#[derive(Accounts)]
-pub struct SimpleWithdraw<'info> {
-    /// Employee signs to claim salary
-    #[account(mut)]
-    pub employee_signer: Signer<'info>,
-
-    #[account(
-        seeds = [BUSINESS_SEED, business.owner.as_ref()],
-        bump = business.bump
-    )]
-    pub business: Account<'info, Business>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED, business.key().as_ref()],
-        bump = vault.bump,
-        has_one = business
-    )]
-    pub vault: Account<'info, BusinessVault>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, business.key().as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-
-    /// CHECK: Vault's Inco Token account
-    #[account(mut, address = vault.token_account)]
-    pub vault_token_account: AccountInfo<'info>,
-
-    /// CHECK: Employee's Inco Token account
-    #[account(mut)]
-    pub employee_token_account: AccountInfo<'info>,
-
-    /// CHECK: Inco Token Program
-    pub inco_token_program: AccountInfo<'info>,
-
-    /// CHECK: Inco Lightning Program
-    #[account(address = INCO_LIGHTNING_ID)]
-    pub inco_lightning_program: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[commit]
-#[derive(Accounts)]
-pub struct Undelegate<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [EMPLOYEE_SEED, employee.business.as_ref(), &employee.employee_index.to_le_bytes()],
-        bump = employee.bump
-    )]
-    pub employee: Account<'info, Employee>,
-}
-
-// ============================================================
 // V2 Stream Config Contexts
 // ============================================================
 
@@ -892,6 +654,31 @@ pub struct ResumeStreamV2<'info> {
         has_one = business
     )]
     pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+}
+
+#[derive(Accounts)]
+#[instruction(stream_index: u64)]
+pub struct DeactivateStreamV2<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, owner.key().as_ref()],
+        bump = business.bump,
+        has_one = owner
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        seeds = [STREAM_CONFIG_V2_SEED, business.key().as_ref()],
+        bump = stream_config_v2.bump,
+        has_one = business
+    )]
+    pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+
+    /// CHECK: Employee stream PDA for `(business, stream_index)`. Must be undelegated (owned by program).
+    #[account(mut)]
+    pub employee_stream: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]

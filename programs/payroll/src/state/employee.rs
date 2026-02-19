@@ -44,52 +44,8 @@ impl RateHistoryV2 {
 }
 
 // ============================================================
-// Employee Account Structs
+// V2 Employee Stream
 // ============================================================
-
-#[account]
-pub struct Employee {
-    /// Parent business
-    pub business: Pubkey,
-
-    /// Employee index (used in PDA, NOT wallet pubkey!)
-    pub employee_index: u64,
-
-    /// ENCRYPTED employee ID (hash of wallet pubkey)
-    pub encrypted_employee_id: EncryptedHandle,
-
-    /// ENCRYPTED salary rate (per second)
-    pub encrypted_salary_rate: EncryptedHandle,
-
-    /// ENCRYPTED accrued balance
-    pub encrypted_accrued: EncryptedHandle,
-
-    /// Last accrual timestamp
-    pub last_accrual_time: i64,
-
-    /// Is employee active
-    pub is_active: bool,
-
-    /// Is currently delegated to TEE
-    pub is_delegated: bool,
-
-    /// PDA bump
-    pub bump: u8,
-}
-
-impl Employee {
-    pub const LEN: usize = 8 +  // discriminator
-        32 +                     // business
-        8 +                      // employee_index
-        32 +                     // encrypted_employee_id
-        32 +                     // encrypted_salary_rate
-        32 +                     // encrypted_accrued
-        8 +                      // last_accrual_time
-        1 +                      // is_active
-        1 +                      // is_delegated
-        1 +                      // bump
-        32;                      // padding
-}
 
 #[account]
 pub struct EmployeeStreamV2 {

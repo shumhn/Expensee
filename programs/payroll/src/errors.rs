@@ -14,11 +14,7 @@ pub enum PayrollError {
     #[msg("Employee is not active")]
     InactiveEmployee,
 
-    #[msg("Employee is already delegated to TEE")]
-    AlreadyDelegated,
 
-    #[msg("Employee is not delegated to TEE")]
-    NotDelegated,
 
     #[msg("Insufficient funds in vault")]
     InsufficientFunds,
@@ -95,6 +91,4 @@ pub enum PayrollError {
     #[msg("Accrual must be fresh (within 30s) before settle")]
     AccrualNotFresh,
 
-    #[msg("Instruction is deprecated; use v2 withdraw flow")]
-    DeprecatedInstruction,
 }

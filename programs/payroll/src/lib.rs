@@ -25,7 +25,7 @@ use ephemeral_rollups_sdk::anchor::ephemeral;
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
-declare_id!("CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh");
+declare_id!("AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE");
 
 pub mod constants;
 pub mod contexts;
@@ -265,243 +265,6 @@ pub mod payroll {
         msg!("✅ Admin vault withdrawal completed");
         msg!("   Business: {}", business_key);
         msg!("   Amount: ENCRYPTED");
-
-        Ok(())
-    }
-
-    // ════════════════════════════════════════════════════════
-    // EMPLOYEE MANAGEMENT
-    // ════════════════════════════════════════════════════════
-
-    /// Add an employee with encrypted salary rate
-    ///
-    /// Creates an Employee PDA using INDEX-BASED derivation:
-    /// Seeds: ["employee", business, employee_index]
-    ///
-    /// No employee pubkey in seeds = no address correlation!
-    pub fn add_employee(
-        ctx: Context<AddEmployee>,
-        encrypted_employee_id: Vec<u8>,  // Hash of wallet pubkey, encrypted
-        encrypted_salary_rate: Vec<u8>,  // Per-second rate, encrypted
-    ) -> Result<()> {
-        require!(!encrypted_employee_id.is_empty(), PayrollError::InvalidCiphertext);
-        require!(!encrypted_salary_rate.is_empty(), PayrollError::InvalidCiphertext);
-        require!(
-            encrypted_employee_id.len() <= MAX_CIPHERTEXT_BYTES,
-            PayrollError::CiphertextTooLarge
-        );
-        require!(
-            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES,
-            PayrollError::CiphertextTooLarge
-        );
-
-        let business = &mut ctx.accounts.business;
-        let employee = &mut ctx.accounts.employee;
-        let clock = Clock::get()?;
-
-        // Use next available index (privacy: no pubkey in PDA)
-        let employee_index = business.next_employee_index;
-        business.next_employee_index += 1;
-
-        employee.business = business.key();
-        employee.employee_index = employee_index;
-        employee.last_accrual_time = clock.unix_timestamp;
-        employee.is_active = true;
-        employee.is_delegated = false;
-        employee.bump = ctx.bumps.employee;
-
-        // Store encrypted data as handles
-        employee.encrypted_employee_id = EncryptedHandle {
-            handle: to_handle_bytes(&encrypted_employee_id)
-        };
-        employee.encrypted_salary_rate = EncryptedHandle {
-            handle: to_handle_bytes(&encrypted_salary_rate)
-        };
-        employee.encrypted_accrued = EncryptedHandle::default();
-
-        msg!("✅ Employee added (Maximum Privacy)");
-        msg!("   Employee Index: {} (no pubkey visible)", employee_index);
-        msg!("   Employee ID: ENCRYPTED");
-        msg!("   Salary Rate: ENCRYPTED");
-
-        emit!(EmployeeAdded {
-            employee_index,
-            timestamp: clock.unix_timestamp,
-        });
-
-        Ok(())
-    }
-
-    // ════════════════════════════════════════════════════════
-    // MAGICBLOCK TEE STREAMING
-    // ════════════════════════════════════════════════════════
-
-    /// Delegate employee account to MagicBlock TEE
-    ///
-    /// Once delegated, the TEE will auto-accrue salary in real-time.
-    /// The employee account state is locked on L1 during delegation.
-    pub fn delegate_to_tee(ctx: Context<DelegateToTee>) -> Result<()> {
-        // Validate before delegation
-        require!(ctx.accounts.employee.is_active, PayrollError::InactiveEmployee);
-        require!(!ctx.accounts.employee.is_delegated, PayrollError::AlreadyDelegated);
-
-        msg!("⚡ Delegating to MagicBlock TEE...");
-
-        let business_key = ctx.accounts.business.key();
-        let employee_index_bytes = ctx.accounts.employee.employee_index.to_le_bytes();
-
-        let seeds: &[&[u8]] = &[
-            EMPLOYEE_SEED,
-            business_key.as_ref(),
-            &employee_index_bytes,
-        ];
-
-        let validator_key = ctx.accounts.validator
-            .as_ref()
-            .map(|v| v.key())
-            .or_else(|| Pubkey::try_from(TEE_VALIDATOR).ok());
-
-        ctx.accounts.delegate_employee(
-            &ctx.accounts.payer,
-            seeds,
-            DelegateConfig {
-                validator: validator_key,
-                ..Default::default()
-            },
-        )?;
-
-        let validator = validator_key.unwrap_or_default();
-        msg!("✅ Delegated to TEE");
-        msg!("   Employee Index: {}", ctx.accounts.employee.employee_index);
-        msg!("   Validator: {}", validator);
-
-        emit!(DelegatedToTee {
-            employee_index: ctx.accounts.employee.employee_index,
-            validator,
-            timestamp: Clock::get()?.unix_timestamp,
-        });
-
-        Ok(())
-    }
-
-    /// Mark employee as delegated (called after successful delegation)
-    pub fn mark_delegated(ctx: Context<MarkDelegated>) -> Result<()> {
-        ctx.accounts.employee.is_delegated = true;
-        Ok(())
-    }
-
-    /// Accrue salary (called automatically by TEE)
-    ///
-    /// Computes: accrued += salary_rate * elapsed_seconds
-    /// Uses Inco homomorphic operations on encrypted values.
-    pub fn accrue(ctx: Context<Accrue>) -> Result<()> {
-        let employee = &mut ctx.accounts.employee;
-        let clock = Clock::get()?;
-
-        let elapsed = clock.unix_timestamp
-            .checked_sub(employee.last_accrual_time)
-            .ok_or(PayrollError::InvalidTimestamp)?;
-
-        if elapsed <= 0 {
-            return Ok(());
-        }
-
-        msg!("⚡ Accruing salary in TEE...");
-        let elapsed_u128 = elapsed as u128;
-        let elapsed_ciphertext = elapsed_u128.to_le_bytes().to_vec();
-        let signer = ctx.accounts.payer.to_account_info();
-        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
-
-        let elapsed_handle = inco_new_euint128(
-            &signer,
-            &inco_lightning_program,
-            elapsed_ciphertext,
-            0,
-        )?;
-
-        let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
-        let current_accrued = handle_to_u128(&employee.encrypted_accrued);
-
-        let delta = inco_binary_op_u128(
-            &signer,
-            &inco_lightning_program,
-            "e_mul",
-            salary_rate,
-            elapsed_handle,
-            0,
-        )?;
-
-        let updated_accrued = inco_binary_op_u128(
-            &signer,
-            &inco_lightning_program,
-            "e_add",
-            current_accrued,
-            delta,
-            0,
-        )?;
-
-        employee.encrypted_accrued = u128_to_handle(updated_accrued);
-        employee.last_accrual_time = clock.unix_timestamp;
-
-        msg!("✅ Accrued (PRIVATE)");
-        msg!("   Employee Index: {}", employee.employee_index);
-        msg!("   Elapsed: {} seconds", elapsed);
-
-        Ok(())
-    }
-
-    // ════════════════════════════════════════════════════════
-    // WITHDRAWAL INSTRUCTIONS
-    // ════════════════════════════════════════════════════════
-
-    /// Auto payment (triggered by TEE on schedule)
-    ///
-    /// The TEE calls this to:
-    /// 1. Commit and undelegate the employee account
-    /// 2. Transfer full accrued balance to employee
-    pub fn auto_payment(_ctx: Context<AutoPayment>) -> Result<()> {
-        err!(PayrollError::DeprecatedInstruction)
-    }
-
-    /// Manual withdrawal (employee signs)
-    ///
-    /// Employee proves identity by signing the transaction.
-    pub fn manual_withdraw(_ctx: Context<ManualWithdraw>) -> Result<()> {
-        err!(PayrollError::DeprecatedInstruction)
-    }
-
-    /// Simple withdrawal (for testing without MagicBlock TEE)
-    ///
-    /// Transfers a specified encrypted amount from vault to employee.
-    /// Does NOT require MagicBlock delegation - useful for devnet testing.
-    pub fn simple_withdraw(
-        _ctx: Context<SimpleWithdraw>,
-        _encrypted_amount: Vec<u8>,
-    ) -> Result<()> {
-        err!(PayrollError::DeprecatedInstruction)
-    }
-
-    /// Undelegate employee from TEE (stop streaming)
-    pub fn undelegate(ctx: Context<Undelegate>) -> Result<()> {
-        require!(ctx.accounts.employee.is_delegated, PayrollError::NotDelegated);
-
-        msg!("⚡ Undelegating from TEE...");
-
-        ctx.accounts.employee.exit(&crate::ID)?;
-        commit_and_undelegate_accounts(
-            &ctx.accounts.payer,
-            vec![&ctx.accounts.employee.to_account_info()],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program,
-        )?;
-
-        msg!("✅ Undelegated from TEE");
-        msg!("   Employee Index: {}", ctx.accounts.employee.employee_index);
-
-        emit!(UndelegatedFromTee {
-            employee_index: ctx.accounts.employee.employee_index,
-            timestamp: Clock::get()?.unix_timestamp,
-        });
 
         Ok(())
     }
@@ -1128,7 +891,7 @@ pub mod payroll {
         // In that case we cannot delegate it again.
         require!(
             ctx.accounts.employee.owner == &crate::ID,
-            PayrollError::AlreadyDelegated
+            PayrollError::StreamDelegated
         );
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee.to_account_info())?;
@@ -1397,7 +1160,7 @@ pub mod payroll {
         );
         require!(
             ctx.accounts.employee.owner == &crate::ID,
-            PayrollError::AlreadyDelegated
+            PayrollError::StreamDelegated
         );
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee.to_account_info())?;
@@ -1641,6 +1404,53 @@ pub mod payroll {
         msg!("✅ v2 withdraw processed");
         msg!("   Stream: {}", stream_index);
         msg!("   Amount: ENCRYPTED (audit handle logged)");
+        Ok(())
+    }
+
+    /// Deactivate a single v2 employee stream.
+    ///
+    /// Owner-only. Sets `is_active = false` on the stream to stop accrual.
+    /// Stream must be undelegated (on base layer) before deactivation.
+    pub fn deactivate_stream_v2(
+        ctx: Context<DeactivateStreamV2>,
+        stream_index: u64,
+    ) -> Result<()> {
+        // Stream must be back on base layer before we can mutate it.
+        require!(
+            ctx.accounts.employee_stream.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        // Validate stream PDA.
+        let business_key = ctx.accounts.business.key();
+        let stream_index_bytes = stream_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V2_SEED, business_key.as_ref(), &stream_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_stream.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let mut employee = load_employee_stream_v2(&ctx.accounts.employee_stream)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        employee.is_active = false;
+        save_employee_stream_v2(&ctx.accounts.employee_stream, &employee)?;
+
+        msg!("✅ v2 stream deactivated");
+        msg!("   Stream: {}", stream_index);
+
+        emit!(StreamDeactivated {
+            stream_index,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
         Ok(())
     }
 
