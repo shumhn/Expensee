@@ -7,20 +7,20 @@ export const COPY = {
     ops: 'Operations',
   },
   home: {
-    eyebrow: 'Private, live payroll on Solana',
-    title: 'Pay your team continuously. Keep pay details private.',
+    eyebrow: 'Real-time · Agentic · Private Payroll on Solana',
+    title: 'Stop managing payroll. Hire an Agent.',
     subtitle:
-      'Set up company payroll once, start live earnings, and let workers cash out when they need it. Built for simple demos and real operations.',
+      'OnyxFii is the world\'s first Autonomous Payroll Agent. Tell it who to pay. It handles the privacy, the math, and the movement of money.',
     companiesTitle: 'For Companies',
     companiesText:
-      'Set up your company payroll wallet, add workers, choose pay plans, and turn on high-speed mode.',
+      'Chat with the OnyxFii Agent to set up encrypted payroll streams. No forms, no spreadsheets — just tell the Agent your intent.',
     workersTitle: 'For Workers',
     workersText:
-      'Find your payroll record, view live earnings, request payout, and share a verified earnings statement.',
+      'Watch your earnings tick up in real-time. Cash out whenever you want. Your salary stays fully private on-chain.',
   },
   employer: {
-    title: 'Company Payroll',
-    subtitle: 'Guided setup for live private payroll',
+    title: 'OnyxFii Agent',
+    subtitle: 'Your autonomous payroll assistant',
     step1: {
       title: 'Company setup',
       description: 'Create your company profile and payroll wallet.',
