@@ -14,6 +14,19 @@ const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const SYSVAR_RENT_PUBKEY = new PublicKey('SysvarRent111111111111111111111111111111111');
 const PUBLIC_USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_PUBLIC_USDC_MINT || '11111111111111111111111111111111');
+const BRIDGE_LAST_RESULT_KEY = 'ghoststream_bridge_last_result_v1';
+
+function formatActionError(e: any): string {
+  const primary =
+    e?.message ||
+    e?.error?.message ||
+    (typeof e === 'string' ? e : '') ||
+    'Unexpected error';
+  if (Array.isArray(e?.logs) && e.logs.length > 0) {
+    return `${primary} | logs: ${e.logs.join(' -> ')}`;
+  }
+  return primary;
+}
 
 function getAssociatedTokenAddress(owner: PublicKey, mint: PublicKey): PublicKey {
   const [ata] = PublicKey.findProgramAddressSync(
@@ -50,6 +63,7 @@ export default function BridgePage() {
 
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [lastResult, setLastResult] = useState<string>('');
 
   const enabled = (process.env.NEXT_PUBLIC_BRIDGE_ENABLED ?? 'false') === 'true';
   const publicMintConfigured = useMemo(() => {
@@ -72,6 +86,16 @@ export default function BridgePage() {
   }, [wallet.publicKey, publicMint]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = window.localStorage.getItem(BRIDGE_LAST_RESULT_KEY);
+      if (saved) setLastResult(saved);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
     if (!router.isReady) return;
     const qToken = router.query.confidentialTokenAccount;
     const qAmount = router.query.amountUi;
@@ -84,14 +108,39 @@ export default function BridgePage() {
   }, [router.isReady, router.query.amountUi, router.query.confidentialTokenAccount]);
 
   async function run(label: string, fn: () => Promise<void>) {
+    const inProgressLabel = `${label}...`;
     setError('');
-    setStatus(`${label}...`);
+    setStatus(inProgressLabel);
     try {
       await fn();
-      setStatus(`${label}: done`);
+      let finalMessage = `${label}: done`;
+      setStatus((prev) => {
+        if (prev && prev !== inProgressLabel) {
+          finalMessage = prev;
+          return prev;
+        }
+        return finalMessage;
+      });
+      setLastResult(finalMessage);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(BRIDGE_LAST_RESULT_KEY, finalMessage);
+        } catch {
+          // ignore
+        }
+      }
     } catch (e: any) {
       setStatus('');
-      setError(e?.message || String(e));
+      const message = formatActionError(e);
+      setError(message);
+      setLastResult(`Last failed: ${message}`);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(BRIDGE_LAST_RESULT_KEY, `Last failed: ${message}`);
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 
@@ -242,7 +291,13 @@ export default function BridgePage() {
                         publicUsdcMint: publicMint,
                       }),
                     });
-                    const json = await resp.json();
+                    const raw = await resp.text();
+                    let json: any = null;
+                    try {
+                      json = raw ? JSON.parse(raw) : null;
+                    } catch {
+                      throw new Error(`wrap build failed (${resp.status}): ${raw || 'invalid JSON response'}`);
+                    }
                     if (!resp.ok || !json?.ok) throw new Error(json?.error || `wrap build failed (${resp.status})`);
                     const tx = Transaction.from(Buffer.from(json.txBase64, 'base64'));
                     const sig = await wallet.sendTransaction(tx, connection);
@@ -270,29 +325,16 @@ export default function BridgePage() {
                         publicUsdcMint: publicMint,
                       }),
                     });
-                    const json = await resp.json();
+                    const raw = await resp.text();
+                    let json: any = null;
+                    try {
+                      json = raw ? JSON.parse(raw) : null;
+                    } catch {
+                      throw new Error(`unwrap build failed (${resp.status}): ${raw || 'invalid JSON response'}`);
+                    }
                     if (!resp.ok || !json?.ok) throw new Error(json?.error || `unwrap build failed (${resp.status})`);
                     const tx = Transaction.from(Buffer.from(json.txBase64, 'base64'));
-                    let sig = '';
-                    try {
-                      if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction');
-                      const signed = await wallet.signTransaction(tx);
-                      sig = await connection.sendRawTransaction(signed.serialize(), {
-                        skipPreflight: false,
-                        maxRetries: 3,
-                      });
-                    } catch (e: any) {
-                      const message = e?.message || String(e);
-                      const logs =
-                        e?.logs && Array.isArray(e.logs)
-                          ? e.logs
-                          : e?.transactionLogs && Array.isArray(e.transactionLogs)
-                            ? e.transactionLogs
-                            : null;
-                      const details = logs ? ` | logs: ${logs.join(' → ')}` : '';
-                      console.error('Unwrap send failed:', message, logs || '');
-                      throw new Error(`Unwrap send failed: ${message}${details}`);
-                    }
+                    const sig = await wallet.sendTransaction(tx, connection);
                     setStatus(`Unwrap tx sent: ${sig}`);
                   })
                 }
@@ -303,6 +345,9 @@ export default function BridgePage() {
 
               {status && <p className="mt-4 rounded bg-green-50 px-3 py-2 text-sm text-green-700">{status}</p>}
               {error && <p className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+              {!status && !error && lastResult ? (
+                <p className="mt-4 rounded bg-gray-50 px-3 py-2 text-sm text-gray-700">Last result: {lastResult}</p>
+              ) : null}
             </div>
           </div>
         </section>

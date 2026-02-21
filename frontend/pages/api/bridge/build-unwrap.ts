@@ -226,18 +226,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
     const tx = new Transaction();
-    tx.feePayer = escrow.publicKey;
+    tx.feePayer = user;
     tx.recentBlockhash = blockhash;
     tx.lastValidBlockHeight = lastValidBlockHeight;
     tx.add(...ixs);
 
-    // Server signs as fee payer + public USDC sender; client signs as confidential token authority.
+    // Co-sign with escrow here so the wallet can submit in one step (same UX as wrap).
     tx.partialSign(escrow);
 
     res.status(200).json({
       ok: true,
       txBase64: tx.serialize({ requireAllSignatures: false }).toString('base64'),
-      feePayer: escrow.publicKey.toBase58(),
+      feePayer: user.toBase58(),
       userUsdcAta: userAta.toBase58(),
       escrowUsdcAta: escrowAta.toBase58(),
       escrowConfidentialTokenAccount: escrowConfidential.toBase58(),
