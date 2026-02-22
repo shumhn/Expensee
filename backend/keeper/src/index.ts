@@ -76,6 +76,10 @@ const DEFAULT_SETTLE_GUARD_SECS = Number(process.env.KEEPER_SETTLE_GUARD_SECS ||
 const DEFAULT_WITHDRAW_DECRYPT_RETRY_COOLDOWN_SECS = Number(
   process.env.KEEPER_WITHDRAW_DECRYPT_RETRY_COOLDOWN_SECS || '20'
 );
+const ROUTER_STATUS_TIMEOUT_MS = Number(process.env.KEEPER_ROUTER_STATUS_TIMEOUT_MS || '3500');
+const ROUTER_STATUS_RETRIES = Number(process.env.KEEPER_ROUTER_STATUS_RETRIES || '3');
+const ROUTER_STATUS_BACKOFF_MS = Number(process.env.KEEPER_ROUTER_STATUS_BACKOFF_MS || '250');
+const ROUTER_STATUS_CACHE_MS = Number(process.env.KEEPER_ROUTER_STATUS_CACHE_MS || '15000');
 const REDELEGATE_AFTER_WITHDRAW = process.env.KEEPER_REDELEGATE_AFTER_WITHDRAW !== 'false';
 // If a stream is delegated, attempt to run accrue_v2 on the ER endpoint before commit+undelegate.
 // This makes MagicBlock the compute engine for the accrual checkpoint.
@@ -97,6 +101,16 @@ const PAUSE_REASON_COMPLIANCE = 2;
 const PROGRAM_ID = new PublicKey(requiredEnv('KEEPER_PROGRAM_ID', process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID));
 const TX_RPC_URL = requiredEnv('KEEPER_RPC_URL', process.env.NEXT_PUBLIC_SOLANA_RPC_URL);
 const ROUTER_RPC_URL = process.env.KEEPER_ROUTER_RPC_URL || 'https://devnet-router.magicblock.app';
+const DEFAULT_ROUTER_FAILOVER_URLS = [
+  ROUTER_RPC_URL,
+  'https://devnet-eu.magicblock.app',
+  'https://devnet-us.magicblock.app',
+  'https://devnet-as.magicblock.app',
+].join(',');
+const ROUTER_RPC_URLS = (process.env.KEEPER_ROUTER_RPC_URLS || DEFAULT_ROUTER_FAILOVER_URLS)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const READ_RPC_PRIMARY_URL =
   process.env.KEEPER_READ_RPC_URL ||
   process.env.NEXT_PUBLIC_SOLANA_READ_RPC_URL ||
@@ -243,6 +257,7 @@ const autoResumeCooldownByBusiness = new Map<string, number>();
 const businessCache = new Map<string, BusinessRecord>();
 const vaultCache = new Map<string, VaultRecord>();
 const streamConfigCache = new Map<string, StreamConfigRecord>();
+const delegatedRouteCache = new Map<string, { endpoint: string; cachedAtMs: number }>();
 
 let tickInProgress = false;
 let consecutiveFailures = 0;
@@ -889,6 +904,65 @@ function endpointHost(endpoint: string): string {
   }
 }
 
+function isRetryableRouterStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+async function routerStatusFetch(url: string, body: string): Promise<any> {
+  if (!fetchAny) throw new Error('fetch unavailable');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ROUTER_STATUS_TIMEOUT_MS);
+  try {
+    return await fetchAny(normalizeRpcUrl(url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getDelegationStatusWithRetry(
+  streamAccount: PublicKey
+): Promise<{ payload: any; usedUrl: string } | null> {
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'getDelegationStatus',
+    params: [streamAccount.toBase58()],
+  });
+
+  let lastReason = '';
+  for (let attempt = 1; attempt <= ROUTER_STATUS_RETRIES; attempt += 1) {
+    for (const url of ROUTER_RPC_URLS) {
+      try {
+        const res = await routerStatusFetch(url, body);
+        if (!res.ok) {
+          lastReason = `status=${res.status} url=${normalizeRpcUrl(url)}`;
+          if (isRetryableRouterStatus(res.status)) continue;
+          log(`getDelegationStatus failed stream=${streamAccount.toBase58()} ${lastReason}`);
+          return null;
+        }
+        const payload = await res.json();
+        return { payload, usedUrl: normalizeRpcUrl(url) };
+      } catch (e: any) {
+        lastReason = `url=${normalizeRpcUrl(url)} reason=${e?.message || 'unknown'}`;
+      }
+    }
+    if (attempt < ROUTER_STATUS_RETRIES) {
+      const delay = ROUTER_STATUS_BACKOFF_MS * Math.pow(2, attempt - 1);
+      await sleep(delay);
+    }
+  }
+
+  log(
+    `getDelegationStatus exhausted retries stream=${streamAccount.toBase58()} attempts=${ROUTER_STATUS_RETRIES} ${lastReason}`
+  );
+  return null;
+}
+
 function withTeeTokenIfNeeded(endpoint: string): string | null {
   const host = endpointHost(endpoint);
   const isTee = host === 'tee.magicblock.app';
@@ -912,43 +986,60 @@ type DelegatedTxRoute = {
 
 async function resolveDelegatedTxConnection(streamAccount: PublicKey): Promise<DelegatedTxRoute> {
   if (!fetchAny) return { connection: txConnection };
-  try {
-    const res = await fetchAny(normalizeRpcUrl(ROUTER_RPC_URL), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getDelegationStatus',
-        params: [streamAccount.toBase58()],
-      }),
-    });
+  const streamKey = streamAccount.toBase58();
+  const nowMs = Date.now();
+  const cached = delegatedRouteCache.get(streamKey);
+  if (cached && nowMs - cached.cachedAtMs <= ROUTER_STATUS_CACHE_MS) {
+    return { connection: connectionForRpc(cached.endpoint) };
+  }
 
-    if (!res.ok) {
-      log(
-        `getDelegationStatus failed stream=${streamAccount.toBase58()} url=${normalizeRpcUrl(ROUTER_RPC_URL)} status=${res.status}; using default TX RPC`
-      );
+  try {
+    const status = await getDelegationStatusWithRetry(streamAccount);
+    if (!status) {
+      if (cached) {
+        const ageMs = nowMs - cached.cachedAtMs;
+        log(
+          `getDelegationStatus unavailable stream=${streamKey}; using cached delegated endpoint=${cached.endpoint} age_ms=${ageMs}`
+        );
+        return { connection: connectionForRpc(cached.endpoint) };
+      }
       return { connection: txConnection };
     }
+    const statusResult = status.payload?.result as DelegationStatusResponse | undefined;
+    const parsedEndpoint = parseDelegationEndpoint(statusResult);
+    const delegatedNoEndpoint =
+      Boolean(statusResult?.delegated) ||
+      Boolean(statusResult?.isDelegated) ||
+      Boolean(statusResult?.delegation?.delegated);
 
-    const payload = await res.json();
-    const parsedEndpoint = parseDelegationEndpoint(payload?.result as DelegationStatusResponse);
-    if (!parsedEndpoint) return { connection: txConnection };
-    const endpoint = withTeeTokenIfNeeded(parsedEndpoint);
+    // Some ER endpoints return { isDelegated: true } without fqdn/endpoint.
+    // In that case, use the endpoint that returned the delegated status.
+    const endpointCandidate = parsedEndpoint || (delegatedNoEndpoint ? status.usedUrl : null);
+    if (!endpointCandidate) {
+      delegatedRouteCache.delete(streamKey);
+      return { connection: txConnection };
+    }
+    const endpoint = withTeeTokenIfNeeded(endpointCandidate);
     if (!endpoint) {
       return {
         connection: txConnection,
-        skipReason: `delegated_to_tee_without_token endpoint=${parsedEndpoint}`,
+        skipReason: `delegated_to_tee_without_token endpoint=${endpointCandidate}`,
       };
     }
+    delegatedRouteCache.set(streamKey, { endpoint, cachedAtMs: nowMs });
     if (endpoint !== normalizeRpcUrl(TX_RPC_URL)) {
       log(`Routing stream=${streamAccount.toBase58()} to delegated ER endpoint=${endpoint}`);
     }
     return { connection: connectionForRpc(endpoint) };
   } catch (e: any) {
-    log(
-      `getDelegationStatus error stream=${streamAccount.toBase58()} url=${normalizeRpcUrl(ROUTER_RPC_URL)} reason=${e?.message || 'unknown'}; using default TX RPC`
-    );
+    if (cached) {
+      const ageMs = nowMs - cached.cachedAtMs;
+      log(
+        `getDelegationStatus error stream=${streamKey} reason=${e?.message || 'unknown'}; using cached delegated endpoint=${cached.endpoint} age_ms=${ageMs}`
+      );
+      return { connection: connectionForRpc(cached.endpoint) };
+    }
+    log(`getDelegationStatus error stream=${streamKey} reason=${e?.message || 'unknown'}; using default TX RPC`);
     return { connection: txConnection };
   }
 }
