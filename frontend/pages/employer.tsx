@@ -67,6 +67,8 @@ type AgentPlanDraft = {
   fixedTotalDays?: string;
   salaryPerSecond?: string;
   boundPresetPeriod?: boolean;
+  autoGrantDecrypt?: boolean;
+  autoGrantKeeperDecrypt?: boolean;
   streamIndex?: number;
   bonusAmount?: string;
   depositAmount?: string;
@@ -193,7 +195,7 @@ export default function EmployerPage() {
   const [payPreset, setPayPreset] = useState<PayPreset>("per_second");
   const [payAmount, setPayAmount] = useState("100"); // amount per hour/week/month or total amount (fixed_total)
   const [fixedTotalDays, setFixedTotalDays] = useState("30"); // used only when payPreset === 'fixed_total'
-  const [boundPresetPeriod, setBoundPresetPeriod] = useState(true); // for hourly/weekly/monthly presets
+  const [boundPresetPeriod, setBoundPresetPeriod] = useState(true);
   const [autoGrantDecrypt, setAutoGrantDecrypt] = useState(true);
   const [autoGrantKeeperDecrypt, setAutoGrantKeeperDecrypt] = useState(true);
 
@@ -367,7 +369,7 @@ export default function EmployerPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!ownerPubkey) return;
-    const key = `expensee_employer_state_v1:${ownerPubkey.toBase58()}`;
+    const key = `expensee_employer_state_v2:${ownerPubkey.toBase58()}`;
     try {
       const raw = window.localStorage.getItem(key);
       if (!raw) return;
@@ -400,10 +402,9 @@ export default function EmployerPage() {
       if (typeof parsed?.payAmount === "string") setPayAmount(parsed.payAmount);
       if (typeof parsed?.fixedTotalDays === "string")
         setFixedTotalDays(parsed.fixedTotalDays);
-      if (typeof parsed?.boundPresetPeriod === "boolean")
-        setBoundPresetPeriod(parsed.boundPresetPeriod);
-      if (typeof parsed?.autoGrantDecrypt === "boolean")
-        setAutoGrantDecrypt(parsed.autoGrantDecrypt);
+      setBoundPresetPeriod(typeof parsed?.boundPresetPeriod === "boolean" ? parsed.boundPresetPeriod : true);
+      setAutoGrantDecrypt(typeof parsed?.autoGrantDecrypt === "boolean" ? parsed.autoGrantDecrypt : true);
+      setAutoGrantKeeperDecrypt(typeof parsed?.autoGrantKeeperDecrypt === "boolean" ? parsed.autoGrantKeeperDecrypt : true);
       if (typeof parsed?.streamIndexInput === "string")
         setStreamIndexInput(parsed.streamIndexInput);
       if (typeof parsed?.agentApprovalMode === "string") {
@@ -566,7 +567,8 @@ export default function EmployerPage() {
 
       if (isFullySetup && agentPhase === "ask_setup") {
         const correctionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        setAgentMessages([
+        setAgentMessages((prev) => [
+          ...prev,
           {
             id: correctionId,
             role: "agent",
@@ -578,8 +580,24 @@ export default function EmployerPage() {
           },
         ]);
         setAgentPhase("ask_wallet");
+      } else if (!isFullySetup && agentPhase !== "ask_setup" && agentPhase !== "greeting") {
+        // AUTO-CORRECT: The cache thinks we are past setup, but the blockchain says we are not.
+        // This happens if the user switched wallets or reset the local chain.
+        const correctionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        setAgentMessages((prev) => [
+          ...prev,
+          {
+            id: correctionId,
+            role: "agent",
+            text:
+              `⚠️ **Chain Sync Notice:** I noticed your on-chain data doesn't match our previous conversation (possibly a new wallet or network reset).\n\n` +
+              `Let's get back on track. It looks like you still need to complete the foundational setup. Type **"setup"** to resume where the blockchain left off.`,
+            timestamp: Date.now(),
+          },
+        ]);
+        setAgentPhase("ask_setup");
       } else if (pendingTask && agentPhase === "ask_wallet") {
-        // AUTO-CORRECT: If we were in ask_wallet but now have pending setup tasks, move back to ask_setup
+        // Soft correction
         setAgentPhase("ask_setup");
       }
       return;
@@ -644,7 +662,7 @@ export default function EmployerPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!ownerPubkey) return;
-    const key = `expensee_employer_state_v1:${ownerPubkey.toBase58()}`;
+    const key = `expensee_employer_state_v2:${ownerPubkey.toBase58()}`;
     try {
       window.localStorage.setItem(
         key,
@@ -664,6 +682,7 @@ export default function EmployerPage() {
           fixedTotalDays,
           boundPresetPeriod,
           autoGrantDecrypt,
+          autoGrantKeeperDecrypt,
           streamIndexInput,
           agentApprovalMode,
         }),
@@ -686,6 +705,7 @@ export default function EmployerPage() {
     fixedTotalDays,
     boundPresetPeriod,
     autoGrantDecrypt,
+    autoGrantKeeperDecrypt,
     agentApprovalMode,
     settleIntervalSecs,
     streamIndexInput,
@@ -935,8 +955,9 @@ export default function EmployerPage() {
     if (draft.payAmount) setPayAmount(draft.payAmount);
     if (draft.fixedTotalDays) setFixedTotalDays(draft.fixedTotalDays);
     if (draft.salaryPerSecond) setSalaryPerSecond(draft.salaryPerSecond);
-    if (typeof draft.boundPresetPeriod === "boolean")
-      setBoundPresetPeriod(draft.boundPresetPeriod);
+    setBoundPresetPeriod(typeof draft.boundPresetPeriod === "boolean" ? draft.boundPresetPeriod : true);
+    setAutoGrantDecrypt(typeof draft.autoGrantDecrypt === "boolean" ? draft.autoGrantDecrypt : true);
+    setAutoGrantKeeperDecrypt(typeof draft.autoGrantKeeperDecrypt === "boolean" ? draft.autoGrantKeeperDecrypt : true);
     if (draft.depositAmount) setDepositAmount(draft.depositAmount);
     if (draft.recoverAmount) setVaultWithdrawAmount(draft.recoverAmount);
     if (draft.bonusAmount) setBonusAmount(draft.bonusAmount);
@@ -1168,6 +1189,15 @@ export default function EmployerPage() {
           requiresSignature: true,
         });
       }
+
+      steps.push({
+        key: "configure-worker-options",
+        label: "Configure worker record options",
+        status: "pending",
+        required: true,
+        risk: "safe",
+        requiresSignature: false,
+      });
 
       steps.push({
         key: "create-worker-record",
@@ -1427,6 +1457,12 @@ export default function EmployerPage() {
             continue;
           }
 
+          if (step.key === "configure-worker-options") {
+            updateStep(step.key, { status: "done", detail: "TRIGGER_ASK_OPTIONS" });
+            // Stop the automated queue and wait for conversational input
+            throw new Error("PAUSE_FOR_OPTIONS");
+          }
+
           if (step.key === "create-worker-token") {
             const workerWallet = employeeWallet.trim();
             if (!workerWallet)
@@ -1566,6 +1602,7 @@ export default function EmployerPage() {
       );
       await loadState();
     } catch (e: any) {
+      if (e?.message === "PAUSE_FOR_OPTIONS") return;
       setError(e?.message || "Assistant execution failed");
       throw e;
     } finally {
@@ -1706,14 +1743,15 @@ export default function EmployerPage() {
       setFixedTotalDays(String(plan.fixedTotalDays));
     if (plan.salaryPerSecond && (typeof plan.salaryPerSecond === "string" || typeof plan.salaryPerSecond === "number"))
       setSalaryPerSecond(String(plan.salaryPerSecond));
-    if (typeof plan.boundPresetPeriod === "boolean")
-      setBoundPresetPeriod(plan.boundPresetPeriod);
+    setBoundPresetPeriod(typeof plan.boundPresetPeriod === "boolean" ? plan.boundPresetPeriod : true);
     if (typeof plan.streamIndex === "number" || typeof plan.streamIndex === "string")
       setStreamIndexInput(String(plan.streamIndex));
     if (plan.bonusAmount && (typeof plan.bonusAmount === "string" || typeof plan.bonusAmount === "number"))
       setBonusAmount(String(plan.bonusAmount));
     if (plan.depositAmount && (typeof plan.depositAmount === "string" || typeof plan.depositAmount === "number"))
       setDepositAmount(String(plan.depositAmount));
+    setAutoGrantDecrypt(typeof plan.autoGrantDecrypt === "boolean" ? plan.autoGrantDecrypt : true);
+    setAutoGrantKeeperDecrypt(typeof plan.autoGrantKeeperDecrypt === "boolean" ? plan.autoGrantKeeperDecrypt : true);
     if (plan.recoverAmount && (typeof plan.recoverAmount === "string" || typeof plan.recoverAmount === "number"))
       setVaultWithdrawAmount(String(plan.recoverAmount));
     if (plan.intent && typeof plan.intent === "string") {
@@ -1916,6 +1954,14 @@ export default function EmployerPage() {
             );
           const workerTokenRes = await createWorkerDestinationAccountTask();
           result = { txid: workerTokenRes.txid, detail: "Worker destination account created." };
+        } else if (nextStep.key === "configure-worker-options") {
+          // This step triggers the ask_options conversational flow in AgentChat
+          // No transaction needed — mark it done so we can move to the next step later
+          updateStep(nextStep.key, { status: "done", detail: "TRIGGER_ASK_OPTIONS" });
+          result = {
+            txid: "",
+            detail: "TRIGGER_ASK_OPTIONS",
+          };
         } else if (nextStep.key === "create-worker-record") {
           const workerWallet = employeeWallet.trim();
           if (!workerWallet)
@@ -2032,13 +2078,17 @@ export default function EmployerPage() {
 
         return { ...nextStep, status: "done", txid, detail };
       } catch (e: any) {
+        if (runId !== runIdRef.current) throw new Error("ABORTED"); // Abort if cancelled
+
         const msg = e?.message || "Step failed";
         updateStep(nextStep.key, { status: "failed", detail: msg });
         setError(msg);
         throw e;
       } finally {
-        setBusy(false);
-        setAgentExecuteBusy(false);
+        if (runId === runIdRef.current) {
+          setBusy(false);
+          setAgentExecuteBusy(false);
+        }
       }
     }, [
       agentDraft,
@@ -2063,6 +2113,7 @@ export default function EmployerPage() {
     ]);
 
   const handleCancelBusy = useCallback(() => {
+    runIdRef.current += 1; // Invalidate any pending execution promises
     setBusy(false);
     setAgentExecuteBusy(false);
     setAgentQueue(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'pending' } : s));
@@ -2123,6 +2174,12 @@ export default function EmployerPage() {
         ready={initialDataLoaded}
         hydrated={agentRunHydrated}
         onCancelBusy={handleCancelBusy}
+        autoGrantDecrypt={autoGrantDecrypt}
+        setAutoGrantDecrypt={setAutoGrantDecrypt}
+        autoGrantKeeperDecrypt={autoGrantKeeperDecrypt}
+        setAutoGrantKeeperDecrypt={setAutoGrantKeeperDecrypt}
+        boundPresetPeriod={boundPresetPeriod}
+        setBoundPresetPeriod={setBoundPresetPeriod}
       />
 
       <button
@@ -2187,7 +2244,7 @@ export default function EmployerPage() {
                 onClick={() => {
                   if (typeof window === "undefined" || !ownerPubkey) return;
                   const owner = ownerPubkey.toBase58();
-                  const key = `expensee_employer_state_v1:${owner}`;
+                  const key = `expensee_employer_state_v2:${owner}`;
                   try {
                     window.localStorage.removeItem(key);
                   } catch {
@@ -2735,6 +2792,30 @@ export default function EmployerPage() {
                         Stop automatically at end of this period
                       </label>
                     )}
+
+                  <label className="mt-3 flex items-center gap-2 text-xs text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={autoGrantDecrypt}
+                      onChange={(e) => setAutoGrantDecrypt(e.target.checked)}
+                      disabled={busy}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    Allow worker to view earnings automatically
+                  </label>
+                  <label className="mt-1 flex items-center gap-2 text-xs text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={autoGrantKeeperDecrypt}
+                      onChange={(e) =>
+                        setAutoGrantKeeperDecrypt(e.target.checked)
+                      }
+                      disabled={busy}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    Allow automation service to process confidential payout automatically
+                  </label>
+
                   <div className="mt-2 text-xs text-gray-700">
                     Computed per-second rate:{" "}
                     <span className="font-mono">
@@ -2753,29 +2834,7 @@ export default function EmployerPage() {
                   className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100"
                 />
 
-                <label className="mt-3 flex items-center gap-2 text-xs text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={autoGrantDecrypt}
-                    onChange={(e) => setAutoGrantDecrypt(e.target.checked)}
-                    disabled={busy}
-                    className="h-4 w-4 rounded border-gray-300"
-                  />
-                  Allow worker to view earnings automatically
-                </label>
-                <label className="mt-1 flex items-center gap-2 text-xs text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={autoGrantKeeperDecrypt}
-                    onChange={(e) =>
-                      setAutoGrantKeeperDecrypt(e.target.checked)
-                    }
-                    disabled={busy}
-                    className="h-4 w-4 rounded border-gray-300"
-                  />
-                  Allow automation service to process confidential payout
-                  automatically
-                </label>
+                {/* Worker record options are now configured via the agent chat */}
 
                 <button
                   disabled={busy || !v2ConfigExists}
