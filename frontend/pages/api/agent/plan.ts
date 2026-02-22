@@ -31,6 +31,8 @@ type AgentPlan = {
   fixedTotalDays?: string;
   salaryPerSecond?: string;
   boundPresetPeriod?: boolean;
+  autoGrantDecrypt?: boolean;
+  autoGrantKeeperDecrypt?: boolean;
   streamIndex?: number;
   bonusAmount?: string;
   depositAmount?: string;
@@ -80,6 +82,7 @@ let cachedToolkitAgent: SolanaAgentKit | null = null;
 let cachedToolkitAction: ToolkitAction | null = null;
 
 function toTrimmedString(v: unknown): string {
+  if (typeof v === 'number') return String(v);
   return typeof v === 'string' ? v.trim() : '';
 }
 
@@ -131,6 +134,9 @@ function buildHeuristicPlan(input: PlannerInput): AgentPlan {
     summary: 'Drafted plan from your message.',
     confidence: 0.45,
     missing,
+    boundPresetPeriod: true,
+    autoGrantDecrypt: true,
+    autoGrantKeeperDecrypt: true,
   };
 
   // Detect basic intent keywords
@@ -368,9 +374,9 @@ function normalizeLlmPlan(raw: unknown): AgentPlan | null {
   const salaryPerSecond = toTrimmedString(obj.salaryPerSecond);
   if (salaryPerSecond) normalized.salaryPerSecond = salaryPerSecond;
 
-  if (typeof obj.boundPresetPeriod === 'boolean') {
-    normalized.boundPresetPeriod = obj.boundPresetPeriod;
-  }
+  normalized.boundPresetPeriod = typeof obj.boundPresetPeriod === 'boolean' ? obj.boundPresetPeriod : true;
+  normalized.autoGrantDecrypt = typeof obj.autoGrantDecrypt === 'boolean' ? obj.autoGrantDecrypt : true;
+  normalized.autoGrantKeeperDecrypt = typeof obj.autoGrantKeeperDecrypt === 'boolean' ? obj.autoGrantKeeperDecrypt : true;
 
   const depositAmount = toTrimmedString(obj.depositAmount);
   if (depositAmount) normalized.depositAmount = depositAmount;

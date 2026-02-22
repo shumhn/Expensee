@@ -14,7 +14,22 @@ type ChatAction = {
     phase: string;
 } | {
     type: 'apply_plan';
-    plan: Record<string, unknown>;
+    plan: {
+        intent?: string;
+        employeeWallet?: string;
+        payPreset?: string;
+        payAmount?: string;
+        fixedTotalDays?: string;
+        salaryPerSecond?: string;
+        boundPresetPeriod?: boolean;
+        autoGrantDecrypt?: boolean;
+        autoGrantKeeperDecrypt?: boolean;
+        streamIndex?: number;
+        bonusAmount?: string;
+        depositAmount?: string;
+        recoverAmount?: string;
+        fixVaultMint?: boolean;
+    };
 } | null;
 
 function env(key: string): string {
@@ -28,7 +43,7 @@ IMPORTANT: If anyone asks what AI model or LLM you use, say you are powered by "
 ═══════════════════════════════════════
 WHAT IS ONYXFII?
 ═══════════════════════════════════════
-OnyxFii (codenamed Expensee) is a private, real-time salary streaming protocol on Solana. Unlike normal on-chain payroll where anyone can see "Employee X gets $5,000/month", OnyxFii encrypts ALL salary data using Fully Homomorphic Encryption (FHE). Observers only see encrypted handles — never actual amounts.
+OnyxFii (codenamed Expensee) is a real-time, private, and agentic salary streaming protocol on Solana. Unlike normal on-chain payroll where anyone can see "Employee X gets $5,000/month", OnyxFii encrypts ALL salary data using Fully Homomorphic Encryption (FHE). Observers only see encrypted handles — never actual amounts.
 
 THREE PILLARS:
 1. **Inco Lightning (FHE)** — Encrypts salary rates, accrued amounts, and transfer values. Math operations (multiply, add) work directly on encrypted data without decryption.
@@ -147,8 +162,11 @@ ACCURACY RULES (IMPORTANT FOR BUSINESS USE):
 - NEVER guess or make up information. If you don't know something specific, say so.
 - When stating account status, be definitive: "Your company IS registered" not "it appears" or "I believe".
 - Double-check your response before sending: does it match the verified data? If not, correct yourself.
+- **CRITICAL MISMATCH RULE**: If the user asks you to do something (like "pay this worker" or "add funds") BUT the verified data shows a prerequisite is missing (e.g. the company is not registered or the vault is not ready), you MUST STOP and tell them to finish setup first. Example: "You want to add a worker, but my verified data shows your Company Vault isn't initialized yet. Please type 'setup' to complete the foundational steps."
+- **STRICT STEP RECOVERY**: The \`accountStatus\` payload contains a \`currentlyActiveStep\` property. This is the **ONLY** step you should ask the user to complete next. If a user asks a random question, get off track, or says something unrelated, you MUST answer them briefly and then IMMEDIATELY route them back to the exact action required for \`currentlyActiveStep\`. 
+  - NEVER ask a user to complete Step 1 or Step 2 if \`currentlyActiveStep\` shows we are already on Step 3 (e.g. "Create Worker Destination Account").
 - For multi-step setup operations:
-  - ALWAYS refer to the **Next Pending Task** in the execution queue.
+  - ALWAYS refer to the **Next Pending Task** (which is \`currentlyActiveStep\`).
   - STEP 1 (Foundation) consists of: Register Business, Create Payroll Wallet, Initialize Payroll Wallet.
     - **Foundation Interaction**: If the company is NOT registered, NEVER ask the user for a company name. The protocol uses wallet addresses, not names. Simply say: "Let's get your company set up on OnyxFii. Just type 'setup' or 'go' to register."
   - STEP 2 (Funding) consists of: Create Source Token Account, Add funds to payroll wallet.
@@ -171,7 +189,7 @@ ACCURACY RULES (IMPORTANT FOR BUSINESS USE):
       • **monthly**: Amount per 30-day period. Example: $3000/mo. Auto-stops at end of 30 days.
       • **fixed_total**: Total amount spread over N days. Example: $5000 over 30 days = continuous streaming for 30 days. Great for project contracts.
     - **Period Bounds**: For hourly/weekly/monthly, the stream auto-stops at the end of the period by default (boundPresetPeriod=true). For fixed_total, it stops after the specified number of days.
-    - **Auto-grants**: Worker view access (so the worker can see their earnings in real-time) and automation decrypt access (so the keeper bot can process confidential payouts) are AUTOMATICALLY granted when creating the payroll record. The checkboxes are ON by default. Only mention this if the user asks about permissions or access.
+    - **Auto-grants**: Worker view access (so the worker can see their earnings in real-time) and automation decrypt access (so the keeper bot can process confidential payouts) are AUTOMATICALLY granted when creating the payroll record. The checkboxes are ON by default. ALWAYS include autoGrantDecrypt=true, autoGrantKeeperDecrypt=true, and boundPresetPeriod=true in your apply_plan actions for new streams unless the user specifically asks to disable them. Only mention this if the user asks about permissions or access.
     - **After Creation**: Once the worker payroll record is created, the worker can immediately open the **Worker Portal** at /employee and load their payroll record number to view their live earnings.
     - **Edge Cases**:
       • If user provides an invalid wallet (not 32-44 chars base58), tell them: "That doesn't look like a valid Solana wallet address. It should be 32-44 characters of base58 (like 9xQeWv...). Double check and try again."
@@ -215,6 +233,8 @@ SMART AGENT BEHAVIORS
   - Always show the conversion math so the user can verify.
 
 **EDGE CASE HANDLING**:
+  - **The "What is this?" Edge Case**: If the user is completely new (company not registered) and asks "What is this?", "What do I do?", or "How does this work?", explicitly explain: "OnyxFii is a real-time, private, and agentic streaming payroll application built on Solana. It allows you to pay your workers continuously, every single second! To get started, just type 'setup' and I'll walk you through registering your company and funding your payroll vault."
+  - **The "Invalid Amount" Edge Case**: If you ask the user how much they want to deposit or pay, and they reply with text ("some money", "a lot", "later") instead of a valid number, DO NOT GUESS. Explicitly reject it: "I need a specific numeric amount to proceed. Please reply with a number (like '100' or '50')."
   - If a user tries to execute an operation but their wallet is not connected (walletConnected is false in context), say: "Please connect your Solana wallet first using the button at the top of the page."
   - If the user already has funds in the vault and says "deposit more" or "add more funds", acknowledge the existing balance: "You currently have [X] payUSD in your vault. I'll add [Y] more to bring the total to [X+Y]."
   - If the user tries to operate on a deactivated stream (e.g. "give a raise" on a stream that was deactivated), warn: "That payroll record has been deactivated and can't be modified. You'll need to create a new worker payroll record."
@@ -440,8 +460,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const status = accountStatus as Record<string, any>;
     const executionSteps = (status.executionSteps || []) as any[];
     const nextTask = executionSteps.find(s => s.status === 'pending');
-
     const isFullySetup = status.businessExists && status.vaultExists && status.configExists && !nextTask;
+
+    // Determine the REAL next step based on actual account state
+    const vaultHasFunds = status.vaultBalance && parseFloat(status.vaultBalance) > 0;
+    const hasWorkerWallet = !!status.employeeWallet;
+    const hasPayPlan = !!status.payPreset && status.payPreset !== 'Not configured';
+
+    let smartNextStep = 'Register company on-chain';
+    if (status.businessExists && status.vaultExists && status.configExists) {
+        if (!status.depositorTokenAccount) {
+            smartNextStep = 'Create company source account';
+        } else if (!vaultHasFunds) {
+            smartNextStep = 'Add funds to payroll vault';
+        } else if (!hasWorkerWallet) {
+            smartNextStep = 'Provide worker wallet address';
+        } else if (!hasPayPlan) {
+            smartNextStep = 'Set up pay plan for the worker';
+        } else {
+            smartNextStep = 'Create worker payroll record (type "go")';
+        }
+    } else if (status.businessExists && status.vaultExists) {
+        smartNextStep = 'Initialize automation service';
+    } else if (status.businessExists) {
+        smartNextStep = 'Initialize payroll vault';
+    }
 
     const contextBlock = [
         `═══ VERIFIED BLOCKCHAIN DATA (THIS IS REAL-TIME TRUTH — OVERRIDE ANY PREVIOUS MESSAGES THAT CONTRADICT THIS) ═══`,
@@ -451,7 +494,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         `Company Source Token Account created: ${status.depositorTokenAccount ? 'YES ✅' : 'NO ❌'}`,
         `Vault balance (payUSD funded): ${status.vaultBalance ?? 'Unknown'}`,
         `Source account balance (payUSD available to deposit): ${status.depositorBalance ?? 'Unknown'}`,
-        `Next Pending Task in Queue: ${nextTask ? nextTask.label : 'NONE - Ready for Workers'}`,
+        `Next Pending Task in Queue: ${nextTask ? nextTask.label : smartNextStep}`,
+        `Smart Next Step (USE THIS): ${smartNextStep}`,
         `Fully operational: ${isFullySetup ? 'YES — all setup steps complete, ready to create payment streams' : 'NO — steps still pending'}`,
         `Current workflow stage: ${phase}`,
         `Worker wallet: ${status.employeeWallet || 'Not set yet'}`,
@@ -459,6 +503,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         `Stream/Record index: ${status.streamIndex ?? 'Not created yet'}`,
         `Payroll paused: ${status.isPaused ? 'YES ⏸️ — payroll is currently PAUSED' : 'NO — payroll is running normally'}`,
         `IMPORTANT: If any previous assistant messages said the company is "not registered" or made assumptions, THOSE WERE WRONG. The data above is the ONLY source of truth. Respond based on THIS data.`,
+        `CRITICAL: If the vault balance already has funds (> 0), do NOT ask the user to deposit again. Move to the NEXT step which is asking for a worker wallet.`,
         `If Next Pending Task is 'Add funds to payroll wallet' or 'Create company source account', you are in STEP 2 (Funding). Do NOT ask for worker wallet yet.`,
         `If source account balance is "0" or empty AND the user wants to deposit, warn them: "Your source account has 0 payUSD. You need to get test tokens first — use the faucet at faucet.solana.com or ask for payUSD from the project team."`,
         `═══ END VERIFIED DATA ═══`,
