@@ -800,3 +800,29 @@ a:hover {
 .advanced-mode-toggle:hover {
   background: var(--app-surface-alt);
 }
+
+.agent-chat-options-panel {
+  padding: 0.75rem 1.25rem;
+  background: #fdfefe;
+  border-top: 1px solid var(--app-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.agent-chat-option-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--app-ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-chat-option-label input[type="checkbox"] {
+  accent-color: var(--app-primary);
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}

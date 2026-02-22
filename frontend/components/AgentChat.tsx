@@ -13,6 +13,7 @@ type AgentChatPhase =
     | 'ask_funding'
     | 'ask_wallet'
     | 'ask_pay'
+    | 'ask_options'
     | 'confirm_plan'
     | 'executing'
     | 'done'
@@ -60,6 +61,12 @@ type AgentChatProps = {
     ready: boolean;
     hydrated: boolean;
     onCancelBusy?: () => void;
+    autoGrantDecrypt?: boolean;
+    setAutoGrantDecrypt?: (val: boolean) => void;
+    autoGrantKeeperDecrypt?: boolean;
+    setAutoGrantKeeperDecrypt?: (val: boolean) => void;
+    boundPresetPeriod?: boolean;
+    setBoundPresetPeriod?: (val: boolean) => void;
 };
 
 function msgId(): string {
@@ -93,10 +100,17 @@ export default function AgentChat({
     executionSteps,
     busy,
     onCancelBusy,
+    autoGrantDecrypt,
+    setAutoGrantDecrypt,
+    autoGrantKeeperDecrypt,
+    setAutoGrantKeeperDecrypt,
+    boundPresetPeriod,
+    setBoundPresetPeriod,
 }: AgentChatProps) {
     const [input, setInput] = useState('');
     const [pendingPlan, setPendingPlan] = useState<ParsedPlan | null>(null);
     const [thinking, setThinking] = useState(false);
+    const [optionStep, setOptionStep] = useState(0);
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const hasGreeted = useRef(false);
@@ -138,7 +152,23 @@ export default function AgentChat({
                 body: JSON.stringify({
                     message: userText,
                     history: messages.slice(-10),
-                    accountStatus: { businessExists, vaultExists, configExists, executionSteps, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex },
+                    accountStatus: {
+                        businessExists,
+                        vaultExists,
+                        configExists,
+                        executionSteps,
+                        currentlyActiveStep: executionSteps.find(s => s.status === 'pending'),
+                        depositorBalance,
+                        vaultBalance,
+                        depositorTokenAccount,
+                        employeeWallet,
+                        payPreset,
+                        payAmount,
+                        streamIndex,
+                        autoGrantDecrypt,
+                        autoGrantKeeperDecrypt,
+                        boundPresetPeriod
+                    },
                     phase,
                 }),
             });
@@ -149,7 +179,7 @@ export default function AgentChat({
             console.error('[AgentChat] askGrok fetch error:', err);
             return { reply: `I couldn't reach my brain. Please try again.` };
         }
-    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase]);
+    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase, autoGrantDecrypt, autoGrantKeeperDecrypt, boundPresetPeriod]);
 
     const handleSend = useCallback(async () => {
         const text = input.trim();
@@ -299,13 +329,18 @@ export default function AgentChat({
                         } else if (step.key === 'create-worker-token') {
                             addAgentMsg(`${skipMsg}✅ **Worker destination account created!**${proof}\n\nNow let's set up the pay plan. Here are your options:\n\n💰 **Hourly** — e.g. "pay 25 per hour" (great for contractors)\n💰 **Weekly** — e.g. "pay 500 per week" (standard for part-time)\n💰 **Monthly (30d)** — e.g. "pay 3000 per month" (standard salary)\n💰 **Fixed Total** — e.g. "pay 5000 over 30 days" (project-based)\n💰 **Per-second** — e.g. "pay 0.0001 per second" (advanced)\n\nJust tell me how you'd like to pay!`);
                             setPhase('ask_pay');
+                        } else if (step.key === 'configure-worker-options') {
+                            addAgentMsg(`${skipMsg}✅ **Pay plan configured!** Now let's set up your worker record preferences.\n\n👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
+                            setOptionStep(0);
+                            setPhase('ask_options');
                         } else {
                             addAgentMsg(`${skipMsg}✅ **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType **"go"** to move to the next step, or ask me any questions.`);
                         }
-                        if (step.key !== 'init-automation' && step.key !== 'create-worker-token') setPhase('executing');
+                        if (step.key !== 'init-automation' && step.key !== 'create-worker-token' && step.key !== 'configure-worker-options') setPhase('executing');
                     }
                 } catch (e: any) {
                     const msg = e?.message || 'Transaction rejected';
+                    if (msg === 'ABORTED') return; // Silently ignore cancelled background promises
                     if (msg.includes('User rejected') || msg.includes('rejected the request') || msg.includes('cancelled')) {
                         addAgentMsg(`⏸️ Transaction was cancelled — no worries! Type **"go"** when you're ready to try again.`);
                     } else if (msg.includes('insufficient') || msg.includes('0x1') || msg.includes('not enough')) {
@@ -322,12 +357,92 @@ export default function AgentChat({
                 return;
             }
 
+            // ASK_OPTIONS: Conversational consent for worker record settings
+            if (phase === 'ask_options') {
+                const isYes = /\b(yes|yeah|yep|sure|ok|okay|yea|y|enable|on|allow|grant)\b/i.test(text);
+                const isNo = /\b(no|nah|nope|n|skip|disable|off|deny|don't|dont)\b/i.test(text);
+
+                if (!isYes && !isNo) {
+                    // Conversational message — route to LLM, then re-ask current question
+                    setThinking(true);
+                    try {
+                        const { reply } = await askGrok(text);
+                        const questions = [
+                            `👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`,
+                            `🤖 **Should the automation service be allowed to process confidential payouts automatically?** (yes/no)`,
+                            `⏱️ **Should the payroll stop automatically at the end of this pay period?** (yes/no)`,
+                        ];
+                        addAgentMsg(reply + `\n\n` + questions[optionStep]);
+                    } catch {
+                        addAgentMsg(`I had trouble understanding. Please respond with **"yes"** or **"no"**.`);
+                    } finally {
+                        setThinking(false);
+                    }
+                    return;
+                }
+
+                if (optionStep === 0) {
+                    // Q1: Worker view access
+                    setAutoGrantDecrypt?.(isYes);
+                    addAgentMsg(
+                        isYes
+                            ? `✅ Got it — worker **will** be able to view their earnings.\n\n`
+                            : `⬜ Understood — worker will **not** have automatic view access.\n\n`
+                    );
+                    addAgentMsg(`🤖 **Should the automation service be allowed to process confidential payouts automatically?**\n\n*(This enables the OnyxFii keeper to settle payments on your behalf)* (yes/no)`);
+                    setOptionStep(1);
+                    return;
+                }
+
+                if (optionStep === 1) {
+                    // Q2: Automation/keeper access
+                    setAutoGrantKeeperDecrypt?.(isYes);
+                    addAgentMsg(
+                        isYes
+                            ? `✅ Got it — automation service **will** process payouts automatically.\n\n`
+                            : `⬜ Understood — automation service will **not** have automatic access.\n\n`
+                    );
+                    addAgentMsg(`⏱️ **Should the payroll stop automatically at the end of this pay period?**\n\n*(If no, it will keep streaming until you manually pause or deactivate)* (yes/no)`);
+                    setOptionStep(2);
+                    return;
+                }
+
+                if (optionStep === 2) {
+                    // Q3: Auto-stop at end of period
+                    setBoundPresetPeriod?.(isYes);
+                    addAgentMsg(
+                        isYes
+                            ? `✅ Got it — payroll **will** stop automatically at the end of the period.\n\n`
+                            : `⬜ Understood — payroll will **stream continuously** until you stop it.\n\n`
+                    );
+
+                    // Move to confirm_plan
+                    addAgentMsg(
+                        `🎯 **All options configured!**\n\nType **"go"** to move to **Step 7 (Create worker payroll record)**, **"edit"** to change the pay plan, or **"edit options"** to change these settings.`
+                    );
+                    setPhase('confirm_plan');
+                    return;
+                }
+            }
+
             // CONFIRM_PLAN: "edit" goes back, "go" is handled above
             // Also detect if user provides a new amount/plan directly (e.g. "amount is 500", "500", "500 per month")
             if (phase === 'confirm_plan') {
                 const hasNumber = /\d/.test(text);
                 const isEditKeyword = /\b(edit|change|no|update|modify)\b/i.test(text);
                 const isExecuteKeyword = /\b(?:go|continue|yes|execute|start)\b/i.test(text);
+                const isOptionsKeyword = /\b(option|options|settings|permissions|access|auto.?stop)\b/i.test(text);
+
+                // If user wants to change options, restart the ask_options flow
+                if (isOptionsKeyword) {
+                    addAgentMsg(
+                        `No problem! Let's go through the options again.\n\n` +
+                        `👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`
+                    );
+                    setOptionStep(0);
+                    setPhase('ask_options');
+                    return;
+                }
 
                 // If user confirms the plan with "go", manually advance to executing
                 if (isExecuteKeyword && !isEditKeyword && !hasNumber) {
@@ -344,11 +459,18 @@ export default function AgentChat({
                             const skippedCount = executionSteps.slice(0, currentIdx).filter(s => s.status === 'done').length;
                             const skipMsg = skippedCount > 0 ? `*(I verified ${skippedCount} previous steps are already complete on-chain, skipping those)*\n\n` : '';
                             const proof = step.txid ? `\n\n**🔗 Transaction Proof:**\n[View on Solscan](https://solscan.io/tx/${step.txid}?cluster=devnet)` : '';
-                            addAgentMsg(`${skipMsg}✅ **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType **"go"** to move to the next step, or ask me any questions.`);
-                            setPhase('executing');
+                            if (step.key === 'configure-worker-options') {
+                                addAgentMsg(`✅ **Pay plan configured!** Now let's set up your worker record preferences.\n\n👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
+                                setOptionStep(0);
+                                setPhase('ask_options');
+                            } else {
+                                addAgentMsg(`${skipMsg}✅ **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType **"go"** to move to the next step, or ask me any questions.`);
+                                setPhase('executing');
+                            }
                         }
                     }).catch(e => {
                         const msg = e?.message || 'Transaction rejected';
+                        if (msg === 'ABORTED') return; // Silently ignore cancelled background promises
                         addAgentMsg(`❌ **Step failed:** ${msg}\n\nYou can type **"go"** to retry, or ask me what happened.`);
                         setPhase('ask_setup');
                     }).finally(() => {
@@ -414,13 +536,20 @@ export default function AgentChat({
                     }
                     return;
                 }
-                // User said something without a number or edit keyword — remind them
-                addAgentMsg(
-                    `You have a pending plan ready.\n\n` +
-                    `• Type **"go"** to execute\n` +
-                    `• Enter a new amount like **"500 per month"** to change\n` +
-                    `• Type **"help"** for all commands`
-                );
+                // User said something conversational — route to LLM, then remind about next step
+                setThinking(true);
+                try {
+                    const { reply } = await askGrok(text);
+                    const nextStep = executionSteps.find(s => s.status !== 'done');
+                    const nextStepHint = nextStep
+                        ? `\n\n📋 **Next step:** ${nextStep.label}\nType **"go"** to proceed, **"edit"** to change the pay plan, or **"edit options"** to change settings.`
+                        : `\n\nType **"go"** to execute, or **"edit"** to change the pay plan.`;
+                    addAgentMsg(reply + nextStepHint);
+                } catch {
+                    addAgentMsg(`I'm sorry, I had trouble understanding. Type **"go"** to execute, or **"help"** for all commands.`);
+                } finally {
+                    setThinking(false);
+                }
                 return;
             }
 
@@ -521,9 +650,11 @@ export default function AgentChat({
                         addAgentMsg(
                             `✅ **Pay plan configured!**\n\n` +
                             details.join('\n') +
-                            `\n\nType **"go"** to create the worker payroll record, or **"edit"** to change.`
+                            `\n\nBefore we proceed, I need to confirm a few options with you.\n\n` +
+                            `👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`
                         );
-                        setPhase('confirm_plan');
+                        setOptionStep(0);
+                        setPhase('ask_options');
                         return;
                     }
                 } catch {
@@ -620,7 +751,7 @@ export default function AgentChat({
                                 ? 'Synchronizing with ledger...'
                                 : thinking
                                     ? 'Thinking...'
-                                    : 'Real-time · Agentic · Private Payroll'}
+                                    : 'Real-time · Private · Agentic Payroll'}
                     </div>
                 </div>
                 <div className="agent-chat-header-status">
@@ -698,7 +829,7 @@ export default function AgentChat({
                     </div>
                 )}
 
-                {(phase === 'executing' || phase === 'confirm_plan' || phase === 'ask_setup' || phase === 'ask_wallet') && executionSteps.length > 0 && (
+                {(phase === 'executing' || phase === 'confirm_plan' || phase === 'ask_options' || phase === 'ask_setup' || phase === 'ask_wallet') && executionSteps.length > 0 && (
                     <div className="agent-msg">
                         <div className="agent-msg-bubble agent-execution-log">
                             {executionSteps.map((step, idx) => (
@@ -727,6 +858,8 @@ export default function AgentChat({
                 <div ref={bottomRef} />
             </div>
 
+
+
             <div className="agent-chat-input-row">
                 <input
                     ref={inputRef}
@@ -748,13 +881,15 @@ export default function AgentChat({
                                             ? 'Paste a Solana wallet address...'
                                             : phase === 'ask_pay'
                                                 ? 'e.g. "50 per hour" or "4000 per month"'
-                                                : phase === 'confirm_plan'
-                                                    ? 'Type "go" to execute or "edit" to change...'
-                                                    : phase === 'executing'
-                                                        ? 'Waiting for transactions...'
-                                                        : phase === 'done'
-                                                            ? 'Ask me anything or paste a new worker wallet...'
-                                                            : 'Paste a wallet address or describe a pay plan...'
+                                                : phase === 'ask_options'
+                                                    ? 'Type "yes" or "no"...'
+                                                    : phase === 'confirm_plan'
+                                                        ? 'Type "go" to execute or "edit" to change...'
+                                                        : phase === 'executing'
+                                                            ? 'Waiting for transactions...'
+                                                            : phase === 'done'
+                                                                ? 'Ask me anything or paste a new worker wallet...'
+                                                                : 'Paste a wallet address or describe a pay plan...'
                     }
                     className="agent-chat-input"
                 />
@@ -764,6 +899,7 @@ export default function AgentChat({
                             if (onCancelBusy) onCancelBusy();
                             setPhase('ask_setup');
                             setThinking(false);
+                            isSending.current = false;
                         }}
                         className="agent-chat-send"
                         style={{ background: '#dc3545', marginRight: 4 }}
