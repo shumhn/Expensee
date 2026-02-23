@@ -1,8 +1,8 @@
-# OnyxFii — The payroll engine for the next generation of builders.
+# OnyxFii — The Agentic Ai payroll engine for the next generation of builders.
 
-Top Web3 talent refuses to wait 30 days for a wire transfer, and they won't work for a company that doxxes their salary on a public ledger. **OnyxFii** lets you stream USDC globally in real-time, secured by unbreakable FHE privacy.
+Top Web3 talent refuses to wait 30 days for a wire transfer, and they won't work for a company that doxxes their salary on a public ledger. **OnyxFii** lets you stream USDC globally in real-time, secured by unbreakable FHE privacy with an agentic capabilities .
 
-> **Built for Founders.** Protect your corporate treasury from competitor poaching with military-grade FHE encryption. 
+> **Built for Founders.** Protect your corporate treasury from competitor poaching with top nothch FHE encryption. 
 > 
 > **Loved by Talent.** Sub-second MagicBlock streaming means your team watches their salary tick up live and withdraws whenever they want.
 >
