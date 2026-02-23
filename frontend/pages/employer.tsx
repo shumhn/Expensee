@@ -180,6 +180,7 @@ export default function EmployerPage() {
   const [keeperPubkey, setKeeperPubkey] = useState("");
   const [settleIntervalSecs, setSettleIntervalSecs] = useState("10");
   const [depositAmount, setDepositAmount] = useState("10");
+  const [hasConfirmedDeposit, setHasConfirmedDeposit] = useState(false);
   const [depositorTokenAccount, setDepositorTokenAccount] = useState("");
   const depositorTokenAccountRef = useRef(depositorTokenAccount);
   useEffect(() => { depositorTokenAccountRef.current = depositorTokenAccount; }, [depositorTokenAccount]);
@@ -415,6 +416,8 @@ export default function EmployerPage() {
           setAgentApprovalMode(parsed.agentApprovalMode);
         }
       }
+      if (typeof parsed?.hasConfirmedDeposit === "boolean")
+        setHasConfirmedDeposit(parsed.hasConfirmedDeposit);
     } catch {
       // ignore
     }
@@ -685,6 +688,7 @@ export default function EmployerPage() {
           autoGrantKeeperDecrypt,
           streamIndexInput,
           agentApprovalMode,
+          hasConfirmedDeposit,
         }),
       );
     } catch {
@@ -710,6 +714,7 @@ export default function EmployerPage() {
     settleIntervalSecs,
     streamIndexInput,
     vaultTokenAccount,
+    hasConfirmedDeposit,
   ]);
 
   const loadState = useCallback(async () => {
@@ -1063,7 +1068,18 @@ export default function EmployerPage() {
 
   const buildAgentExecutionQueue = useCallback((): AgentExecutionStep[] => {
     const steps: AgentExecutionStep[] = [];
-    const intent = agentDraft?.intent || "create_stream";
+    // Intent logic: default to 'create_stream' if any worker-related details are present but no stream index yet.
+    // This prevents accidental 'update_stream' or 'unknown' intents from skipping setup steps.
+    const hasWorkerDraft = !!employeeWallet || !!agentDraft?.employeeWallet || !!agentDraft?.payPreset;
+    const hasStreamIndex = (streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null) || (agentDraft?.streamIndex !== undefined && agentDraft?.streamIndex !== null);
+
+    let intent = (agentDraft && agentDraft.intent) ? agentDraft.intent : "create_stream";
+    if (!intent || intent === "unknown" || intent === "none") {
+      intent = "create_stream";
+    }
+    if (hasWorkerDraft && !hasStreamIndex && intent !== 'create_stream') {
+      intent = "create_stream";
+    }
 
     // Shared: Refresh state
     steps.push({
@@ -1131,7 +1147,8 @@ export default function EmployerPage() {
     }
 
     // STEP 2: Funding (Move funds into vault)
-    const currentDepositor = depositorTokenAccountRef.current || depositorTokenAccount;
+    const currentDepositor =
+      depositorTokenAccountRef.current || depositorTokenAccount;
     steps.push({
       key: "create-depositor-token",
       label: "Create company source account",
@@ -1141,12 +1158,34 @@ export default function EmployerPage() {
       requiresSignature: true,
     });
 
-    // Add funding step if we are setting up or if user explicitly wants to fund
-    // In this granular mode, we'll always show it if the business exists or is being created
+    // Smart status: If they have tokens in their wallet OR in the vault, they've finished minting
+    // Also mark as done if the vault exists and is funded, or if they've progressed to later steps (automation/worker)
+    const hasObtainedTokens =
+      Number(depositorBalance || 0) > 0 || Number(vaultBalance || 0) > 0;
+    const hasProgressedPastFunding = !!v2ConfigExists || !!employeeTokenAccount.trim();
+    steps.push({
+      key: "mint-demo-tokens",
+      label: "Get 1,000 demo tokens",
+      status: (hasObtainedTokens || hasConfirmedDeposit || Number(vaultBalance || 0) > 0 || hasProgressedPastFunding) ? "done" : "pending",
+      required: true,
+      risk: "safe",
+      requiresSignature: false,
+    });
+
+    const hasVaultFunds = Number(vaultBalance || 0) > 0;
+    steps.push({
+      key: "configure-deposit-amount",
+      label: "Confirm deposit amount",
+      status: (hasConfirmedDeposit || hasVaultFunds || hasProgressedPastFunding) ? "done" : "pending",
+      required: true,
+      risk: "safe",
+      requiresSignature: false,
+    });
+
     steps.push({
       key: "deposit-funds",
       label: "Add funds to payroll wallet",
-      status: "pending",
+      status: (hasVaultFunds || hasProgressedPastFunding) ? "done" : "pending",
       required: true,
       risk: "review",
       requiresSignature: true,
@@ -1159,16 +1198,16 @@ export default function EmployerPage() {
         !!effectiveKeeperPubkey &&
         v2Config.keeper !== effectiveKeeperPubkey;
 
-      if (!v2ConfigExists) {
-        steps.push({
-          key: "init-automation",
-          label: "Initialize automation service",
-          status: "pending",
-          required: true,
-          risk: "high_risk",
-          requiresSignature: true,
-        });
-      } else if (keeperMismatch) {
+      steps.push({
+        key: "init-automation",
+        label: "Initialize automation service",
+        status: v2ConfigExists ? "done" : "pending",
+        required: true,
+        risk: "high_risk",
+        requiresSignature: true,
+      });
+
+      if (keeperMismatch) {
         steps.push({
           key: "rotate-automation",
           label: "Rotate automation wallet to active keeper",
@@ -1179,16 +1218,14 @@ export default function EmployerPage() {
         });
       }
 
-      if (!employeeTokenAccount.trim()) {
-        steps.push({
-          key: "create-worker-token",
-          label: "Create worker destination account",
-          status: "pending",
-          required: true,
-          risk: "review",
-          requiresSignature: true,
-        });
-      }
+      steps.push({
+        key: "create-worker-token",
+        label: "Create worker destination account",
+        status: employeeTokenAccount.trim() ? "done" : "pending",
+        required: true,
+        risk: "review",
+        requiresSignature: true,
+      });
 
       steps.push({
         key: "configure-worker-options",
@@ -1298,6 +1335,9 @@ export default function EmployerPage() {
     effectiveKeeperPubkey,
     v2Config?.keeper,
     employeeTokenAccount,
+    hasConfirmedDeposit,
+    depositorBalance,
+    vaultBalance,
   ]);
 
   // Self-heal the agent queue if the code introduces new steps that aren't in localStorage.
@@ -1432,6 +1472,83 @@ export default function EmployerPage() {
             continue;
           }
 
+          if (step.key === "create-depositor-token") {
+            const { txid, tokenAccount } = await createIncoTokenAccount(
+              connection,
+              wallet,
+              ownerPubkey,
+              PAYUSD_MINT,
+            );
+            const tokenAddr = tokenAccount.toBase58();
+            setDepositorTokenAccount(tokenAddr);
+            depositorTokenAccountRef.current = tokenAddr;
+            updateStep(step.key, { status: "done", txid });
+            continue;
+          }
+
+          if (step.key === "mint-demo-tokens") {
+            const currentDepositorToken =
+              depositorTokenAccountRef.current || depositorTokenAccount;
+            if (!currentDepositorToken)
+              throw new Error("No company source account found to fund.");
+            const resp = await fetch("/api/faucet/mint-payusd", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userConfidentialTokenAccount: currentDepositorToken,
+              }),
+            });
+            const json = await resp.json();
+            if (!resp.ok || !json?.ok)
+              throw new Error(json?.error || "Faucet failed");
+            updateStep(step.key, { status: "done", txid: json.tx });
+            continue;
+          }
+
+          if (step.key === "configure-deposit-amount") {
+            updateStep(step.key, {
+              status: "done",
+              detail: "TRIGGER_DEPOSIT_PROMPT",
+            });
+            setAgentPhase("ask_funding");
+            throw new Error("PAUSE_FOR_DEPOSIT");
+          }
+
+          if (step.key === "deposit-funds") {
+            const business = await getBusinessAccount(connection, ownerPubkey);
+            if (!business) throw new Error("Business not found");
+            const vault = await getVaultAccount(connection, business.address);
+            if (!vault) throw new Error("Vault not found");
+            const currentDepositorToken =
+              depositorTokenAccountRef.current || depositorTokenAccount;
+            if (!currentDepositorToken)
+              throw new Error(
+                "Please paste your Company Source Token Account address in Step 2.",
+              );
+            if (!depositAmount || Number(depositAmount) <= 0)
+              throw new Error("Please enter a valid deposit amount in Step 2.");
+
+            const depositorToken = mustPubkey(
+              "source token account",
+              currentDepositorToken,
+            );
+            const amount = Number(depositAmount);
+            const txid = await deposit(
+              connection,
+              wallet,
+              depositorToken,
+              vault.tokenAccount,
+              amount,
+            );
+
+            // Instantly update UI state so Step 2 turns green
+            const currentBal = Number(vaultBalance || 0);
+            setVaultBalance((currentBal + amount).toString());
+
+            updateStep(step.key, { status: "done", txid });
+            continue;
+          }
+
           if (step.key === "init-automation") {
             const keeper = mustPubkey(
               "automation service wallet",
@@ -1458,7 +1575,11 @@ export default function EmployerPage() {
           }
 
           if (step.key === "configure-worker-options") {
-            updateStep(step.key, { status: "done", detail: "TRIGGER_ASK_OPTIONS" });
+            updateStep(step.key, {
+              status: "done",
+              detail: "TRIGGER_ASK_OPTIONS",
+            });
+            setAgentPhase("ask_options");
             // Stop the automated queue and wait for conversational input
             throw new Error("PAUSE_FOR_OPTIONS");
           }
@@ -1602,7 +1723,7 @@ export default function EmployerPage() {
       );
       await loadState();
     } catch (e: any) {
-      if (e?.message === "PAUSE_FOR_OPTIONS") return;
+      if (e?.message === "PAUSE_FOR_OPTIONS" || e?.message === "PAUSE_FOR_DEPOSIT") return;
       setError(e?.message || "Assistant execution failed");
       throw e;
     } finally {
@@ -1626,150 +1747,11 @@ export default function EmployerPage() {
     wallet,
   ]);
 
-  const draftWithAssistant = useCallback(async () => {
-    const instruction = agentPrompt.trim();
-    if (!instruction) {
-      setError(
-        'Type a payroll instruction first (for example: "Pay 30 per hour for 7 days").',
-      );
-      return;
-    }
-    setAgentBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const response = await fetch("/api/agent/plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instruction,
-          current: {
-            employeeWallet,
-            payPreset,
-            payAmount,
-            fixedTotalDays,
-            salaryPerSecond,
-            boundPresetPeriod,
-          },
-        }),
-      });
-      const json = (await response.json()) as
-        | { ok: true; plan: AgentPlanDraft }
-        | { ok: false; error?: string };
-
-      if (!response.ok || !json.ok) {
-        throw new Error(
-          (json as { error?: string })?.error || "Failed to draft payroll plan",
-        );
-      }
-
-      const draft = json.plan;
-      setAgentDraft(draft);
-      applyAgentDraft(draft);
-      const confidencePct = Math.round((draft.confidence || 0) * 100);
-      setMessage(
-        `Assistant draft applied (${draft.source}, ${confidencePct}% confidence). Review Step 3 and click "Create Worker Payroll Record".`,
-      );
-    } catch (e: any) {
-      setError(e?.message || "Assistant draft failed");
-    } finally {
-      setAgentBusy(false);
-    }
-  }, [
-    agentPrompt,
-    applyAgentDraft,
-    boundPresetPeriod,
-    employeeWallet,
-    fixedTotalDays,
-    payAmount,
-    payPreset,
-    salaryPerSecond,
-  ]);
-
-  const handleChatDraftPlan = useCallback(
-    async (instruction: string, _current: Record<string, unknown>) => {
-      try {
-        const response = await fetch("/api/agent/plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            instruction,
-            current: {
-              employeeWallet,
-              payPreset,
-              payAmount,
-              fixedTotalDays,
-              salaryPerSecond,
-              boundPresetPeriod,
-            },
-          }),
-        });
-        const json = (await response.json()) as
-          | { ok: true; plan: AgentPlanDraft }
-          | { ok: false; error?: string };
-        if (!response.ok || !json.ok) return null;
-        return json.plan;
-      } catch {
-        return null;
-      }
-    },
-    [
-      employeeWallet,
-      payPreset,
-      payAmount,
-      fixedTotalDays,
-      salaryPerSecond,
-      boundPresetPeriod,
-    ],
-  );
-
-  const handleChatApplyPlan = useCallback((plan: Record<string, unknown>) => {
-    if (plan.employeeWallet && typeof plan.employeeWallet === "string") {
-      if (plan.employeeWallet === "USE_MY_WALLET" && wallet.publicKey) {
-        setEmployeeWallet(wallet.publicKey.toBase58());
-      } else if (plan.employeeWallet !== "USE_MY_WALLET") {
-        setEmployeeWallet(plan.employeeWallet);
-      }
-    }
-    if (
-      plan.payPreset &&
-      typeof plan.payPreset === "string" &&
-      isPayPreset(plan.payPreset)
-    )
-      setPayPreset(plan.payPreset);
-    if (plan.payAmount && (typeof plan.payAmount === "string" || typeof plan.payAmount === "number"))
-      setPayAmount(String(plan.payAmount));
-    if (plan.fixedTotalDays && (typeof plan.fixedTotalDays === "string" || typeof plan.fixedTotalDays === "number"))
-      setFixedTotalDays(String(plan.fixedTotalDays));
-    if (plan.salaryPerSecond && (typeof plan.salaryPerSecond === "string" || typeof plan.salaryPerSecond === "number"))
-      setSalaryPerSecond(String(plan.salaryPerSecond));
-    setBoundPresetPeriod(typeof plan.boundPresetPeriod === "boolean" ? plan.boundPresetPeriod : true);
-    if (typeof plan.streamIndex === "number" || typeof plan.streamIndex === "string")
-      setStreamIndexInput(String(plan.streamIndex));
-    if (plan.bonusAmount && (typeof plan.bonusAmount === "string" || typeof plan.bonusAmount === "number"))
-      setBonusAmount(String(plan.bonusAmount));
-    if (plan.depositAmount && (typeof plan.depositAmount === "string" || typeof plan.depositAmount === "number"))
-      setDepositAmount(String(plan.depositAmount));
-    setAutoGrantDecrypt(typeof plan.autoGrantDecrypt === "boolean" ? plan.autoGrantDecrypt : true);
-    setAutoGrantKeeperDecrypt(typeof plan.autoGrantKeeperDecrypt === "boolean" ? plan.autoGrantKeeperDecrypt : true);
-    if (plan.recoverAmount && (typeof plan.recoverAmount === "string" || typeof plan.recoverAmount === "number"))
-      setVaultWithdrawAmount(String(plan.recoverAmount));
-    if (plan.intent && typeof plan.intent === "string") {
-      setAgentDraft((prev) => ({ ...prev!, intent: plan.intent as string }));
-    } else {
-      // If applying a plan update (like a wallet paste) without an explicit intent,
-      // and we don't have an intent yet, default to 'create_stream' to ensure the queue builds.
-      setAgentDraft((prev) => {
-        if (prev?.intent) return prev;
-        return { ...prev!, intent: 'create_stream' };
-      });
-    }
-  }, [depositorTokenAccount, wallet.publicKey]);
-
   const executeNextAgentStep =
     useCallback(async (): Promise<AgentExecutionStep | null> => {
       if (!ownerPubkey) throw new Error("Wallet not connected");
       if (agentExecuteBusy) return null; // Lock
+      if (!initialDataLoaded) throw new Error("Synchronization in progress... please try again in a second.");
 
       // Always get the latest "truth" from buildAgentExecutionQueue
       const freshQueue = buildAgentExecutionQueue();
@@ -1903,6 +1885,21 @@ export default function EmployerPage() {
             depositorTokenAccountRef.current = tokenAddr;
             result = { txid, detail: "Company source account created." };
           }
+        } else if (nextStep.key === "mint-demo-tokens") {
+          const currentDepositorToken = depositorTokenAccountRef.current || depositorTokenAccount;
+          if (!currentDepositorToken) throw new Error("No company source account found to fund.");
+          const resp = await fetch('/api/faucet/mint-payusd', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userConfidentialTokenAccount: currentDepositorToken }),
+          });
+          const json = await resp.json();
+          if (!resp.ok || !json?.ok) throw new Error(json?.error || 'Faucet failed');
+          result = { txid: json.tx, detail: "Minted 1,000 demo PAYUSD." };
+        } else if (nextStep.key === "configure-deposit-amount") {
+          updateStep(nextStep.key, { status: "done", detail: "TRIGGER_DEPOSIT_PROMPT" });
+          setAgentPhase("ask_funding");
+          result = { txid: "", detail: "PAUSE_FOR_DEPOSIT" };
         } else if (nextStep.key === "deposit-funds") {
           if (!ownerPubkey) throw new Error("Wallet not connected");
           const business = await getBusinessAccount(connection, ownerPubkey);
@@ -1958,6 +1955,7 @@ export default function EmployerPage() {
           // This step triggers the ask_options conversational flow in AgentChat
           // No transaction needed — mark it done so we can move to the next step later
           updateStep(nextStep.key, { status: "done", detail: "TRIGGER_ASK_OPTIONS" });
+          setAgentPhase("ask_options");
           result = {
             txid: "",
             detail: "TRIGGER_ASK_OPTIONS",
@@ -2080,6 +2078,8 @@ export default function EmployerPage() {
       } catch (e: any) {
         if (runId !== runIdRef.current) throw new Error("ABORTED"); // Abort if cancelled
 
+        if (e?.message === "PAUSE_FOR_DEPOSIT") throw e;
+
         const msg = e?.message || "Step failed";
         updateStep(nextStep.key, { status: "failed", detail: msg });
         setError(msg);
@@ -2105,12 +2105,151 @@ export default function EmployerPage() {
       rotateAutomationWalletTask,
       settleIntervalSecs,
       streamIndexInput,
-      v2Config,
-      vaultTokenAccount,
-      depositorTokenAccount,
-      depositAmount,
       wallet,
     ]);
+
+  const draftWithAssistant = useCallback(async () => {
+    const instruction = agentPrompt.trim();
+    if (!instruction) {
+      setError(
+        'Type a payroll instruction first (for example: "Pay 30 per hour for 7 days").',
+      );
+      return;
+    }
+    setAgentBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/agent/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instruction,
+          current: {
+            employeeWallet,
+            payPreset,
+            payAmount,
+            fixedTotalDays,
+            salaryPerSecond,
+            boundPresetPeriod,
+          },
+        }),
+      });
+      const json = (await response.json()) as
+        | { ok: true; plan: AgentPlanDraft }
+        | { ok: false; error?: string };
+
+      if (!response.ok || !json.ok) {
+        throw new Error(
+          (json as { error?: string })?.error || "Failed to draft payroll plan",
+        );
+      }
+
+      const draft = json.plan;
+      setAgentDraft(draft);
+      applyAgentDraft(draft);
+      const confidencePct = Math.round((draft.confidence || 0) * 100);
+      setMessage(
+        `Assistant draft applied (${draft.source}, ${confidencePct}% confidence). Review Step 3 and click "Create Worker Payroll Record".`,
+      );
+    } catch (e: any) {
+      setError(e?.message || "Assistant draft failed");
+    } finally {
+      setAgentBusy(false);
+    }
+  }, [
+    agentPrompt,
+    applyAgentDraft,
+    boundPresetPeriod,
+    employeeWallet,
+    fixedTotalDays,
+    payAmount,
+    payPreset,
+    salaryPerSecond,
+  ]);
+
+  const handleChatDraftPlan = useCallback(
+    async (instruction: string, _current: Record<string, unknown>) => {
+      try {
+        const response = await fetch("/api/agent/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instruction,
+            current: {
+              employeeWallet,
+              payPreset,
+              payAmount,
+              fixedTotalDays,
+              salaryPerSecond,
+              boundPresetPeriod,
+            },
+          }),
+        });
+        const json = (await response.json()) as
+          | { ok: true; plan: AgentPlanDraft }
+          | { ok: false; error?: string };
+        if (!response.ok || !json.ok) return null;
+        return json.plan;
+      } catch {
+        return null;
+      }
+    },
+    [
+      employeeWallet,
+      payPreset,
+      payAmount,
+      fixedTotalDays,
+      salaryPerSecond,
+      boundPresetPeriod,
+    ],
+  );
+
+  const handleChatApplyPlan = useCallback((plan: Record<string, unknown>) => {
+    if (plan.employeeWallet && typeof plan.employeeWallet === "string") {
+      if (plan.employeeWallet === "USE_MY_WALLET" && wallet.publicKey) {
+        setEmployeeWallet(wallet.publicKey.toBase58());
+      } else if (plan.employeeWallet !== "USE_MY_WALLET") {
+        setEmployeeWallet(plan.employeeWallet);
+      }
+    }
+    if (
+      plan.payPreset &&
+      typeof plan.payPreset === "string" &&
+      isPayPreset(plan.payPreset)
+    )
+      setPayPreset(plan.payPreset);
+    if (plan.payAmount && (typeof plan.payAmount === "string" || typeof plan.payAmount === "number"))
+      setPayAmount(String(plan.payAmount));
+    if (plan.fixedTotalDays && (typeof plan.fixedTotalDays === "string" || typeof plan.fixedTotalDays === "number"))
+      setFixedTotalDays(String(plan.fixedTotalDays));
+    if (plan.salaryPerSecond && (typeof plan.salaryPerSecond === "string" || typeof plan.salaryPerSecond === "number"))
+      setSalaryPerSecond(String(plan.salaryPerSecond));
+    setBoundPresetPeriod(typeof plan.boundPresetPeriod === "boolean" ? plan.boundPresetPeriod : true);
+    if (typeof plan.streamIndex === "number" || typeof plan.streamIndex === "string")
+      setStreamIndexInput(String(plan.streamIndex));
+    if (plan.bonusAmount && (typeof plan.bonusAmount === "string" || typeof plan.bonusAmount === "number"))
+      setBonusAmount(String(plan.bonusAmount));
+    if (plan.depositAmount && (typeof plan.depositAmount === "string" || typeof plan.depositAmount === "number")) {
+      setDepositAmount(String(plan.depositAmount));
+      setHasConfirmedDeposit(true);
+    }
+    setAutoGrantDecrypt(typeof plan.autoGrantDecrypt === "boolean" ? plan.autoGrantDecrypt : true);
+    setAutoGrantKeeperDecrypt(typeof plan.autoGrantKeeperDecrypt === "boolean" ? plan.autoGrantKeeperDecrypt : true);
+    if (plan.recoverAmount && (typeof plan.recoverAmount === "string" || typeof plan.recoverAmount === "number"))
+      setVaultWithdrawAmount(String(plan.recoverAmount));
+    if (plan.intent && typeof plan.intent === "string") {
+      setAgentDraft((prev) => ({ ...prev!, intent: plan.intent as string }));
+    } else {
+      // If applying a plan update (like a wallet paste or pay plan) without an explicit intent,
+      // and we don't have a live stream yet, default to 'create_stream' to ensure the queue builds setup steps.
+      setAgentDraft((prev) => {
+        if (prev?.intent) return prev;
+        const hasStream = streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null;
+        return { ...prev!, intent: hasStream ? 'update_stream' : 'create_stream' };
+      });
+    }
+  }, [depositorTokenAccount, wallet.publicKey]);
 
   const handleCancelBusy = useCallback(() => {
     runIdRef.current += 1; // Invalidate any pending execution promises
@@ -2174,6 +2313,11 @@ export default function EmployerPage() {
         ready={initialDataLoaded}
         hydrated={agentRunHydrated}
         onCancelBusy={handleCancelBusy}
+        onClearChat={() => {
+          agentGreetedRef.current = false;
+          setAgentDraft(null);
+          setAgentQueue([]);
+        }}
         autoGrantDecrypt={autoGrantDecrypt}
         setAutoGrantDecrypt={setAutoGrantDecrypt}
         autoGrantKeeperDecrypt={autoGrantKeeperDecrypt}
@@ -2510,6 +2654,33 @@ export default function EmployerPage() {
                   >
                     Create Company Source Account
                   </button>
+
+                  <div>
+                    <button
+                      disabled={busy || !wallet.publicKey || !depositorTokenAccount}
+                      onClick={() =>
+                        run("Get demo payroll tokens", async () => {
+                          if (!wallet.publicKey) throw new Error("Wallet not connected");
+                          if (!depositorTokenAccount) throw new Error("Create your company source account first");
+                          const resp = await fetch('/api/faucet/mint-payusd', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userConfidentialTokenAccount: depositorTokenAccount }),
+                          });
+                          const json = await resp.json();
+                          if (!resp.ok || !json?.ok) throw new Error(json?.error || 'Faucet failed');
+                          return `Minted 1,000 PAYUSD! tx: ${json.tx}`;
+                        })
+                      }
+                      className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                    >
+                      Get 1,000 Demo Tokens
+                    </button>
+                    <p className="mt-1 text-[11px] text-gray-500 leading-tight">
+                      Devnet demo faucet: adds test payroll tokens to your company source account.
+                    </p>
+                  </div>
+
                   <button
                     disabled={
                       busy ||
@@ -2544,7 +2715,7 @@ export default function EmployerPage() {
                         );
                       })
                     }
-                    className="w-full rounded-lg bg-[#005B96] px-4 py-2 text-sm text-white disabled:opacity-50"
+                    className="w-full md:col-span-2 rounded-lg bg-[#005B96] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
                   >
                     Add Funds to Payroll Wallet
                   </button>
@@ -2607,10 +2778,19 @@ export default function EmployerPage() {
                       onClick={() =>
                         setVaultWithdrawTokenAccount(depositorTokenAccount)
                       }
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2 text-xs disabled:opacity-50"
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
                     >
-                      Use Source Account as Destination
+                      Recover Funds
                     </button>
+
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <div className="text-xs font-medium text-gray-700 mb-2">
+                        Need to use real USDC?
+                      </div>
+                      <Link href="/bridge" className="block w-full text-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        Open the PAYUSD Bridge
+                      </Link>
+                    </div>
                   </div>
                 </AdvancedDetails>
               </StepCard>
