@@ -1,7 +1,7 @@
 # Runbook: Expensee (Private Payroll v2, Devnet First)
 
-This repo runs a **pull-based payroll** model:
-- Employee submits `request_withdraw_v2` (1 tx).
+This repo runs a **pull-based payroll** model with **Ghost Mode** privacy:
+- Employee signs an off-chain message — the Keeper relays `keeper_request_withdraw_v2` on-chain (employee wallet never touches the blockchain).
 - Keeper checkpoints accrual (`accrue_v2`), decrypts the accrued Inco handle (attested decrypt), re-encrypts as ciphertext, then pays out using `process_withdraw_request_v2` (1 tx on base layer, plus commit+undelegate if the stream is delegated).
 
 ## 1. Preconditions
@@ -66,7 +66,6 @@ Optional:
 - `KEEPER_VALIDATOR` (EU/US/Asia ER validator identity)
 - `KEEPER_REDELEGATE_AFTER_WITHDRAW=true`
 - `KEEPER_ACCRUE_ON_ER_BEFORE_COMMIT=true` (recommended: uses ER as the accrual checkpoint engine for delegated streams)
-- `KEEPER_LOG_PLAINTEXT_AMOUNTS=true` (debug only)
 - `KEEPER_COMPLIANCE_ENABLED=false` (default)
 - `KEEPER_RANGE_API_KEY` (only if compliance enabled)
 
@@ -102,7 +101,7 @@ node /Users/sumangiri/Desktop/expensee/frontend/scripts/setup-v2-stream.cjs
 
 Employee:
 1. Open `/employee`, load the stream.
-2. Click **Request Withdraw**.
+2. Click **Request Withdraw** (signs off-chain message — no Solana tx needed).
 
 Keeper:
 1. Scans pending `WithdrawRequestV2` accounts.

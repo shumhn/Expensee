@@ -41,7 +41,7 @@ Top Web3 talent refuses to wait 30 days for a wire transfer, and they won't work
 
 | Name | Address | Explorer |
 |------|---------|----------|
-| **Payroll Program** | `CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh` | [View](https://explorer.solana.com/address/CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh?cluster=devnet) |
+| **Payroll Program** | `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn` | [View](https://explorer.solana.com/address/3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn?cluster=devnet) |
 
 ### Token Mints
 
@@ -157,7 +157,8 @@ graph TB
     end
 
     EP -->|"register, deposit,<br/>add employee"| PP
-    WP -->|"request withdraw"| PP
+    WP -->|"off-chain sign<br/>(Ghost Mode)"| KS
+    KS -->|"keeper_request_withdraw_v2"| PP
     PP -.->|"read balances,<br/>stream state"| WP
     KS -->|"accrue, settle,<br/>process withdraws"| PP
     PP -.->|"polls pending<br/>withdrawals"| KS
@@ -223,8 +224,12 @@ sequenceDiagram
     Note over UI: UI interpolates earnings every 1s
 
     W->>UI: "Request Payout"
-    UI->>SC: requestWithdrawV2()
-    SC-->>UI: WithdrawRequestV2 PDA created (is_pending=true)
+    UI->>W: signMessage("withdraw:<idx>:<ts>")
+    W-->>UI: Ed25519 signature (off-chain, no tx)
+    UI->>K: POST /api/withdraw-auth
+    Note over K: Keeper verifies Ed25519 signature
+    K->>SC: keeper_request_withdraw_v2()
+    SC-->>K: WithdrawRequestV2 PDA created (is_pending=true)
 
     Note over K: Keeper detects pending request
     K->>SC: accrue_v2() [checkpoint]
@@ -450,7 +455,8 @@ erDiagram
 | `delegate_stream_v2` | Owner/Keeper | Delegates stream to MagicBlock ER |
 | `accrue_v2` | Keeper | `accrued += rate × elapsed` (encrypted FHE math) |
 | `auto_settle_stream_v2` | Keeper | Transfer accrued → employee (via MagicBlock commit) |
-| `request_withdraw_v2` | Employee | Creates pending WithdrawRequestV2 |
+| `request_withdraw_v2` | Employee (legacy) | Creates pending WithdrawRequestV2 (on-chain) |
+| `keeper_request_withdraw_v2` | Keeper (Ghost Mode) | Creates pending WithdrawRequestV2 on behalf of employee |
 | `process_withdraw_request_v2` | Keeper | Settles withdraw: vault → employee (confidential) |
 | `update_salary_rate_v2` | Owner/Keeper | Private raise (re-encrypts new rate) |
 | `grant_bonus_v2` | Owner/Keeper | Adds encrypted bonus to accrued |
@@ -712,7 +718,7 @@ On devnet, this is a custodial bridge where the backend signs mint/escrow operat
 ### Request-Driven Withdrawal
 
 1. **Accrual** — Salary accrues every ~10 seconds via encrypted FHE math (`rate × elapsed`)
-2. **Request** — Employee submits `WithdrawRequestV2` on-chain
+2. **Request (Ghost Mode)** — Employee signs an off-chain message; Keeper relays `keeper_request_withdraw_v2` on-chain
 3. **Settlement** — Keeper detects request, decrypts salary, computes payout, encrypts amount, executes confidential transfer
 
 ### Keeper Resilience

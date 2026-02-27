@@ -156,8 +156,11 @@ sequenceDiagram
     participant K as Keeper Bot
     participant I as Inco Lightning
 
-    Emp->>P: request_withdraw_v2(stream_index)
-    Note over P: Verifies SHA-256(signer) == auth_hash<br/>Creates WithdrawRequestV2 PDA<br/>Sets is_pending = true
+    Emp->>Emp: Sign off-chain message (Ghost Mode)
+    Emp->>K: POST /api/withdraw-auth
+    Note over K: Verifies Ed25519 signature
+    K->>P: keeper_request_withdraw_v2(stream_index)
+    Note over P: Creates WithdrawRequestV2 PDA<br/>Sets is_pending = true
 
     K->>K: Detects pending request (polling)
     K->>P: commit_and_undelegate (if delegated)
@@ -184,7 +187,7 @@ Implementation note (devnet v1 reliability):
 
 ### 1. On-Chain Program ([programs/payroll/src/](file:///Users/sumangiri/Desktop/expensee/programs/payroll/src/))
 
-**Modular Rust/Anchor Program** — split into 10 logical files for maintainability. Deployed at `CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh` on devnet.
+**Modular Rust/Anchor Program** — split into 10 logical files for maintainability. Deployed at `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn` on devnet.
 
 | Instruction Group | Instructions | Purpose |
 |---|---|---|
@@ -194,7 +197,7 @@ Implementation note (devnet v1 reliability):
 | **TEE Delegation** | `delegate_stream_v2`, `redelegate_stream_v2`, `commit_and_undelegate_stream_v2` | MagicBlock lifecycle |
 | **Accrual** | `accrue_v2` | FHE salary computation |
 | **Settlement** | `auto_settle_stream_v2`, `simple_withdraw`, `manual_withdraw` | Push money to employees |
-| **Employee Withdraw** | `request_withdraw_v2`, `process_withdraw_request_v2` | Employee-initiated pull |
+| **Employee Withdraw** | `keeper_request_withdraw_v2` (Ghost Mode), `process_withdraw_request_v2` | Employee-initiated pull (off-chain signature → Keeper relay) |
 | **Access Control** | `grant_employee_view_access_v2` | Let employees decrypt their own data |
 | **Salary Changes** | `update_salary_rate_v2`, `grant_bonus_v2`, `init_rate_history_v2` | Raises and bonuses |
 | **Safety** | `pause_stream_v2`, `resume_stream_v2` | Emergency controls |
@@ -306,7 +309,8 @@ Delegate to TEE ───────────────→ MagicBlock take
                                                           ←── "Reveal Earnings" (Inco decrypt)
                                                           ←── Sees: "$4,231.50 accrued"
 
-                                                          ←── request_withdraw_v2()
+                                                          ←── Signs off-chain "withdraw" message
+                                                          ←── Keeper relays keeper_request_withdraw_v2()
                                   ↓
                            [Keeper detects request]
                            [Commit+undelegate from TEE]

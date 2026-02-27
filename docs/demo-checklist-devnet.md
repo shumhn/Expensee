@@ -11,7 +11,7 @@ This is a step-by-step checklist you can follow to produce a **credible demo** s
 ## 0) Preconditions
 
 1. Program is deployed/upgraded on devnet.
-   - Program ID (devnet): `CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh`
+   - Program ID (devnet): `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn`
 2. Compliance is disabled on devnet (recommended).
    - App: `NEXT_PUBLIC_COMPLIANCE_ENABLED=false`
    - Keeper: `KEEPER_COMPLIANCE_ENABLED=false`
@@ -141,9 +141,6 @@ Delegated stream (MagicBlock impact):
 - `process_withdraw_request_v2 tx=... rpc=<solana rpc>`
 - optional: `redelegate_stream_v2 tx=...`
 
-Optional debug (local only):
-- set `KEEPER_LOG_PLAINTEXT_AMOUNTS=true`
-- you’ll see `accrued_plaintext ... amount=...` in keeper logs
 
 ---
 
