@@ -4,7 +4,7 @@ const path = require('path');
 const web3 = require('@solana/web3.js');
 
 const PROGRAM_ID = new web3.PublicKey(
-  process.env.KEEPER_PROGRAM_ID || process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || 'CgRkrU26uERpZEPXUQ2ANXgPMFHXPrX4bFaM5UHFdPEh'
+  process.env.KEEPER_PROGRAM_ID || process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || '3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn'
 );
 const RPC_URL = process.env.KEEPER_RPC_URL || process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 
