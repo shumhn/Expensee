@@ -1364,13 +1364,14 @@ pub mod payroll {
 
         let clock = Clock::get()?;
 
-        // Freshness guard: accrual must have happened within 30 seconds.
+        // Freshness guard: accrual must have happened within 120 seconds.
+        // Relaxed from 30s to allow for network latency on hosted services (Render).
         let accrual_age = clock
             .unix_timestamp
             .checked_sub(employee.last_accrual_time)
             .ok_or(PayrollError::InvalidTimestamp)?;
         require!(
-            accrual_age <= 30,
+            accrual_age <= 120,
             PayrollError::AccrualNotFresh
         );
 

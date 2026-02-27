@@ -1796,7 +1796,14 @@ async function processRevocations(): Promise<void> {
       if (revokedStreams.has(stream.address.toBase58())) continue;
 
       try {
-        const targets = await getViewAccessTargets(stream.streamIndex);
+        let targets: string[] = [];
+        try {
+          targets = await getViewAccessTargets(stream.streamIndex);
+        } catch (_importErr) {
+          // Fallback: skip revocation if the function is unavailable due to CJS interop
+          log(`[revoke] getViewAccessTargets unavailable for stream=${stream.streamIndex}, skipping`);
+          continue;
+        }
         for (const target of targets) {
           await revokeViewAccess(stream, new PublicKey(target));
         }
@@ -2487,9 +2494,10 @@ const autoClaimIdempotency = new Set<string>();
 
 async function autoClaimUnclaimedPayouts(): Promise<void> {
   // Scan for all ShieldedPayoutV2 accounts belonging to our program
+  // bs58 v6 is ESM-only; use base64 encoding instead for memcmp filter
   const accounts = await readConnection.getProgramAccounts(PROGRAM_ID, {
     filters: [
-      { memcmp: { offset: 0, bytes: require('bs58').encode(SHIELDED_PAYOUT_V2_DISCRIMINATOR) } },
+      { memcmp: { offset: 0, bytes: SHIELDED_PAYOUT_V2_DISCRIMINATOR.toString('base64'), encoding: 'base64' as any } },
     ],
   });
 
