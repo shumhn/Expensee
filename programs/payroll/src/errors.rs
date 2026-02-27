@@ -88,7 +88,7 @@ pub enum PayrollError {
     #[msg("Invalid keeper pubkey")]
     InvalidKeeper,
 
-    #[msg("Accrual must be fresh (within 30s) before settle")]
+    #[msg("Accrual must be fresh (within 120s) before settle")]
     AccrualNotFresh,
 
     #[msg("Payout has already been claimed")]

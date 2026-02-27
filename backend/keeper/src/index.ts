@@ -1457,13 +1457,11 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
     return;
   }
 
-  // ALWAYS checkpoint accrual before settling — required by the on-chain 30-second freshness guard.
-  // Skip only if already checkpointed in ER pre-commit above.
-  if (!accruedOnEr) {
-    await retry(`accrue_v2 stream=${request.streamIndex}`, () =>
-      sendInstruction('accrue_v2', accrueIx(request.business, request.streamIndex), readConnection)
-    );
-  }
+  // ALWAYS checkpoint accrual before settling — required by the on-chain freshness guard.
+  // We always accrue here regardless of prior ER accrual to guarantee freshness.
+  await retry(`accrue_v2 stream=${request.streamIndex}`, () =>
+    sendInstruction('accrue_v2', accrueIx(request.business, request.streamIndex), readConnection)
+  );
 
   // Reload stream post-accrual to capture the latest handles.
   employeeInfo = await getAccountInfoRead(employeePda, 'confirmed');
