@@ -505,80 +505,84 @@ export default function AgentChat({
     );
 
     return (
-        <section className="agent-chat-container">
-            <div className="agent-chat-header">
-                <div className="agent-chat-header-icon">🤖</div>
-                <div>
-                    <div className="agent-chat-header-title">OnyxFii Agent</div>
-                    <div className="agent-chat-header-subtitle">
-                        {phase === 'executing'
-                            ? 'Executing transactions...'
-                            : !ready || !hydrated
-                                ? 'Synchronizing with ledger...'
-                                : thinking
-                                    ? 'Thinking...'
-                                    : 'Real-time · Private · Agentic Payroll'}
+        <section className="premium-agent-container glass overflow-hidden border border-slate-200/50 shadow-2xl rounded-3xl flex flex-col h-[500px] bg-slate-50/20 backdrop-blur-xl transition-all duration-500 hover:shadow-indigo-500/10 hover:border-indigo-500/30">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-200/50 bg-white/40 backdrop-blur-md">
+                <div className="flex items-center gap-4">
+                    <div className="relative">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-2xl shadow-lg ring-4 ring-indigo-500/10">
+                            🤖
+                        </div>
+                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${phase === 'executing' ? 'bg-amber-500' : !ready || !hydrated || thinking ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-500'
+                            }`} />
+                    </div>
+                    <div>
+                        <h2 className="text-sm font-bold text-slate-900 tracking-tight">OnyxFii Intelligence</h2>
+                        <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+                            {phase === 'executing' ? 'Processor Active' : thinking ? 'Analyzing Engine' : 'Hybrid AI Online'}
+                        </p>
                     </div>
                 </div>
-                <div className="agent-chat-header-status">
-                    <span
-                        className={`agent-status-dot ${phase === 'executing' ? 'dot-executing' : !ready || !hydrated || thinking ? 'dot-thinking' : 'dot-ready'
-                            }`}
-                    />
-                    {phase === 'executing' ? 'Working' : !ready || !hydrated ? 'Syncing' : thinking ? 'Thinking' : 'Online'}
+                <div className="flex items-center gap-3">
                     {messages.length > 0 && (
                         <button
-                            className="agent-clear-btn"
                             onClick={handleClearChat}
-                            title="Clear chat"
+                            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all"
+                            title="Reset Terminal"
                             disabled={busy || phase === 'executing'}
                         >
-                            ✕
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
                         </button>
                     )}
                 </div>
             </div>
 
-            <div className="agent-chat-messages">
+            {/* Messages Area */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
                 {(!ready || !hydrated) && walletConnected && (
-                    <div className="agent-sync-overlay">
-                        <div className="agent-sync-spinner" />
-                        <div className="agent-sync-text">Synchronizing with OnyxFii Ledger...</div>
+                    <div className="flex flex-col items-center justify-center py-12">
+                        <div className="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
+                        <p className="text-xs font-bold text-indigo-500/60 uppercase tracking-widest">Quantum Link Synchronizing...</p>
                     </div>
                 )}
+
                 {!walletConnected && (
-                    <div className="agent-msg">
-                        <div className="agent-msg-bubble">
-                            👋 Connect your wallet to get started with OnyxFii.
+                    <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+                        <div className="w-16 h-16 rounded-3xl bg-slate-100 flex items-center justify-center text-3xl mb-4 text-slate-400">
+                            🔌
                         </div>
+                        <h3 className="text-sm font-bold text-slate-700 mb-1">Authorization Missing</h3>
+                        <p className="text-xs text-slate-400 max-w-[200px]">Connect your secure wallet to authorize AI command access.</p>
                     </div>
                 )}
+
                 {messages.map((msg) => (
                     <div
                         key={msg.id}
-                        className={msg.role === 'agent' ? 'agent-msg' : 'user-msg'}
+                        className={`flex ${msg.role === 'agent' ? 'justify-start' : 'justify-end'}`}
                     >
-                        <div
-                            className={
-                                msg.role === 'agent' ? 'agent-msg-bubble' : 'user-msg-bubble'
-                            }
-                        >
+                        <div className={`max-w-[85%] rounded-2xl px-5 py-4 text-sm shadow-sm transition-all duration-300 ${msg.role === 'agent'
+                            ? 'bg-white border border-slate-100 text-slate-700'
+                            : 'bg-slate-900 text-white font-medium shadow-xl shadow-slate-900/10'
+                            }`}>
                             {msg.text.split('\n').map((line, i) => (
-                                <span key={i}>
+                                <span key={i} className="block mb-1 last:mb-0">
                                     {line.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).map((part, j) =>
                                         part.startsWith('**') && part.endsWith('**') ? (
-                                            <strong key={j}>{part.slice(2, -2)}</strong>
+                                            <strong key={j} className="text-indigo-600 font-extrabold">{part.slice(2, -2)}</strong>
                                         ) : part.startsWith('`') && part.endsWith('`') ? (
-                                            <code key={j} className="agent-inline-code">{part.slice(1, -1)}</code>
+                                            <code key={j} className="bg-slate-100 text-indigo-600 px-1.5 py-0.5 rounded-md text-[12px] font-mono mx-0.5 border border-slate-200">{part.slice(1, -1)}</code>
                                         ) : part.startsWith('[') && part.includes('](') && part.endsWith(')') ? (
-                                            <a key={j} href={part.match(/\]\(([^)]+)\)/)?.[1] || '#'} target="_blank" rel="noopener noreferrer" className="agent-link">
+                                            <a key={j} href={part.match(/\]\(([^)]+)\)/)?.[1] || '#'} target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline decoration-indigo-500/30 hover:decoration-indigo-500 transition-all font-bold">
                                                 {part.match(/\[([^\]]+)\]/)?.[1] || 'Link'}
                                             </a>
                                         ) : (
                                             <span key={j}>{part}</span>
                                         )
                                     )}
-                                    {i < msg.text.split('\n').length - 1 && <br />}
                                 </span>
                             ))}
                         </div>
@@ -586,117 +590,116 @@ export default function AgentChat({
                 ))}
 
                 {thinking && (
-                    <div className="agent-msg">
-                        <div className="agent-msg-bubble agent-thinking">
-                            <span className="dot-anim" />
-                            <span className="dot-anim" />
-                            <span className="dot-anim" />
+                    <div className="flex justify-start">
+                        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 flex gap-1.5 shadow-sm">
+                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '300ms' }} />
                         </div>
                     </div>
                 )}
 
                 {executionSteps.length > 0 && (
-                    <div className="agent-msg">
-                        <div className="agent-msg-bubble agent-execution-log">
+                    <div className="mt-8 border-t border-slate-100 pt-6">
+                        <div className="flex items-center gap-2 mb-4 px-2">
+                            <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
+                            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest italic">Blockchain Real-time Execution Log</span>
+                        </div>
+                        <div className="space-y-3 px-2">
                             {executionSteps.map((step, idx) => (
-                                <div key={step.key} className="agent-exec-step">
-                                    <span className="agent-exec-icon">
-                                        {step.status === 'done'
-                                            ? '✅'
-                                            : step.status === 'running'
-                                                ? '⏳'
-                                                : step.status === 'failed'
-                                                    ? '❌'
-                                                    : '⬜'}
-                                    </span>
-                                    <span className="agent-exec-label">
-                                        {idx + 1}. {step.label}
-                                    </span>
-                                    {step.detail && (
-                                        <span className="agent-exec-detail">{step.detail}</span>
-                                    )}
+                                <div key={step.key} className="flex items-start gap-4 group">
+                                    <div className="flex flex-col items-center">
+                                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold border-2 transition-all ${step.status === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' :
+                                            step.status === 'running' ? 'bg-white border-indigo-500 text-indigo-500 animate-pulse ring-4 ring-indigo-500/10' :
+                                                step.status === 'failed' ? 'bg-red-500 border-red-500 text-white' :
+                                                    'bg-white border-slate-200 text-slate-400'
+                                            }`}>
+                                            {step.status === 'done' ? '✓' : idx + 1}
+                                        </div>
+                                        {idx !== executionSteps.length - 1 && (
+                                            <div className="w-0.5 h-4 bg-slate-100 group-hover:bg-slate-200 transition-colors" />
+                                        )}
+                                    </div>
+                                    <div className="flex-1 pt-0.5">
+                                        <div className={`text-xs font-bold transition-colors ${step.status === 'done' ? 'text-slate-900 line-through' :
+                                            step.status === 'running' ? 'text-indigo-600' : 'text-slate-400'
+                                            }`}>
+                                            {step.label}
+                                        </div>
+                                        {step.detail && (
+                                            <div className="text-[10px] text-slate-400 font-medium mt-0.5 italic">{step.detail}</div>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>
                     </div>
                 )}
-
-                <div ref={bottomRef} />
+                <div ref={bottomRef} className="h-4" />
             </div>
 
-            <div className="agent-chat-input-row">
-                <input
-                    ref={inputRef}
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    disabled={!walletConnected || (thinking && phase !== 'executing') || !ready || !hydrated}
-                    placeholder={
-                        !walletConnected
-                            ? 'Connect wallet first...'
-                            : !ready || !hydrated
-                                ? 'Synchronizing...'
-                                : busy
-                                    ? 'Type "cancel" to stop waiting...'
-                                    : phase === 'ask_setup'
-                                        ? 'Type "setup" to initialize company...'
-                                        : phase === 'ask_wallet'
-                                            ? 'Paste a Solana wallet address...'
-                                            : phase === 'ask_pay'
-                                                ? 'e.g. "50 per hour" or "4000 per month"'
-                                                : phase === 'ask_options'
-                                                    ? 'Type "yes" or "no"...'
-                                                    : phase === 'confirm_plan'
-                                                        ? 'Type "go" to execute or "edit" to change...'
-                                                        : phase === 'executing'
-                                                            ? 'Waiting for transactions...'
-                                                            : phase === 'done'
-                                                                ? 'Ask me anything or paste a new worker wallet...'
-                                                                : 'Paste a wallet address or describe a pay plan...'
-                    }
-                    className="agent-chat-input"
-                />
-                {(thinking && (busy || phase === 'executing')) ? (
-                    <button
-                        onClick={() => {
-                            if (onCancelBusy) onCancelBusy();
-                            setPhase('ask_setup');
-                            setThinking(false);
-                            isSending.current = false;
-                        }}
-                        className="agent-chat-send"
-                        style={{ background: '#dc3545', marginRight: 4 }}
-                    >
-                        Cancel
-                    </button>
-                ) : (
-                    // Show "Run Next Step" button if there are pending steps and we're not busy
-                    executionSteps.some(s => s.status === 'pending' && s.key !== 'refresh-state') &&
-                    !thinking &&
-                    !busy &&
-                    walletConnected &&
-                    phase !== 'executing' && (
+            {/* Input Area */}
+            <div className="p-5 border-t border-slate-200/50 bg-white/40 backdrop-blur-md">
+                <div className="relative group">
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        disabled={!walletConnected || (thinking && phase !== 'executing') || !ready || !hydrated}
+                        placeholder={
+                            !walletConnected ? 'Authorize wallet access...' :
+                                thinking ? 'Synchronizing brain...' :
+                                    'Type a command or ask me about setup...'
+                        }
+                        className="w-full pl-5 pr-32 py-4 rounded-2xl border border-slate-200/60 bg-white/80 shadow-inner outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 font-medium text-sm text-slate-700"
+                    />
+
+                    <div className="absolute right-2 top-2 bottom-2 flex gap-2">
+                        {executionSteps.some(s => s.status === 'pending' && s.key !== 'refresh-state') &&
+                            !thinking && !busy && walletConnected && phase !== 'executing' && (
+                                <button
+                                    onClick={() => { setInput('execute'); setTimeout(() => handleSend(), 0); }}
+                                    className="px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
+                                >
+                                    Run Next
+                                </button>
+                            )}
                         <button
-                            onClick={() => {
-                                setInput('execute');
-                                setTimeout(() => handleSend(), 0);
-                            }}
-                            className="agent-chat-send"
-                            style={{ background: '#10b981', marginRight: 4, whiteSpace: 'nowrap' }}
+                            id="agent-send-btn"
+                            onClick={() => void handleSend()}
+                            disabled={!walletConnected || !input.trim() || (thinking && phase !== 'executing') || !ready || !hydrated}
+                            className="w-12 h-full bg-slate-900 hover:bg-black text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-20 active:scale-90 shadow-xl"
                         >
-                            ▶ Run Next Step
+                            {(thinking && (busy || phase === 'executing')) ? '...' : (
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                                </svg>
+                            )}
                         </button>
-                    )
-                )}
-                <button
-                    id="agent-send-btn"
-                    onClick={() => void handleSend()}
-                    disabled={!walletConnected || !input.trim() || (thinking && phase !== 'executing') || !ready || !hydrated}
-                    className="agent-chat-send"
-                >
-                    {(thinking && (busy || phase === 'executing')) ? 'Retry' : 'Send'}
-                </button>
+                    </div>
+                </div>
+                <div className="mt-3 flex items-center justify-between px-2">
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-1 h-1 rounded-full bg-slate-400"></div>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">L3 Verified Node</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-1 h-1 rounded-full bg-slate-400"></div>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">End-to-End Encrypted</span>
+                        </div>
+                    </div>
+                    {busy && (
+                        <button
+                            onClick={() => { if (onCancelBusy) onCancelBusy(); setPhase('ask_setup'); setThinking(false); isSending.current = false; }}
+                            className="text-[9px] font-extrabold text-red-500 uppercase tracking-tighter hover:underline"
+                        >
+                            Emergency Force Cancel
+                        </button>
+                    )}
+                </div>
             </div>
         </section>
     );

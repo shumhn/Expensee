@@ -3,26 +3,32 @@
 @tailwind utilities;
 
 :root {
-  --app-bg: #f2f4f8;
+  --app-bg: #f8fafc;
   --app-surface: #ffffff;
-  --app-surface-alt: #f8fafc;
-  --app-ink: #172033;
-  --app-muted: #5f6b85;
-  --app-border: #dde4f0;
-  --app-primary: #0f4c81;
-  --app-primary-strong: #0b3a63;
-  --app-accent: #0e9f8b;
-  --app-success: #177d56;
-  --app-warning: #9f6a17;
-  --app-error: #b4333c;
-  --status-info-bg: #e8f1fb;
-  --status-info-ink: #11497d;
-  --status-success-bg: #e8f8f1;
-  --status-success-ink: #17673d;
-  --status-warning-bg: #fff6e5;
-  --status-warning-ink: #855a10;
-  --status-neutral-bg: #eef2f8;
-  --status-neutral-ink: #43516d;
+  --app-surface-alt: #f1f5f9;
+  --app-ink: #0f172a;
+  --app-muted: #64748b;
+  --app-border: #e2e8f0;
+  --app-primary: #4f46e5;
+  --app-primary-strong: #3730a3;
+  --app-accent: #06b6d4;
+  --app-success: #10b981;
+  --app-warning: #f59e0b;
+  --app-error: #ef4444;
+  --status-info-bg: #e0e7ff;
+  --status-info-ink: #3730a3;
+  --status-success-bg: #d1fae5;
+  --status-success-ink: #065f46;
+  --status-warning-bg: #fef3c7;
+  --status-warning-ink: #92400e;
+  --status-neutral-bg: #f1f5f9;
+  --status-neutral-ink: #475569;
+
+  /* Premium Design Tokens */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --premium-gradient: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+  --premium-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
 }
 
 * {
@@ -195,18 +201,33 @@ a:hover {
   background: var(--app-surface-alt);
 }
 
-.hero-card,
 .panel-card,
 .step-card {
   border: 1px solid var(--app-border);
-  border-radius: 1rem;
+  border-radius: 1.25rem;
   background: var(--app-surface);
-  box-shadow: 0 12px 30px rgba(29, 40, 65, 0.06);
+  box-shadow: var(--premium-shadow);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-dark {
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .hero-card,
 .panel-card {
-  padding: 1.25rem;
+  padding: 1.5rem;
 }
 
 .hero-eyebrow {

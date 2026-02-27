@@ -34,6 +34,10 @@ import {
   registerBusiness,
   resumeStreamV2,
   updateSalaryRateV2,
+  checkAllowanceStale,
+  getEmployeeStreamV2DecryptHandles,
+  revokeViewAccessV2,
+  grantAuditorViewAccessV2,
 } from "../lib/payroll-client";
 import PageShell from "../components/PageShell";
 import StepCard from "../components/StepCard";
@@ -219,6 +223,10 @@ export default function EmployerPage() {
   const [businessExists, setBusinessExists] = useState(false);
   const [vaultExists, setVaultExists] = useState(false);
   const [v2ConfigExists, setV2ConfigExists] = useState(false);
+  const [vaultMintMismatch, setVaultMintMismatch] = useState(false);
+  const [fixingVaultMint, setFixingVaultMint] = useState(false);
+  const [allowanceStale, setAllowanceStale] = useState(false);
+  const [fixingAllowance, setFixingAllowance] = useState(false);
 
   const [v2Config, setV2Config] = useState<{
     keeper: string;
@@ -744,6 +752,10 @@ export default function EmployerPage() {
       setVaultExists(vault !== null);
       if (vault) {
         setVaultTokenAccount((prev) => prev || vault.tokenAccount.toBase58());
+        // Strict mint validation: check vault mint matches platform canonical PAYUSD_MINT
+        setVaultMintMismatch(!vault.mint.equals(PAYUSD_MINT));
+      } else {
+        setVaultMintMismatch(false);
       }
 
       const cfg = await getBusinessStreamConfigV2Account(
@@ -824,8 +836,33 @@ export default function EmployerPage() {
             lastSettleTime: stream.lastSettleTime,
             accruedHandle: accrued.toString(),
           });
-        } else {
-          setStreamRoute(null);
+
+          // ── Auto-detect stale decrypt allowances ──
+          // If handles have rotated (after accrue/settle), the old Inco allowance PDAs become stale.
+          try {
+            const handles = getEmployeeStreamV2DecryptHandles(stream);
+            const workerAddr = employeeWallet
+              ? new PublicKey(employeeWallet)
+              : null;
+            const keeperAddr = v2Config?.keeper
+              ? new PublicKey(v2Config.keeper)
+              : null;
+
+            // Check salary handle allowance for employee
+            const salaryStale = workerAddr
+              ? await checkAllowanceStale(connection, handles.salaryHandleValue, workerAddr)
+              : false;
+
+            // Check salary handle allowance for keeper
+            const keeperStale = keeperAddr
+              ? await checkAllowanceStale(connection, handles.salaryHandleValue, keeperAddr)
+              : false;
+
+            setAllowanceStale(salaryStale || keeperStale);
+          } catch (e: any) {
+            console.warn('Allowance stale check failed:', e?.message);
+            setAllowanceStale(false);
+          }
         }
       }
 
@@ -2337,48 +2374,255 @@ export default function EmployerPage() {
 
       {showAdvancedMode && (
         <>
-          <section className="hero-card">
-            <p className="hero-eyebrow">Advanced manual controls</p>
-            <h1 className="hero-title">{COPY.employer.title}</h1>
-            <p className="hero-subtitle">
-              Manual step-by-step payroll setup. For power users who want full
-              control.
-            </p>
+          <section className="hero-card glass border-indigo-500/20 shadow-2xl transition-all duration-500">
+            <div className="flex flex-col md:flex-row justify-between gap-6">
+              <div className="flex-1">
+                <p className="inline-block px-3 py-1 rounded-full bg-indigo-500/10 text-indigo-600 text-[10px] font-bold uppercase tracking-widest mb-3">
+                  Config Command Center
+                </p>
+                <h1 className="text-4xl font-black tracking-tighter text-slate-900 leading-tight">
+                  {COPY.employer.title}
+                </h1>
+                <p className="mt-4 text-slate-600 font-medium max-w-xl">
+                  Manual step-by-step payroll setup for power users who require absolute control over encrypted flows.
+                </p>
+              </div>
 
-            <div className="mt-4 readiness-grid">
-              <div className="readiness-item">
-                <span className="readiness-label">Wallet connected</span>
-                <span className="readiness-value">
-                  {wallet.connected ? "Ready" : "Not connected"}
-                </span>
-              </div>
-              <div className="readiness-item">
-                <span className="readiness-label">Company setup</span>
-                <span className="readiness-value">
-                  {businessExists ? "Complete" : "Pending"}
-                </span>
-              </div>
-              <div className="readiness-item">
-                <span className="readiness-label">Payroll wallet funded</span>
-                <span className="readiness-value">
-                  {vaultExists ? "Ready" : "Pending"}
-                </span>
-              </div>
-              <div className="readiness-item">
-                <span className="readiness-label">Worker record</span>
-                <span className="readiness-value">
-                  {hasWorkerRecord ? "Ready" : "Pending"}
-                </span>
-              </div>
-              <div className="readiness-item">
-                <span className="readiness-label">High-speed mode</span>
-                <span className="readiness-value">
-                  {highSpeedOn ? "On" : "Off"}
-                </span>
-              </div>
-              <div className="readiness-item">
-                <span className="readiness-label">Automation service</span>
-                <span className="readiness-value">{automationStatusLabel}</span>
+              {/* ── Vault Mint Mismatch Warning ── */}
+              {vaultMintMismatch && (
+                <div className="mt-6 rounded-2xl border-2 border-amber-400/50 bg-gradient-to-r from-amber-50 to-orange-50 p-5 shadow-lg shadow-amber-500/10">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600 text-lg border border-amber-200">
+                      ⚠
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-black text-amber-900 uppercase tracking-wider">Vault Mint Misconfigured</div>
+                      <p className="mt-1 text-xs text-amber-700/80 leading-relaxed">
+                        Your vault was initialized with a different token mint than the platform standard (<code className="text-[10px] font-mono bg-amber-100 px-1 py-0.5 rounded">PAYUSD</code>).
+                        The automation service will reject all payouts until this is fixed.
+                      </p>
+                      <button
+                        onClick={async () => {
+                          if (!wallet.publicKey || !vaultTokenAccount) return;
+                          setFixingVaultMint(true);
+                          try {
+                            const token = new PublicKey(vaultTokenAccount);
+                            await rotateVaultTokenAccount(connection, wallet, token, PAYUSD_MINT);
+                            setVaultMintMismatch(false);
+                          } catch (e: any) {
+                            console.error('Fix vault mint failed:', e);
+                          } finally {
+                            setFixingVaultMint(false);
+                          }
+                        }}
+                        disabled={fixingVaultMint || !wallet.connected}
+                        className="mt-3 rounded-lg bg-amber-500 px-5 py-2.5 text-xs font-black text-white uppercase tracking-widest shadow-lg shadow-amber-500/30 transition-all hover:bg-amber-600 hover:translate-y-[-1px] active:translate-y-[1px] disabled:opacity-50"
+                      >
+                        {fixingVaultMint ? 'Fixing...' : 'Fix Vault Mint →'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Stale Decrypt Allowance Warning ── */}
+              {allowanceStale && streamStatus && (
+                <div className="mt-6 rounded-2xl border-2 border-violet-400/50 bg-gradient-to-r from-violet-50 to-purple-50 p-5 shadow-lg shadow-violet-500/10">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 text-lg border border-violet-200">
+                      🔑
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-black text-violet-900 uppercase tracking-wider">Decrypt Access Expired</div>
+                      <p className="mt-1 text-xs text-violet-700/80 leading-relaxed">
+                        Salary data handles have rotated after a recent accrual or settlement. The automation service
+                        and/or worker can no longer decrypt salary information until access is re-granted.
+                      </p>
+                      <button
+                        onClick={async () => {
+                          if (!wallet.publicKey || !ownerPubkey) return;
+                          setFixingAllowance(true);
+                          try {
+                            const idx = streamStatus.streamIndex;
+                            // Re-grant worker access
+                            if (employeeWallet) {
+                              try {
+                                await grantEmployeeViewAccessV2(
+                                  connection, wallet, ownerPubkey, idx,
+                                  new PublicKey(employeeWallet)
+                                );
+                              } catch (e: any) {
+                                console.warn('Re-grant worker access failed:', e?.message);
+                              }
+                            }
+                            // Re-grant keeper access
+                            const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
+                            if (keeperKey) {
+                              try {
+                                await grantKeeperViewAccessV2(
+                                  connection, wallet, ownerPubkey, idx,
+                                  new PublicKey(keeperKey)
+                                );
+                              } catch (e: any) {
+                                console.warn('Re-grant keeper access failed:', e?.message);
+                              }
+                            }
+                            setAllowanceStale(false);
+                          } catch (e: any) {
+                            console.error('Re-grant decrypt access failed:', e);
+                          } finally {
+                            setFixingAllowance(false);
+                          }
+                        }}
+                        disabled={fixingAllowance || !wallet.connected}
+                        className="mt-3 rounded-lg bg-violet-500 px-5 py-2.5 text-xs font-black text-white uppercase tracking-widest shadow-lg shadow-violet-500/30 transition-all hover:bg-violet-600 hover:translate-y-[-1px] active:translate-y-[1px] disabled:opacity-50"
+                      >
+                        {fixingAllowance ? 'Re-Granting...' : 'Re-Grant Decrypt Access →'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="glass overflow-hidden border border-indigo-500/20 shadow-2xl rounded-3xl mt-6">
+                <div className="bg-gradient-to-r from-indigo-600 to-purple-700 px-6 py-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-white text-sm font-black uppercase tracking-widest flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211_153,0.8)]"></span>
+                      System Readiness Terminal
+                    </h3>
+                    <p className="text-indigo-100/70 text-[10px] font-bold tracking-tight mt-1">
+                      Advanced manual control interface · L3 Secured Session
+                    </p>
+                  </div>
+                  <div className="px-3 py-1 bg-white/10 backdrop-blur-md rounded-lg border border-white/10">
+                    <span className="text-white text-[10px] font-black uppercase tracking-widest leading-none">Status: Active</span>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-white/80 backdrop-blur-xl">
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                    {/* Wallet Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${wallet.connected ? 'bg-emerald-50 border-emerald-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${wallet.connected ? 'bg-white border-emerald-200 text-emerald-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${wallet.connected ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {wallet.connected ? 'Online' : 'Offline'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Company Wallet</h4>
+                      <p className={`text-sm font-black ${wallet.connected ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {wallet.connected ? `${wallet.publicKey?.toBase58().slice(0, 4)}...${wallet.publicKey?.toBase58().slice(-4)}` : 'Unauthorized'}
+                      </p>
+                    </div>
+
+                    {/* Setup Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${businessExists ? 'bg-indigo-50 border-indigo-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${businessExists ? 'bg-white border-indigo-200 text-indigo-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${businessExists ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {businessExists ? 'Anchored' : 'Unset'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Business Identity</h4>
+                      <p className={`text-sm font-black ${businessExists ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {businessExists ? 'Profile Verified' : 'Awaiting Registry'}
+                      </p>
+                    </div>
+
+                    {/* Vault Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${vaultExists ? 'bg-purple-50 border-purple-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${vaultExists ? 'bg-white border-purple-200 text-purple-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${vaultExists ? 'bg-purple-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {vaultExists ? 'Deployed' : 'Missing'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Payroll Custody</h4>
+                      <p className={`text-sm font-black ${vaultExists ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {vaultExists ? 'Encrypted Vault Active' : 'Vault Not Found'}
+                      </p>
+                    </div>
+
+                    {/* Worker Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${hasWorkerRecord ? 'bg-blue-50 border-blue-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${hasWorkerRecord ? 'bg-white border-blue-200 text-blue-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${hasWorkerRecord ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {hasWorkerRecord ? 'Mapped' : 'Empty'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Worker Sync</h4>
+                      <p className={`text-sm font-black ${hasWorkerRecord ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {hasWorkerRecord ? 'Contract Pair Established' : 'No Worker Selected'}
+                      </p>
+                    </div>
+
+                    {/* Speed Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${highSpeedOn ? 'bg-orange-50 border-orange-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${highSpeedOn ? 'bg-white border-orange-200 text-orange-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${highSpeedOn ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {highSpeedOn ? 'Nitro' : 'Standard'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Execution Speed</h4>
+                      <p className={`text-sm font-black ${highSpeedOn ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {highSpeedOn ? 'MagicBlock TEE Fast' : 'L1 Mainnet Frequency'}
+                      </p>
+                    </div>
+
+                    {/* Robot Readiness */}
+                    <div className={`p-4 rounded-2xl border transition-all duration-300 ${v2ConfigExists ? 'bg-indigo-50 border-indigo-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
+                      }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`p-2 rounded-xl border ${v2ConfigExists ? 'bg-white border-indigo-200 text-indigo-500' : 'bg-white border-slate-200 text-slate-400'}`}>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${v2ConfigExists ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500'
+                          }`}>
+                          {v2ConfigExists ? 'Agent Active' : 'Off'}
+                        </span>
+                      </div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Autonomous Agent</h4>
+                      <p className={`text-sm font-black ${v2ConfigExists ? 'text-slate-900' : 'text-slate-300'}`}>
+                        {automationStatusLabel}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -2514,7 +2758,7 @@ export default function EmployerPage() {
                 description={COPY.employer.step1.description}
                 state={stepStates[1]}
               >
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-4 md:grid-cols-2">
                   <button
                     disabled={busy || businessExists}
                     onClick={() =>
@@ -2522,9 +2766,9 @@ export default function EmployerPage() {
                         await registerBusiness(connection, wallet);
                       })
                     }
-                    className="w-full rounded-lg bg-[#2D2D2A] px-4 py-2 text-sm text-white disabled:opacity-50"
+                    className="premium-btn premium-btn-primary shadow-indigo-500/20 shadow-lg hover:shadow-indigo-500/40 disabled:opacity-50"
                   >
-                    Create Company Profile
+                    Register Company Profile
                   </button>
                   <button
                     disabled={busy || !ownerPubkey}
@@ -2545,18 +2789,23 @@ export default function EmployerPage() {
                         return txid;
                       })
                     }
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
+                    className="premium-btn premium-btn-secondary hover:border-indigo-400/50 disabled:opacity-50"
                   >
-                    Create Payroll Wallet
+                    Deploy Payroll Vault
                   </button>
                 </div>
 
-                <input
-                  value={vaultTokenAccount}
-                  onChange={(e) => setVaultTokenAccount(e.target.value)}
-                  placeholder="Payroll wallet token account"
-                  className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
+                <div className="mt-4">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                    Payroll Vault Address
+                  </label>
+                  <input
+                    value={vaultTokenAccount}
+                    onChange={(e) => setVaultTokenAccount(e.target.value)}
+                    placeholder="Enter or deploy vault address"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                  />
+                </div>
 
                 <button
                   disabled={busy || !businessExists || !vaultTokenAccount}
@@ -2569,9 +2818,9 @@ export default function EmployerPage() {
                       await initVault(connection, wallet, token, PAYUSD_MINT);
                     })
                   }
-                  className="mt-3 w-full rounded-lg bg-[#3E6B48] px-4 py-2 text-sm text-white disabled:opacity-50"
+                  className="mt-4 w-full premium-btn bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20 shadow-lg disabled:opacity-50"
                 >
-                  Initialize Payroll Wallet
+                  Authorize Vault for Payroll
                 </button>
 
                 <InlineHelp>
@@ -2614,22 +2863,32 @@ export default function EmployerPage() {
                 description={COPY.employer.step2.description}
                 state={stepStates[2]}
               >
-                <div className="grid gap-3 md:grid-cols-2">
-                  <input
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    placeholder="Amount"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
-                  <input
-                    value={depositorTokenAccount}
-                    onChange={(e) => setDepositorTokenAccount(e.target.value)}
-                    placeholder="Company source token account"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      Funding Amount (PAYUSD)
+                    </label>
+                    <input
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      placeholder="e.g. 500"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      Company Source Account
+                    </label>
+                    <input
+                      value={depositorTokenAccount}
+                      onChange={(e) => setDepositorTokenAccount(e.target.value)}
+                      placeholder="Address..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                    />
+                  </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <button
                     disabled={busy || !wallet.publicKey}
                     onClick={() =>
@@ -2650,9 +2909,9 @@ export default function EmployerPage() {
                         return txid;
                       })
                     }
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
+                    className="premium-btn premium-btn-secondary hover:border-indigo-400/50 disabled:opacity-50"
                   >
-                    Create Company Source Account
+                    Setup Source Account
                   </button>
 
                   <div>
@@ -2672,13 +2931,10 @@ export default function EmployerPage() {
                           return `Minted 1,000 PAYUSD! tx: ${json.tx}`;
                         })
                       }
-                      className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                      className="w-full premium-btn bg-indigo-50 text-indigo-700 border-indigo-100 hover:bg-indigo-100 disabled:opacity-50"
                     >
-                      Get 1,000 Demo Tokens
+                      Mint 1,000 Demo Tokens
                     </button>
-                    <p className="mt-1 text-[11px] text-gray-500 leading-tight">
-                      Devnet demo faucet: adds test payroll tokens to your company source account.
-                    </p>
                   </div>
 
                   <button
@@ -2715,9 +2971,9 @@ export default function EmployerPage() {
                         );
                       })
                     }
-                    className="w-full md:col-span-2 rounded-lg bg-[#005B96] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                    className="w-full md:col-span-2 premium-btn bg-slate-900 text-white shadow-xl hover:shadow-2xl transition-all disabled:opacity-50"
                   >
-                    Add Funds to Payroll Wallet
+                    Deposit Funds into Secure Vault
                   </button>
                 </div>
 
@@ -2801,22 +3057,32 @@ export default function EmployerPage() {
                 description={COPY.employer.step3.description}
                 state={stepStates[3]}
               >
-                <div className="grid gap-3 md:grid-cols-2">
-                  <input
-                    value={keeperPubkey}
-                    onChange={(e) => setKeeperPubkey(e.target.value)}
-                    placeholder="Automation service wallet"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
-                  <input
-                    value={settleIntervalSecs}
-                    onChange={(e) => setSettleIntervalSecs(e.target.value)}
-                    placeholder="Automation interval (seconds)"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      Automation Wallet
+                    </label>
+                    <input
+                      value={keeperPubkey}
+                      onChange={(e) => setKeeperPubkey(e.target.value)}
+                      placeholder="Address..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      Settle Interval (Secs)
+                    </label>
+                    <input
+                      value={settleIntervalSecs}
+                      onChange={(e) => setSettleIntervalSecs(e.target.value)}
+                      placeholder="e.g. 60"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                    />
+                  </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <button
                     disabled={busy || !businessExists || v2ConfigExists}
                     onClick={() =>
@@ -2833,9 +3099,9 @@ export default function EmployerPage() {
                         );
                       })
                     }
-                    className="w-full rounded-lg bg-[#E85D04] px-4 py-2 text-sm text-white disabled:opacity-50"
+                    className="premium-btn bg-orange-600 hover:bg-orange-700 text-white shadow-orange-500/20 shadow-lg disabled:opacity-50"
                   >
-                    Initialize Automation Service
+                    Activate Automation
                   </button>
                   <button
                     disabled={busy || !businessExists || !v2ConfigExists}
@@ -2871,163 +3137,154 @@ export default function EmployerPage() {
                   </button>
                 ) : null}
 
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <input
-                    value={employeeWallet}
-                    onChange={(e) => setEmployeeWallet(e.target.value)}
-                    placeholder="Worker wallet"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
-                  <button
-                    disabled={busy || !wallet.publicKey}
-                    onClick={() => {
-                      if (!wallet.publicKey) return;
-                      setEmployeeWallet(wallet.publicKey.toBase58());
-                    }}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
-                  >
-                    Use This Wallet as Worker (Demo)
-                  </button>
-                  <input
-                    value={employeeTokenAccount}
-                    onChange={(e) => setEmployeeTokenAccount(e.target.value)}
-                    placeholder="Worker destination token account"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
-                  <button
-                    disabled={busy || !employeeWallet}
-                    onClick={() =>
-                      run(
-                        "Create worker destination account",
-                        createWorkerDestinationAccountTask,
-                      )
-                    }
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
-                  >
-                    Create Worker Destination Account
-                  </button>
+                <div className="mt-6 border-t border-slate-100 pt-6">
+                  <h3 className="text-sm font-bold text-slate-900 mb-4">Worker Onboarding</h3>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                        Worker Wallet
+                      </label>
+                      <input
+                        value={employeeWallet}
+                        onChange={(e) => setEmployeeWallet(e.target.value)}
+                        placeholder="Address..."
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        disabled={busy || !wallet.publicKey}
+                        onClick={() => {
+                          if (!wallet.publicKey) return;
+                          setEmployeeWallet(wallet.publicKey.toBase58());
+                        }}
+                        className="w-full premium-btn premium-btn-secondary py-[11px] disabled:opacity-50"
+                      >
+                        Self-Onboard for Demo
+                      </button>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                        Worker Destination Token Account
+                      </label>
+                      <input
+                        value={employeeTokenAccount}
+                        onChange={(e) => setEmployeeTokenAccount(e.target.value)}
+                        placeholder="Address..."
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        disabled={busy || !employeeWallet}
+                        onClick={() =>
+                          run(
+                            "Create worker destination account",
+                            createWorkerDestinationAccountTask,
+                          )
+                        }
+                        className="w-full premium-btn premium-btn-secondary py-[11px] disabled:opacity-50"
+                      >
+                        Deploy Worker Account
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <div className="mb-2 text-xs font-medium text-gray-700">
-                    Pay plan
+                <div className="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50/30 p-5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-indigo-500"></div>
+                    <span className="text-xs font-bold text-slate-900 uppercase tracking-wider">Payroll Blueprint</span>
                   </div>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <label className="text-xs text-gray-700">
-                      Plan type
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="block">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Frequency</span>
                       <select
                         value={payPreset}
                         onChange={(e) => setPayPreset(e.target.value as any)}
                         disabled={busy}
-                        className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium focus:border-indigo-500 outline-none transition-all"
                       >
-                        <option value="per_second">Per-second (custom)</option>
+                        <option value="per_second">Real-time (Per-second)</option>
                         <option value="hourly">Hourly</option>
                         <option value="weekly">Weekly</option>
                         <option value="monthly">Monthly (30d)</option>
-                        <option value="fixed_total">
-                          Fixed total over N days
-                        </option>
+                        <option value="fixed_total">Fixed Milestone</option>
                       </select>
                     </label>
-                    <label className="text-xs text-gray-700">
-                      {payPreset === "fixed_total"
-                        ? "Total amount"
-                        : "Amount per period"}
+                    <label className="block">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
+                        {payPreset === "fixed_total" ? "Milestone Amount" : "Rate per Period"}
+                      </span>
                       <input
                         value={payAmount}
                         onChange={(e) => setPayAmount(e.target.value)}
                         disabled={busy || payPreset === "per_second"}
-                        placeholder={
-                          payPreset === "fixed_total" ? "e.g. 5000" : "e.g. 30"
-                        }
-                        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100"
+                        placeholder={payPreset === "fixed_total" ? "e.g. 5000" : "e.g. 30"}
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium focus:border-indigo-500 outline-none disabled:bg-slate-100 transition-all"
                       />
                     </label>
                   </div>
-                  {payPreset === "fixed_total" && (
-                    <label className="mt-2 block text-xs text-gray-700">
-                      Days
+
+                  <div className="mt-4 flex flex-col gap-3">
+                    <label className="flex items-center gap-3 group cursor-pointer">
                       <input
-                        value={fixedTotalDays}
-                        onChange={(e) => setFixedTotalDays(e.target.value)}
+                        type="checkbox"
+                        checked={autoGrantDecrypt}
+                        onChange={(e) => setAutoGrantDecrypt(e.target.checked)}
                         disabled={busy}
-                        placeholder="e.g. 30"
-                        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        className="h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
                       />
+                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
+                        Auto-grant worker view access
+                      </span>
                     </label>
-                  )}
-                  {payPreset !== "per_second" &&
-                    payPreset !== "fixed_total" && (
-                      <label className="mt-2 flex items-center gap-2 text-xs text-gray-700">
-                        <input
-                          type="checkbox"
-                          checked={boundPresetPeriod}
-                          onChange={(e) =>
-                            setBoundPresetPeriod(e.target.checked)
-                          }
-                          disabled={busy}
-                          className="h-4 w-4 rounded border-gray-300"
-                        />
-                        Stop automatically at end of this period
-                      </label>
-                    )}
+                    <label className="flex items-center gap-3 group cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoGrantKeeperDecrypt}
+                        onChange={(e) => setAutoGrantKeeperDecrypt(e.target.checked)}
+                        disabled={busy}
+                        className="h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
+                      />
+                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
+                        Auto-authorize automation engine
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-3 group cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={boundPresetPeriod}
+                        onChange={(e) => setBoundPresetPeriod(e.target.checked)}
+                        disabled={busy}
+                        className="h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
+                      />
+                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
+                        Stop payroll automatically at end of period
+                      </span>
+                    </label>
+                  </div>
 
-                  <label className="mt-3 flex items-center gap-2 text-xs text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={autoGrantDecrypt}
-                      onChange={(e) => setAutoGrantDecrypt(e.target.checked)}
-                      disabled={busy}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    Allow worker to view earnings automatically
-                  </label>
-                  <label className="mt-1 flex items-center gap-2 text-xs text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={autoGrantKeeperDecrypt}
-                      onChange={(e) =>
-                        setAutoGrantKeeperDecrypt(e.target.checked)
-                      }
-                      disabled={busy}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    Allow automation service to process confidential payout automatically
-                  </label>
-
-                  <div className="mt-2 text-xs text-gray-700">
-                    Computed per-second rate:{" "}
-                    <span className="font-mono">
-                      {computedRatePreview === null
-                        ? "-"
-                        : computedRatePreview.toFixed(9)}
+                  <div className="mt-4 flex items-center justify-between rounded-xl bg-indigo-500/5 px-4 py-3 border border-indigo-500/10">
+                    <span className="text-xs font-bold text-indigo-600">Calculated Stream Force</span>
+                    <span className="font-mono text-sm font-bold text-indigo-700">
+                      {computedRatePreview === null ? "-" : computedRatePreview.toFixed(9)} units/sec
                     </span>
                   </div>
+
+                  <button
+                    disabled={busy || !v2ConfigExists}
+                    onClick={() =>
+                      run(
+                        "Create worker payroll record",
+                        createWorkerPayrollRecordTask,
+                      )
+                    }
+                    className="w-full premium-btn bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-500/20 shadow-xl disabled:opacity-50"
+                  >
+                    Commit Worker to Blockchain
+                  </button>
                 </div>
-
-                <input
-                  value={salaryPerSecond}
-                  onChange={(e) => setSalaryPerSecond(e.target.value)}
-                  placeholder="Salary per second"
-                  disabled={busy || payPreset !== "per_second"}
-                  className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100"
-                />
-
-                {/* Worker record options are now configured via the agent chat */}
-
-                <button
-                  disabled={busy || !v2ConfigExists}
-                  onClick={() =>
-                    run(
-                      "Create worker payroll record",
-                      createWorkerPayrollRecordTask,
-                    )
-                  }
-                  className="mt-3 w-full rounded-lg bg-[#1D3557] px-4 py-2 text-sm text-white disabled:opacity-50"
-                >
-                  Create Worker Payroll Record
-                </button>
 
                 <InlineHelp>
                   Success means the worker can now open Worker Portal and load
@@ -3041,46 +3298,52 @@ export default function EmployerPage() {
                 description={COPY.employer.step4.description}
                 state={stepStates[4]}
               >
-                <input
-                  value={streamIndexInput}
-                  onChange={(e) => setStreamIndexInput(e.target.value)}
-                  placeholder="Payroll record number"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <button
-                    disabled={busy || !v2ConfigExists || streamIndex === null}
-                    onClick={() =>
-                      run("Enable high-speed mode", async () => {
-                        if (!ownerPubkey || streamIndex === null)
-                          throw new Error("Invalid payroll record number");
-                        return delegateStreamV2(
-                          connection,
-                          wallet,
-                          ownerPubkey,
-                          streamIndex,
-                        );
-                      })
-                    }
-                    className="w-full rounded-lg bg-[#6A4C93] px-4 py-2 text-sm text-white disabled:opacity-50"
-                  >
-                    Enable High-Speed Mode
-                  </button>
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      run("Refresh payroll status", async () => {
-                        await loadState();
-                      })
-                    }
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm"
-                  >
-                    Refresh Payroll Status
-                  </button>
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      Payroll Record Reference
+                    </label>
+                    <input
+                      value={streamIndexInput}
+                      onChange={(e) => setStreamIndexInput(e.target.value)}
+                      placeholder="e.g. 0"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <button
+                      disabled={busy || !v2ConfigExists || streamIndex === null}
+                      onClick={() =>
+                        run("Enable high-speed mode", async () => {
+                          if (!ownerPubkey || streamIndex === null)
+                            throw new Error("Invalid payroll record number");
+                          return delegateStreamV2(
+                            connection,
+                            wallet,
+                            ownerPubkey,
+                            streamIndex,
+                          );
+                        })
+                      }
+                      className="premium-btn bg-purple-600 hover:bg-purple-700 text-white shadow-purple-500/20 shadow-lg disabled:opacity-50"
+                    >
+                      🚀 Boost Execution
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        run("Refresh payroll status", async () => {
+                          await loadState();
+                        })
+                      }
+                      className="premium-btn premium-btn-secondary disabled:opacity-50"
+                    >
+                      Sync Latest Data
+                    </button>
+                  </div>
                 </div>
                 <InlineHelp>
-                  High-speed mode is optional. It improves delegated lifecycle
-                  behavior for live demos.
+                  High-speed mode enables delegated lifecycle behavior for near-instant settlement.
                 </InlineHelp>
               </StepCard>
 
@@ -3090,32 +3353,28 @@ export default function EmployerPage() {
                 description={COPY.employer.step5.description}
                 state={stepStates[5]}
               >
-                <div className="grid gap-2 text-sm text-gray-700">
-                  <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                    <span>Payroll status</span>
-                    <StatusPill
-                      tone={v2Config?.isPaused ? "warning" : "success"}
-                    >
-                      {v2Config?.isPaused ? "Paused" : "Live"}
+                <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Pipeline</span>
+                    <StatusPill tone={v2Config?.isPaused ? "warning" : "success"}>
+                      {v2Config?.isPaused ? "PAUSED" : "LIVE"}
                     </StatusPill>
                   </div>
-                  <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                    <span>Worker payroll record</span>
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Record</span>
                     <StatusPill tone={streamStatus ? "success" : "neutral"}>
-                      {streamStatus
-                        ? `#${streamStatus.streamIndex}`
-                        : "Not created"}
+                      {streamStatus ? `#${streamStatus.streamIndex}` : "NONE"}
                     </StatusPill>
                   </div>
-                  <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                    <span>High-speed mode</span>
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Engine</span>
                     <StatusPill tone={highSpeedOn ? "success" : "warning"}>
-                      {highSpeedOn ? "On" : "Off"}
+                      {highSpeedOn ? "FAST" : "BASE"}
                     </StatusPill>
                   </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
                   <button
                     disabled={busy || !v2ConfigExists}
                     onClick={() =>
@@ -3125,9 +3384,9 @@ export default function EmployerPage() {
                         await pauseStreamV2(connection, wallet, ownerPubkey, 1);
                       })
                     }
-                    className="w-full rounded-lg bg-[#8C2F39] px-4 py-2 text-sm text-white disabled:opacity-50"
+                    className="premium-btn bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 border border-transparent disabled:opacity-50"
                   >
-                    Pause Payroll
+                    ⏹ Interrupt Flow
                   </button>
                   <button
                     disabled={busy || !v2ConfigExists}
@@ -3136,9 +3395,9 @@ export default function EmployerPage() {
                         await resumeStreamV2(connection, wallet);
                       })
                     }
-                    className="w-full rounded-lg bg-[#2A9D8F] px-4 py-2 text-sm text-white disabled:opacity-50"
+                    className="premium-btn bg-teal-600 hover:bg-teal-700 text-white shadow-teal-500/20 shadow-lg disabled:opacity-50"
                   >
-                    Resume Payroll
+                    ▶ Resume Execution
                   </button>
                 </div>
 
@@ -3447,6 +3706,71 @@ export default function EmployerPage() {
                     >
                       Backfill Automation Decrypt Access
                     </button>
+
+                    {/* Phase 2: Auditor Access */}
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <div className="text-[10px] font-black text-violet-600 uppercase tracking-widest mb-2">
+                        🔒 Programmable Viewing Policies
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <input
+                          type="text"
+                          placeholder="Auditor wallet address"
+                          id="auditor-wallet-input"
+                          className="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-mono"
+                        />
+                        <button
+                          disabled={busy || !streamStatus}
+                          onClick={() =>
+                            run("Grant auditor view access", async () => {
+                              if (!ownerPubkey || !streamStatus)
+                                throw new Error("Missing config");
+                              const input = (document.getElementById("auditor-wallet-input") as HTMLInputElement)?.value?.trim();
+                              if (!input) throw new Error("Enter auditor wallet");
+                              const auditor = new PublicKey(input);
+                              await grantAuditorViewAccessV2(
+                                connection, wallet, ownerPubkey,
+                                streamStatus.streamIndex, auditor
+                              );
+                              return `Auditor access granted to ${input.slice(0, 8)}...`;
+                            })
+                          }
+                          className="rounded-lg bg-violet-500 px-4 py-2 text-xs font-bold text-white whitespace-nowrap disabled:opacity-50"
+                        >
+                          Grant Auditor
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <input
+                          type="text"
+                          placeholder="Wallet to revoke access"
+                          id="revoke-wallet-input"
+                          className="flex-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-mono"
+                        />
+                        <button
+                          disabled={busy || !streamStatus}
+                          onClick={() =>
+                            run("Revoke view access", async () => {
+                              if (!ownerPubkey || !streamStatus)
+                                throw new Error("Missing config");
+                              const input = (document.getElementById("revoke-wallet-input") as HTMLInputElement)?.value?.trim();
+                              if (!input) throw new Error("Enter wallet to revoke");
+                              const target = new PublicKey(input);
+                              await revokeViewAccessV2(
+                                connection, wallet, ownerPubkey,
+                                streamStatus.streamIndex, target
+                              );
+                              return `Access revoked for ${input.slice(0, 8)}...`;
+                            })
+                          }
+                          className="rounded-lg bg-red-500 px-4 py-2 text-xs font-bold text-white whitespace-nowrap disabled:opacity-50"
+                        >
+                          Revoke Access
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </AdvancedDetails>
               </StepCard>

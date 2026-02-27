@@ -6,12 +6,16 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getBusinessAccount,
+  getBusinessPDA,
   getEmployeeStreamV2Account,
   getEmployeeStreamV2DecryptHandles,
   getIncoAllowancePda,
   getRateHistoryV2Account,
   getWithdrawRequestV2Account,
-  requestWithdrawV2,
+  getPendingPayoutsForWorker,
+  ShieldedPayoutV2Account,
+  signClaimAuthorization,
+  signWithdrawAuthorization,
 } from '../lib/payroll-client';
 import PageShell from '../components/PageShell';
 import ActionResult from '../components/ActionResult';
@@ -68,11 +72,24 @@ export default function EmployeePage() {
   const [statusLoading, setStatusLoading] = useState(false);
   const [revealLoading, setRevealLoading] = useState(false);
   const [withdrawLoading, setWithdrawLoading] = useState(false);
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [pendingPayouts, setPendingPayouts] = useState<ShieldedPayoutV2Account[]>([]);
+  const [payoutsScanning, setPayoutsScanning] = useState(false);
+  const [claimingNonce, setClaimingNonce] = useState<number | null>(null);
+  const [claimSuccessTx, setClaimSuccessTx] = useState<string | null>(null);
+  const [bufferProofTxByNonce, setBufferProofTxByNonce] = useState<Record<number, string>>({});
+  const [lastClaimProof, setLastClaimProof] = useState<{
+    nonce: number;
+    payoutPda: string;
+    bufferTx: string | null;
+    claimTx: string;
+  } | null>(null);
   const [payslipLoading, setPayslipLoading] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [revealMessage, setRevealMessage] = useState('');
   const [serverRevealHint, setServerRevealHint] = useState<string | null>(null);
+  const [requestAccessLoading, setRequestAccessLoading] = useState(false);
   const [decryptAllowed, setDecryptAllowed] = useState<{ salary: boolean; accrued: boolean } | null>(null);
   const [delegationRoute, setDelegationRoute] = useState<{
     delegated: boolean | null;
@@ -152,6 +169,50 @@ export default function EmployeePage() {
       // ignore
     }
   }, [employerWallet, streamIndexInput]);
+
+  // Auto-scan for payouts whenever employer or wallet changes
+  const scanPayouts = useCallback(async () => {
+    if (wallet.publicKey && employerWallet) {
+      try {
+        const [biz] = getBusinessPDA(new PublicKey(employerWallet));
+        const found = await getPendingPayoutsForWorker(connection, biz, wallet.publicKey!);
+        setPendingPayouts(found);
+        // If a payout was just claimed, we'll see it here as gone
+        if (found.length === 0) setClaimSuccessTx(null);
+      } catch { /* ignore auto-scan errors */ }
+    }
+  }, [connection, employerWallet, wallet.publicKey]);
+
+  useEffect(() => {
+    void scanPayouts();
+  }, [scanPayouts]);
+
+  // Best-effort: resolve hop-1 proof tx for each buffered payout token account.
+  useEffect(() => {
+    if (pendingPayouts.length === 0) return;
+    const loadProofs = async () => {
+      const updates: Record<number, string> = {};
+      await Promise.all(
+        pendingPayouts.map(async (p) => {
+          try {
+            const sigs = await connection.getSignaturesForAddress(
+              p.payoutTokenAccount,
+              { limit: 5 },
+              'confirmed'
+            );
+            const firstOk = sigs.find((s) => !s.err)?.signature || null;
+            if (firstOk) updates[p.nonce] = firstOk;
+          } catch {
+            // ignore proof lookup errors
+          }
+        })
+      );
+      if (Object.keys(updates).length > 0) {
+        setBufferProofTxByNonce((prev) => ({ ...prev, ...updates }));
+      }
+    };
+    void loadProofs();
+  }, [connection, pendingPayouts]);
 
   const loadStatus = useCallback(async () => {
     if (!employerWallet || streamIndex === null) return;
@@ -266,6 +327,20 @@ export default function EmployeePage() {
       setStatusLoading(false);
     }
   }, [connection, employerWallet, revealed, streamIndex]);
+
+  // Polling for live updates when a payout is in flight
+  useEffect(() => {
+    const isPending = status?.withdrawPending || pendingPayouts.length > 0;
+    if (!isPending) return;
+
+    const interval = setInterval(() => {
+      // Refresh both the stream status (for withdrawPending) and pending payouts (for buffering)
+      void loadStatus();
+      void scanPayouts();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [loadStatus, scanPayouts, status?.withdrawPending, pendingPayouts.length]);
 
   // Best-effort proof: check if this wallet is allowed to decrypt the Inco handles (allowance PDAs exist).
   useEffect(() => {
@@ -477,6 +552,287 @@ export default function EmployeePage() {
             {actionMessage ? <ActionResult kind="success">{actionMessage}</ActionResult> : null}
           </section>
 
+          {/* ─── Payout & Withdraw Flow (Unified Timeline) ─── */}
+          <section className="panel-card">
+            <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout Journey</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Request salary and claim it securely once buffered.
+            </p>
+
+            {/* ── Status Timeline ── */}
+            {(() => {
+              const hasRequest = status?.withdrawPending ?? false;
+              const hasBuffered = pendingPayouts.length > 0;
+              const hasClaimed = !!claimSuccessTx;
+
+              // Find the proof signature for the "latest" buffered or claimed item
+              const bufferProof = pendingPayouts.length > 0 ? bufferProofTxByNonce[pendingPayouts[0].nonce] : null;
+              const claimProof = claimSuccessTx;
+
+              const steps = [
+                { label: 'Requested', active: hasRequest || hasBuffered || hasClaimed },
+                {
+                  label: 'Buffered',
+                  active: hasBuffered || hasClaimed,
+                  proof: bufferProof
+                },
+                { label: 'Auto-Claim', active: hasBuffered && !hasClaimed },
+                {
+                  label: 'Claimed',
+                  active: hasClaimed,
+                  proof: claimProof
+                },
+              ];
+              return (
+                <div className="mt-4 flex items-center justify-between border-b pb-8 mb-6">
+                  {steps.map((s, i) => (
+                    <div key={s.label} className="flex items-center">
+                      <div className="flex flex-col items-center">
+                        <div className={`h-4 w-4 rounded-full border-2 transition-all ${s.active ? 'bg-[#005B96] border-[#005B96] shadow-[0_0_8px_rgba(0,91,150,0.4)]' : 'bg-white border-gray-300'
+                          }`} />
+                        <span className={`mt-1 text-[10px] font-bold uppercase tracking-tighter ${s.active ? 'text-[#005B96]' : 'text-gray-400'
+                          }`}>{s.label}</span>
+                        {s.proof && (
+                          <a
+                            href={explorerTxUrl(s.proof)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 text-[9px] font-bold text-indigo-500 hover:underline"
+                            title="View On-chain Proof"
+                          >
+                            Proof 🔗
+                          </a>
+                        )}
+                      </div>
+                      {i < steps.length - 1 && (
+                        <div className={`mx-2 h-0.5 w-10 mb-4 ${steps[i + 1].active ? 'bg-[#005B96]' : 'bg-gray-200'
+                          }`} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* ── Action Area ── */}
+            <div className="space-y-4">
+              {/* Step 1: Request Withdraw if nothing is in flight */}
+              {!(status?.withdrawPending) && !claimSuccessTx && (
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-gray-500 uppercase">Step 1: Request Payout</div>
+                  <button
+                    onClick={async () => {
+                      if (!wallet.publicKey || !employerWallet || streamIndex === null) return;
+                      setError('');
+                      setActionMessage('');
+                      setWithdrawLoading(true);
+                      try {
+                        const timestamp = Math.floor(Date.now() / 1000);
+                        const { signature, message } = await signWithdrawAuthorization(
+                          wallet,
+                          streamIndex,
+                          timestamp
+                        );
+
+                        const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
+                        const res = await fetch(`${keeperUrl}/api/withdraw-auth`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            workerPubkey: wallet.publicKey.toBase58(),
+                            streamIndex,
+                            signature: Array.from(signature),
+                            message: Array.from(message),
+                            businessOwner: employerWallet,
+                            timestamp,
+                          }),
+                        });
+
+                        if (!res.ok) {
+                          const errBody = await res.json().catch(() => ({}));
+                          throw new Error(errBody.error || `Failed to submit withdraw auth: ${res.statusText}`);
+                        }
+
+                        setWithdrawFlow({
+                          requestTx: 'off_chain_signature',
+                          requestedAt: timestamp,
+                          wasDelegated: status?.isDelegated ?? false,
+                        });
+                        setActionMessage(`Off-chain request sent securely to Keeper!`);
+                        void loadStatus();
+                      } catch (e: any) {
+                        setError(e?.message || 'Withdraw request failed');
+                      } finally {
+                        setWithdrawLoading(false);
+                      }
+                    }}
+                    disabled={withdrawLoading || !status}
+                    className="w-full rounded-lg bg-[#2D2D2A] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-black/10 disabled:opacity-50"
+                  >
+                    {withdrawLoading ? 'Processing Request...' : 'Trigger Payout Request'}
+                  </button>
+                </div>
+              )}
+
+              {/* Status Message for Pending Request */}
+              {status?.withdrawPending && pendingPayouts.length === 0 && (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    <span className="text-sm font-medium text-blue-800">Request Pending</span>
+                  </div>
+                  <p className="mt-1 text-xs text-blue-600">
+                    The automation service is processing your payout. This usually takes 5-15 seconds.
+                  </p>
+                </div>
+              )}
+
+              {/* Step 2: Auto-Claim in Progress */}
+              {pendingPayouts.length > 0 && !claimSuccessTx && (
+                <div className="space-y-3">
+                  <div className="mb-2 text-xs font-semibold uppercase font-bold text-[#005B96]">Step 2: Auto-Claiming</div>
+                  {pendingPayouts.map((p) => {
+                    const proof = bufferProofTxByNonce[p.nonce];
+                    return (
+                      <div key={p.nonce} className="rounded-xl border-2 border-[#005B96] bg-[#005B96]/5 p-5">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1">
+                            <div className="text-sm font-bold text-[#2D2D2A] flex items-center gap-2">
+                              <span>Funded &amp; Secure</span>
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-tighter shadow-sm">Buffered</span>
+                            </div>
+                            <div className="mt-1 text-xs text-gray-600">
+                              Settled on-chain {new Date(p.createdAt * 1000).toLocaleTimeString()}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5">
+                            <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                            <span className="text-xs font-semibold text-blue-700">Keeper auto-claiming...</span>
+                          </div>
+                        </div>
+                        <AdvancedDetails title="Audit Trail">
+                          <div className="mt-3 grid gap-2 text-[10px] text-gray-500">
+                            <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
+                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Nonce Record</span>
+                              <span className="font-mono text-gray-400">#{p.nonce}</span>
+                            </div>
+                            <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
+                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Settlement Proof</span>
+                              {proof ? (
+                                <a href={explorerTxUrl(proof)} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:underline font-bold">
+                                  {proof.slice(0, 8)}...{proof.slice(-4)} 🔗
+                                </a>
+                              ) : (
+                                <span className="italic">Verifying on-chain...</span>
+                              )}
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Confidential Payout PDA</span>
+                              <span className="font-mono text-[9px] break-all bg-gray-50 p-2 rounded border border-gray-100">{p.address.toBase58()}</span>
+                            </div>
+                          </div>
+                        </AdvancedDetails>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Success Card */}
+              {claimSuccessTx && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 shadow-xl shadow-emerald-500/10">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 text-xl">
+                      ✓
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-black text-emerald-900 border-b border-emerald-200 pb-2 mb-3">Verified Settlement Receipt</div>
+
+                      <div className="space-y-3">
+                        {lastClaimProof?.bufferTx && (
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-bold text-emerald-700/60 uppercase">1. Buffer Proof</span>
+                            <a href={explorerTxUrl(lastClaimProof.bufferTx)} target="_blank" rel="noopener noreferrer" className="font-mono text-emerald-600 hover:underline">
+                              {lastClaimProof.bufferTx.slice(0, 12)}...
+                            </a>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-emerald-700/60 uppercase">2. Claim Proof</span>
+                          <a href={explorerTxUrl(claimSuccessTx)} target="_blank" rel="noopener noreferrer" className="font-mono text-emerald-600 hover:underline font-bold">
+                            {claimSuccessTx.slice(0, 12)}...
+                          </a>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 rounded-lg border border-emerald-200 bg-white/70 px-3 py-2 text-[11px] text-emerald-800">
+                        No direct employer -&gt; worker transfer appears in a single payout transaction.
+                      </div>
+
+                      {/* ── What's Next? ── */}
+                      <div className="mt-4 rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200/50 p-4">
+                        <div className="text-[10px] font-black text-emerald-900 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                          <span>✨</span> What&apos;s Next?
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-start gap-2">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white text-[8px] font-black mt-0.5">1</span>
+                            <p className="text-[11px] text-emerald-800 leading-relaxed">
+                              <span className="font-bold">Your tokens are safe</span> — they&apos;re now in your confidential wallet, fully encrypted on-chain.
+                            </p>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white text-[8px] font-black mt-0.5">2</span>
+                            <p className="text-[11px] text-emerald-800 leading-relaxed">
+                              <span className="font-bold">To use your tokens</span> — unwrap them to regular SPL tokens via the bridge, then transfer or swap freely.
+                            </p>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-400 text-white text-[8px] font-black mt-0.5">💡</span>
+                            <p className="text-[11px] text-teal-700 leading-relaxed">
+                              <span className="font-bold">Or hold them</span> — your balance stays encrypted and private until you choose to move it.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-4 border-t border-emerald-200 flex items-center justify-between">
+                        <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-widest">Status: Claimed</span>
+                        <button
+                          onClick={() => setClaimSuccessTx(null)}
+                          className="text-[10px] font-black text-emerald-600 hover:text-emerald-800 uppercase tracking-widest transition-colors"
+                        >
+                          Clear Record
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!claimSuccessTx && (
+              <div className="mt-6 flex justify-center">
+                <button
+                  onClick={async () => {
+                    if (!wallet.publicKey || !employerWallet) return;
+                    setPayoutsScanning(true);
+                    try {
+                      const [biz] = getBusinessPDA(new PublicKey(employerWallet));
+                      const found = await getPendingPayoutsForWorker(connection, biz, wallet.publicKey);
+                      setPendingPayouts(found);
+                    } finally {
+                      setPayoutsScanning(false);
+                    }
+                  }}
+                  className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-600"
+                >
+                  {payoutsScanning ? 'Checking network...' : '↺ Refresh Status'}
+                </button>
+              </div>
+            )}
+          </section>
+
           <section className="panel-card">
             <h2 className="text-lg font-semibold text-[#2D2D2A]">{COPY.employee.sectionB}</h2>
             <p className="mt-1 text-sm text-gray-600">
@@ -538,79 +894,42 @@ export default function EmployeePage() {
                 <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   <div className="font-medium">View permission missing</div>
                   <div className="mt-1">{serverRevealHint}</div>
-                  <AdvancedDetails title="Advanced fallback (demo only)">
-                    <p className="mb-2 text-xs text-amber-900">
-                      Server-assisted reveal works for demos if admin permission cannot be updated right now.
-                    </p>
-                    <button
-                      onClick={async () => {
-                        if (!wallet.publicKey || !wallet.signMessage) {
-                          setError('Connect a wallet that supports signMessage.');
-                          return;
-                        }
-                        if (!status) {
-                          setError('Load payroll status first.');
-                          return;
-                        }
-                        if (!employerWallet || streamIndex === null) {
-                          setError('Company wallet + payroll record number are required.');
-                          return;
-                        }
-
-                        setError('');
-                        setRevealMessage('');
-                        setRevealLoading(true);
-                        try {
-                          const ts = Math.floor(Date.now() / 1000);
-                          const msg =
-                            `Expensee Reveal Earnings\n` +
-                            `employer=${new PublicKey(employerWallet).toBase58()}\n` +
-                            `stream_index=${streamIndex}\n` +
-                            `employee=${wallet.publicKey.toBase58()}\n` +
-                            `ts=${ts}\n`;
-
-                          const sigBytes = await wallet.signMessage(new TextEncoder().encode(msg));
-                          const sigBase58 = bs58.encode(sigBytes);
-
-                          const resp = await fetchWithTimeout('/api/inco/reveal', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              employerWallet,
-                              streamIndex,
-                              employeeWallet: wallet.publicKey.toBase58(),
-                              ts,
-                              signatureBase58: sigBase58,
-                            }),
-                          });
-                          const json = await resp.json();
-                          if (!resp.ok || !json?.ok) {
-                            throw new Error(json?.error || 'Server reveal failed');
-                          }
-
-                          const salaryLamportsPerSec = BigInt(json.salaryLamportsPerSec || '0');
-                          const accruedLamportsCheckpoint = BigInt(json.accruedLamportsCheckpoint || '0');
-                          const checkpointTime =
-                            status.lastAccrualTime > 0 ? status.lastAccrualTime : status.lastSettleTime;
-                          const now = Math.floor(Date.now() / 1000);
-                          setRevealed({
-                            salaryLamportsPerSec,
-                            accruedLamportsCheckpoint,
-                            checkpointTime,
-                            revealedAt: now,
-                          });
-                          setRevealMessage(`Live earnings enabled (server signer: ${json.signer}).`);
-                        } catch (e: any) {
-                          setError(e?.message || 'Server reveal failed');
-                        } finally {
-                          setRevealLoading(false);
-                        }
-                      }}
-                      className="w-full rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm"
-                    >
-                      Reveal via Admin/Keeper (Demo)
-                    </button>
-                  </AdvancedDetails>
+                  <button
+                    onClick={async () => {
+                      if (!wallet.publicKey || !wallet.signMessage || !status) return;
+                      setRequestAccessLoading(true);
+                      try {
+                        const timestamp = Math.floor(Date.now() / 1000);
+                        const msgStr = `view:${status.streamIndex}:${timestamp}`;
+                        const msg = new TextEncoder().encode(msgStr);
+                        const signature = await wallet.signMessage(msg);
+                        const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
+                        const resp = await fetch(`${keeperUrl}/api/request-view-access`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            streamIndex: status.streamIndex,
+                            timestamp,
+                            workerPubkey: wallet.publicKey.toBase58(),
+                            signature: Array.from(signature),
+                            message: Array.from(msg),
+                            businessOwner: employerWallet,
+                          }),
+                        });
+                        const result = await resp.json();
+                        if (!resp.ok) throw new Error(result.error || 'Failed to request access');
+                        setServerRevealHint('✅ Request sent securely to Keeper. Your access will be granted in ~15s. Please reload or try decrypting again shortly.');
+                      } catch (err: any) {
+                        setError(err?.message || 'Access request failed');
+                      } finally {
+                        setRequestAccessLoading(false);
+                      }
+                    }}
+                    disabled={requestAccessLoading}
+                    className="mt-3 rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {requestAccessLoading ? 'Requesting...' : 'Request Auto-Grant'}
+                  </button>
                 </div>
               ) : null}
               {revealMessage ? <ActionResult kind="success">{revealMessage}</ActionResult> : null}
@@ -633,132 +952,6 @@ export default function EmployeePage() {
               <div>Starting balance: {revealed ? formatTokenAmount(revealed.accruedLamportsCheckpoint) : '-'}</div>
               <div>Starting time: {revealed ? revealed.checkpointTime : '-'}</div>
             </div>
-          </section>
-
-          <section className="panel-card">
-            <h2 className="text-lg font-semibold text-[#2D2D2A]">{COPY.employee.sectionC}</h2>
-            <p className="mt-1 text-sm text-gray-600">
-              Request payout to your registered destination account.
-            </p>
-            <p className="mt-1 text-xs text-gray-500">
-              If payout says complete but Phantom balance does not update, verify destination account below or use Bridge.
-            </p>
-            <div className="mt-4">
-              <button
-                onClick={async () => {
-                  if (!wallet.publicKey || !employerWallet || streamIndex === null) return;
-                  setError('');
-                  setActionMessage('');
-                  setWithdrawLoading(true);
-                  try {
-                    if (!status) {
-                      throw new Error('Load payroll status first.');
-                    }
-                    const txid = await requestWithdrawV2(
-                      connection,
-                      wallet,
-                      new PublicKey(employerWallet),
-                      streamIndex
-                    );
-                    setActionMessage(`Payout request submitted. tx=${txid}`);
-                    const wasDelegated =
-                      status?.owner === DELEGATION_PROGRAM_ID || delegationRoute?.delegated === true;
-                    setWithdrawFlow({
-                      requestTx: txid,
-                      requestedAt: Math.floor(Date.now() / 1000),
-                      wasDelegated,
-                    });
-                    void loadStatus();
-                  } catch (e: any) {
-                    setError(e?.message || 'Failed to request payout');
-                  } finally {
-                    setWithdrawLoading(false);
-                  }
-                }}
-                disabled={withdrawLoading || !employerWallet || streamIndex === null || !status}
-                className="w-full rounded-lg bg-[#0B6E4F] px-4 py-2 text-sm text-white disabled:opacity-50"
-              >
-                {withdrawLoading ? 'Submitting...' : 'Request Payout'}
-              </button>
-            </div>
-
-            {withdrawFlow && status ? (
-              <div className="mt-4 rounded-lg border border-gray-200 bg-[#F8FAFC] px-4 py-3 text-sm text-gray-800">
-                <div className="font-medium text-[#2D2D2A]">Payout progress</div>
-                <div className="mt-2 grid gap-1">
-                  <div>
-                    1. Request submitted:{' '}
-                    <a
-                      href={explorerTxUrl(withdrawFlow.requestTx)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-[#005B96] underline"
-                    >
-                      {withdrawFlow.requestTx}
-                    </a>
-                  </div>
-                  <div>2. Processing: {status.withdrawPending ? 'In progress' : 'Completed'}</div>
-                  <div>3. Payout sent: {withdrawProgress?.settled ? 'Yes' : 'Not yet'}</div>
-                  <div>
-                    4. Destination balance:{' '}
-                    {destinationBalance?.error
-                      ? `Unavailable (${destinationBalance.error})`
-                      : destinationBalance?.uiAmount ?? destinationBalance?.rawAmount ?? 'Unknown'}
-                  </div>
-                </div>
-
-                <AdvancedDetails title="Advanced details">
-                  <div className="mt-2 grid gap-1 text-sm text-gray-700">
-                    <div>Request pending on-chain: {status.withdrawPending ? 'yes' : 'no'}</div>
-                    <div>Used high-speed mode: {withdrawProgress?.delegationUsed ? 'yes' : 'no'}</div>
-                    {withdrawProgress?.delegationUsed ? (
-                      <>
-                        <div>
-                          Undelegated back to base:{' '}
-                          {withdrawProgress?.undelegatedObserved
-                            ? status.isDelegated
-                              ? 'yes (transient; now re-delegated)'
-                              : 'yes'
-                            : 'no'}
-                        </div>
-                        <div>
-                          Router delegation status:{' '}
-                          {delegationRoute?.delegated === null
-                            ? 'unknown'
-                            : delegationRoute?.delegated
-                              ? 'delegated'
-                              : 'not delegated'}
-                          {delegationRoute?.endpoint ? ` (${delegationRoute.endpoint})` : ''}
-                        </div>
-                        <div>Re-delegated: {withdrawProgress?.redelegated ? 'yes' : 'no/unknown'}</div>
-                      </>
-                    ) : null}
-                    <div>
-                      Destination token account:{' '}
-                      <a
-                        href={`https://explorer.solana.com/address/${status.employeeTokenAccount}?cluster=devnet`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono text-[#005B96] underline"
-                      >
-                        {status.employeeTokenAccount}
-                      </a>
-                    </div>
-                  </div>
-                </AdvancedDetails>
-
-                {(process.env.NEXT_PUBLIC_BRIDGE_ENABLED ?? 'false') === 'true' ? (
-                  <div className="mt-3">
-                    <Link
-                      href={`/bridge?confidentialTokenAccount=${encodeURIComponent(status.employeeTokenAccount)}`}
-                      className="text-[#005B96] underline"
-                    >
-                      Open Bridge (confidential -&gt; public demo USDC)
-                    </Link>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
           </section>
 
           <section className="panel-card">

@@ -2,7 +2,7 @@
  * Payroll Program Client (v2)
  *
  * Integrates with the deployed Confidential Streaming Payroll program.
- * Program ID: AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE
+ * Program ID: 3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn
  *
  * Architecture:
  * - Business PDA: ["business", owner_pubkey]
@@ -19,6 +19,7 @@
 
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
 import { WalletContextState } from '@solana/wallet-adapter-react';
+import bs58 from 'bs58';
 import { encryptValue } from '@inco/solana-sdk/encryption';
 import { hexToBuffer } from '@inco/solana-sdk/utils';
 
@@ -26,8 +27,10 @@ import { hexToBuffer } from '@inco/solana-sdk/utils';
 // Program IDs (from env with fallbacks)
 // ============================================================
 
+// NOTE: Hardcoded to the current deploy since it rarely changes,
+// but can be overridden by environment variables.
 export const PAYROLL_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || 'AKNLs4R86U2vDyDAUds6ECuWQT6FyEJ4kbDWYUdqTCXE'
+  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || '3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn'
 );
 
 export const INCO_LIGHTNING_ID = new PublicKey(
@@ -78,6 +81,25 @@ export function getIncoAllowancePda(handleValue: bigint, allowedAddress: PublicK
   return pda;
 }
 
+/**
+ * Check if an Inco decrypt allowance is stale (missing on-chain).
+ * Returns true if the allowance PDA does NOT exist — meaning access needs to be re-granted.
+ */
+export async function checkAllowanceStale(
+  connection: Connection,
+  handleValue: bigint,
+  allowedAddress: PublicKey
+): Promise<boolean> {
+  if (handleValue === 0n) return false; // handle not initialized yet
+  const pda = getIncoAllowancePda(handleValue, allowedAddress);
+  try {
+    const info = await connection.getAccountInfo(pda, 'confirmed');
+    return info === null; // stale if account doesn't exist
+  } catch {
+    return true; // assume stale on error
+  }
+}
+
 // ============================================================
 // Demo Environment Addresses (from env)
 // ============================================================
@@ -113,6 +135,7 @@ const VAULT_TOKEN_SEED = Buffer.from('vault_token');
 const STREAM_CONFIG_V2_SEED = Buffer.from('stream_config_v2');
 const EMPLOYEE_V2_SEED = Buffer.from('employee_v2');
 const WITHDRAW_REQUEST_V2_SEED = Buffer.from('withdraw_request_v2');
+const SHIELDED_PAYOUT_V2_SEED = Buffer.from('shielded_payout');
 const RATE_HISTORY_V2_SEED = Buffer.from('rate_history_v2');
 const BUFFER_SEED = Buffer.from('buffer');
 const DELEGATION_SEED = Buffer.from('delegation');
@@ -211,6 +234,15 @@ const DISCRIMINATORS = {
   // Inco access control (view permission)
   grant_employee_view_access_v2: disc([201, 191, 208, 133, 117, 221, 125, 147]),
   grant_keeper_view_access_v2: disc([60, 78, 33, 123, 183, 61, 107, 58]),
+
+  // Phase 2: Shielded payout
+  claim_payout_v2: disc([173, 130, 104, 210, 0, 178, 203, 83]),
+  cancel_expired_payout_v2: disc([97, 13, 123, 62, 246, 36, 146, 99]),
+
+  // Phase 2: Programmable viewing policies + keeper-relayed claims
+  revoke_view_access_v2: disc([79, 190, 166, 170, 246, 184, 119, 163]),
+  grant_auditor_view_access_v2: disc([169, 70, 78, 218, 59, 114, 203, 200]),
+  keeper_claim_on_behalf_v2: disc([161, 194, 33, 127, 138, 221, 153, 84]),
 };
 
 // ============================================================
@@ -296,6 +328,21 @@ export function getRateHistoryV2PDA(business: PublicKey, streamIndex: number): [
   streamIndexBuffer.writeBigUInt64LE(BigInt(streamIndex));
   return PublicKey.findProgramAddressSync(
     [RATE_HISTORY_V2_SEED, business.toBuffer(), streamIndexBuffer],
+    PAYROLL_PROGRAM_ID
+  );
+}
+
+/**
+ * Derive v2 shielded payout PDA
+ * Seeds: ["shielded_payout", business_pubkey, stream_index (u64 LE), nonce (u64 LE)]
+ */
+export function getShieldedPayoutV2PDA(business: PublicKey, streamIndex: number, nonce: number): [PublicKey, number] {
+  const streamIndexBuffer = Buffer.alloc(8);
+  streamIndexBuffer.writeBigUInt64LE(BigInt(streamIndex));
+  const nonceBuffer = Buffer.alloc(8);
+  nonceBuffer.writeBigUInt64LE(BigInt(nonce));
+  return PublicKey.findProgramAddressSync(
+    [SHIELDED_PAYOUT_V2_SEED, business.toBuffer(), streamIndexBuffer, nonceBuffer],
     PAYROLL_PROGRAM_ID
   );
 }
@@ -1974,4 +2021,339 @@ export function getEmployeeStreamV2DecryptHandles(
   };
 }
 
+// ============================================================
+// Phase 2: Shielded Payout (Claim Flow)
+// ============================================================
 
+export interface ShieldedPayoutV2Account {
+  address: PublicKey;
+  business: PublicKey;
+  streamIndex: number;
+  nonce: number;
+  employeeAuthHash: Uint8Array;
+  encryptedAmount: Uint8Array;
+  claimed: boolean;
+  cancelled: boolean;
+  createdAt: number;
+  expiresAt: number;
+  payoutTokenAccount: PublicKey;
+  bump: number;
+}
+
+/**
+ * Fetch and parse a ShieldedPayoutV2 account.
+ * Returns null if the account doesn't exist.
+ */
+export async function getShieldedPayoutV2Account(
+  connection: Connection,
+  business: PublicKey,
+  streamIndex: number,
+  nonce: number
+): Promise<ShieldedPayoutV2Account | null> {
+  const [payoutPDA] = getShieldedPayoutV2PDA(business, streamIndex, nonce);
+  const accountInfo = await getAccountInfoWithFallback(connection, payoutPDA);
+  if (!accountInfo) return null;
+
+  const data = accountInfo.data;
+  // ShieldedPayoutV2 layout:
+  // 0-8: discriminator
+  // 8-40: business (32)
+  // 40-48: stream_index (u64)
+  // 48-56: nonce (u64)
+  // 56-88: employee_auth_hash (32)
+  // 88-120: encrypted_amount (EncryptedHandle = 32)
+  // 120: claimed (u8)
+  // 121: cancelled (u8)
+  // 122-130: created_at (i64)
+  // 130-138: expires_at (i64)
+  // 138-170: payout_token_account (32)
+  // 170: bump (u8)
+  return {
+    address: payoutPDA,
+    business: new PublicKey(data.slice(8, 40)),
+    streamIndex: Number(data.readBigUInt64LE(40)),
+    nonce: Number(data.readBigUInt64LE(48)),
+    employeeAuthHash: data.slice(56, 88),
+    encryptedAmount: data.slice(88, 120),
+    claimed: data[120] === 1,
+    cancelled: data[121] === 1,
+    createdAt: Number(data.readBigInt64LE(122)),
+    expiresAt: Number(data.readBigInt64LE(130)),
+    payoutTokenAccount: new PublicKey(data.slice(138, 170)),
+    bump: data[170],
+  };
+}
+
+// ShieldedPayoutV2 account discriminator: sha256("account:ShieldedPayoutV2")[0..8]
+const SHIELDED_PAYOUT_V2_DISCRIMINATOR = Buffer.from([154, 229, 205, 213, 206, 30, 155, 114]);
+
+/**
+ * Parse raw account data into a ShieldedPayoutV2Account.
+ */
+function parseShieldedPayoutV2(address: PublicKey, data: Buffer): ShieldedPayoutV2Account {
+  return {
+    address,
+    business: new PublicKey(data.slice(8, 40)),
+    streamIndex: Number(data.readBigUInt64LE(40)),
+    nonce: Number(data.readBigUInt64LE(48)),
+    employeeAuthHash: data.slice(56, 88),
+    encryptedAmount: data.slice(88, 120),
+    claimed: data[120] === 1,
+    cancelled: data[121] === 1,
+    createdAt: Number(data.readBigInt64LE(122)),
+    expiresAt: Number(data.readBigInt64LE(130)),
+    payoutTokenAccount: new PublicKey(data.slice(138, 170)),
+    bump: data[170],
+  };
+}
+
+/**
+ * Auto-detect all pending (unclaimed, uncancelled, not expired) payouts for a worker.
+ * Uses getProgramAccounts with memcmp filters on discriminator + business.
+ * Client-side verifies SHA-256(worker) matches the employee_auth_hash.
+ */
+export async function getPendingPayoutsForWorker(
+  connection: Connection,
+  business: PublicKey,
+  workerWallet: PublicKey,
+): Promise<ShieldedPayoutV2Account[]> {
+  // Compute worker's auth hash client-side.
+  const workerDigest = await crypto.subtle.digest('SHA-256', new Uint8Array(workerWallet.toBytes()));
+  const workerAuthHash = new Uint8Array(workerDigest);
+
+  // Filter: discriminator at offset 0 + business pubkey at offset 8.
+  const accounts = await connection.getProgramAccounts(PAYROLL_PROGRAM_ID, {
+    filters: [
+      { memcmp: { offset: 0, bytes: bs58.encode(SHIELDED_PAYOUT_V2_DISCRIMINATOR) } },
+      { memcmp: { offset: 8, bytes: business.toBase58() } },
+    ],
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const pending: ShieldedPayoutV2Account[] = [];
+
+  for (const { pubkey, account } of accounts) {
+    const payout = parseShieldedPayoutV2(pubkey, account.data as Buffer);
+
+    // Skip already claimed or cancelled.
+    if (payout.claimed || payout.cancelled) continue;
+
+    // Skip expired.
+    if (payout.expiresAt > 0 && now > payout.expiresAt) continue;
+
+    // Verify auth hash matches this worker.
+    const hashMatch = workerAuthHash.length === payout.employeeAuthHash.length &&
+      workerAuthHash.every((b, i) => b === payout.employeeAuthHash[i]);
+    if (!hashMatch) continue;
+
+    pending.push(payout);
+  }
+
+  // Sort by creation time (newest first).
+  pending.sort((a, b) => b.createdAt - a.createdAt);
+  return pending;
+}
+/**
+ * Worker claims a shielded payout (Hop 2 of 2-hop).
+ * ShieldedPayoutV2 PDA signs the transfer from payout_token_account to claimer.
+ * NO vault or employer accounts in this tx = full metadata break.
+ */
+export async function claimPayoutV2(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessOwner: PublicKey,
+  streamIndex: number,
+  nonce: number,
+  payoutTokenAccount: PublicKey,
+  claimerTokenAccount: PublicKey
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [businessPDA] = getBusinessPDA(businessOwner);
+  const [shieldedPayoutPDA] = getShieldedPayoutV2PDA(businessPDA, streamIndex, nonce);
+
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(nonce));
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },   // claimer
+      { pubkey: businessPDA, isSigner: false, isWritable: false },      // business
+      { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true }, // shielded_payout
+      { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },// payout_token_account
+      { pubkey: claimerTokenAccount, isSigner: false, isWritable: true }, // claimer_token_account
+      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data: Buffer.concat([DISCRIMINATORS.claim_payout_v2, streamIndexBuf, nonceBuf]),
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
+}
+
+// ============================================================
+// Phase 2: Programmable Viewing Policies
+// ============================================================
+
+/**
+ * Revoke decrypt access for a wallet on a stream's salary + accrued handles.
+ * Only the business owner can call this.
+ */
+export async function revokeViewAccessV2(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessOwner: PublicKey,
+  streamIndex: number,
+  targetWallet: PublicKey
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [businessPDA] = getBusinessPDA(businessOwner);
+  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
+  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
+
+  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
+  if (!stream) {
+    throw new Error(`v2 employee stream ${streamIndex} not found`);
+  }
+
+  const handles = getEmployeeStreamV2DecryptHandles(stream);
+  const salaryAllowance = getIncoAllowancePda(handles.salaryHandleValue, targetWallet);
+  const accruedAllowance = getIncoAllowancePda(handles.accruedHandleValue, targetWallet);
+
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
+      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false },
+      { pubkey: targetWallet, isSigner: false, isWritable: false },
+      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
+      { pubkey: accruedAllowance, isSigner: false, isWritable: true },
+      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data: Buffer.concat([DISCRIMINATORS.revoke_view_access_v2, streamIndexBuf]),
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
+}
+
+/**
+ * Grant an auditor wallet read-only access to salary + accrued handles.
+ * Only the business owner can call this.
+ */
+export async function grantAuditorViewAccessV2(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessOwner: PublicKey,
+  streamIndex: number,
+  auditorWallet: PublicKey
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [businessPDA] = getBusinessPDA(businessOwner);
+  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
+  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
+
+  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
+  if (!stream) {
+    throw new Error(`v2 employee stream ${streamIndex} not found`);
+  }
+
+  const handles = getEmployeeStreamV2DecryptHandles(stream);
+  const salaryAllowance = getIncoAllowancePda(handles.salaryHandleValue, auditorWallet);
+  const accruedAllowance = getIncoAllowancePda(handles.accruedHandleValue, auditorWallet);
+
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
+      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false },
+      { pubkey: auditorWallet, isSigner: false, isWritable: false },
+      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
+      { pubkey: accruedAllowance, isSigner: false, isWritable: true },
+      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data: Buffer.concat([DISCRIMINATORS.grant_auditor_view_access_v2, streamIndexBuf]),
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
+}
+
+// ============================================================
+// Phase 2: Keeper-Relayed Claims
+// ============================================================
+
+/**
+ * Worker signs an off-chain claim authorization message.
+ * Returns the signed message and signature for the keeper to submit on-chain.
+ *
+ * Message format: "claim:<streamIndex>:<nonce>:<expiry>"
+ */
+export async function signClaimAuthorization(
+  wallet: WalletContextState,
+  streamIndex: number,
+  nonce: number,
+  expiry: number = 0
+): Promise<{ message: Uint8Array; signature: Uint8Array; publicKey: PublicKey }> {
+  if (!wallet.publicKey || !wallet.signMessage) {
+    throw new Error('Wallet not connected or does not support signMessage');
+  }
+
+  const messageStr = `claim:${streamIndex}:${nonce}:${expiry}`;
+  const message = new TextEncoder().encode(messageStr);
+  const signature = await wallet.signMessage(message);
+
+  return {
+    message,
+    signature,
+    publicKey: wallet.publicKey,
+  };
+}
+
+/**
+ * Worker signs an off-chain withdrawal request authorization message (Ghost Mode).
+ * Returns the signed message and signature for the keeper to submit on-chain.
+ *
+ * Message format: "withdraw:<streamIndex>:<timestamp>"
+ */
+export async function signWithdrawAuthorization(
+  wallet: WalletContextState,
+  streamIndex: number,
+  timestamp: number
+): Promise<{ message: Uint8Array; signature: Uint8Array; publicKey: PublicKey }> {
+  if (!wallet.publicKey || !wallet.signMessage) {
+    throw new Error('Wallet not connected or does not support signMessage');
+  }
+
+  const messageStr = `withdraw:${streamIndex}:${timestamp}`;
+  const message = new TextEncoder().encode(messageStr);
+  const signature = await wallet.signMessage(message);
+
+  return {
+    message,
+    signature,
+    publicKey: wallet.publicKey,
+  };
+}

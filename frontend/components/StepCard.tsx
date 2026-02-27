@@ -21,16 +21,20 @@ const stateLabel: Record<StepState, { text: string; tone: 'success' | 'warning' 
 export default function StepCard({ number, title, description, state, children }: StepCardProps) {
   const label = stateLabel[state];
   return (
-    <section className={`step-card step-${state}`}>
-      <div className="step-card-head">
-        <div>
-          <div className="step-chip">Step {number}</div>
-          <h2 className="step-title">{title}</h2>
-          <p className="step-description">{description}</p>
+    <section className={`step-card step-${state} glass transition-all duration-300 hover:shadow-2xl`}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4 mb-6">
+        <div className="flex items-center gap-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-sm font-bold text-white shadow-lg">
+            {number}
+          </div>
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
+            <p className="text-sm font-medium text-slate-500">{description}</p>
+          </div>
         </div>
         <StatusPill tone={label.tone}>{label.text}</StatusPill>
       </div>
-      <div className="step-card-body">{children}</div>
+      <div className="step-card-body px-1">{children}</div>
     </section>
   );
 }
