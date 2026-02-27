@@ -91,4 +91,28 @@ pub enum PayrollError {
     #[msg("Accrual must be fresh (within 30s) before settle")]
     AccrualNotFresh,
 
+    #[msg("Payout has already been claimed")]
+    PayoutAlreadyClaimed,
+
+    #[msg("Payout has been cancelled")]
+    PayoutAlreadyCancelled,
+
+    #[msg("Payout has expired")]
+    PayoutExpired,
+
+    #[msg("Payout has not expired yet")]
+    PayoutNotExpired,
+
+    #[msg("Claimer is not authorized for this payout")]
+    UnauthorizedClaimer,
+
+    #[msg("Invalid claim authorization signature")]
+    InvalidClaimAuthorization,
+
+    #[msg("Claim authorization has expired")]
+    ClaimAuthorizationExpired,
+
+    #[msg("Caller is not the configured keeper")]
+    KeeperNotAuthorized,
+
 }

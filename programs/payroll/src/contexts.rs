@@ -4,6 +4,7 @@ use ephemeral_rollups_sdk::anchor::{commit, delegate};
 
 use crate::constants::*;
 use crate::state::*;
+use crate::errors::PayrollError;
 
 // ============================================================
 // Setup Contexts
@@ -557,6 +558,41 @@ pub struct RequestWithdrawV2<'info> {
 
 #[derive(Accounts)]
 #[instruction(stream_index: u64)]
+pub struct KeeperRequestWithdrawV2<'info> {
+    /// Authorized Keeper pays and signs on behalf of worker.
+    #[account(mut, address = stream_config_v2.keeper_pubkey @ PayrollError::UnauthorizedKeeper)]
+    pub keeper: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
+        bump = business.bump
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        seeds = [STREAM_CONFIG_V2_SEED, business.key().as_ref()],
+        bump = stream_config_v2.bump,
+        has_one = business
+    )]
+    pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+
+    /// CHECK: Employee stream PDA for `(business, stream_index)`. Can be delegated.
+    pub employee_stream: AccountInfo<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = keeper,
+        space = WithdrawRequestV2::LEN,
+        seeds = [WITHDRAW_REQUEST_V2_SEED, business.key().as_ref(), &stream_index.to_le_bytes()],
+        bump
+    )]
+    pub withdraw_request_v2: Account<'info, WithdrawRequestV2>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(stream_index: u64, nonce: u64)]
 pub struct ProcessWithdrawRequestV2<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -593,13 +629,30 @@ pub struct ProcessWithdrawRequestV2<'info> {
     )]
     pub withdraw_request_v2: Account<'info, WithdrawRequestV2>,
 
-    /// CHECK: Vault token account.
+    /// Phase 2b: Shielded payout PDA — initialized here as the "claim ticket".
+    /// Funds are transferred FROM vault INTO payout_token_account (2-hop).
+    #[account(
+        init,
+        payer = caller,
+        space = ShieldedPayoutV2::LEN,
+        seeds = [
+            SHIELDED_PAYOUT_V2_SEED,
+            business.key().as_ref(),
+            &stream_index.to_le_bytes(),
+            &nonce.to_le_bytes()
+        ],
+        bump
+    )]
+    pub shielded_payout: Account<'info, ShieldedPayoutV2>,
+
+    /// CHECK: Vault's Inco Token account (source — funds leave here).
     #[account(mut, address = vault.token_account)]
     pub vault_token_account: AccountInfo<'info>,
 
-    /// CHECK: Employee destination token account.
+    /// CHECK: Shielded payout PDA's Inco Token account (destination — funds arrive here).
+    /// This is the intermediate hop account that breaks the employer↔worker link.
     #[account(mut)]
-    pub employee_token_account: AccountInfo<'info>,
+    pub payout_token_account: AccountInfo<'info>,
 
     /// CHECK: Inco Token Program
     pub inco_token_program: AccountInfo<'info>,
@@ -617,6 +670,7 @@ pub struct ProcessWithdrawRequestV2<'info> {
 
 #[derive(Accounts)]
 pub struct PauseStreamV2<'info> {
+
     #[account(mut)]
     pub caller: Signer<'info>,
 
@@ -759,5 +813,260 @@ pub struct GrantBonusV2<'info> {
     /// CHECK: Verified by address constraint (`#[account(address = INCO_LIGHTNING_ID)]`).
     #[account(address = INCO_LIGHTNING_ID)]
     pub inco_lightning_program: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+// ============================================================
+// Phase 2b: Shielded Payout Contexts (True 2-Hop)
+// ============================================================
+
+/// Worker claims a shielded payout. PDA signs the transfer.
+/// No vault or employer accounts in this tx — full metadata break.
+#[derive(Accounts)]
+#[instruction(stream_index: u64, nonce: u64)]
+pub struct ClaimPayoutV2<'info> {
+    /// Worker signs to claim their shielded payout.
+    #[account(mut)]
+    pub claimer: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
+        bump = business.bump
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        mut,
+        seeds = [
+            SHIELDED_PAYOUT_V2_SEED,
+            business.key().as_ref(),
+            &stream_index.to_le_bytes(),
+            &nonce.to_le_bytes()
+        ],
+        bump = shielded_payout.bump,
+        constraint = shielded_payout.business == business.key(),
+    )]
+    pub shielded_payout: Account<'info, ShieldedPayoutV2>,
+
+    /// CHECK: Shielded payout PDA's Inco token account (source — holds the buffered funds).
+    #[account(mut)]
+    pub payout_token_account: AccountInfo<'info>,
+
+    /// CHECK: Worker's destination Inco token account.
+    #[account(mut)]
+    pub claimer_token_account: AccountInfo<'info>,
+
+    /// CHECK: Inco Token Program
+    pub inco_token_program: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning Program
+    #[account(address = INCO_LIGHTNING_ID)]
+    pub inco_lightning_program: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Business owner cancels an expired, unclaimed shielded payout.
+/// Returns funds from payout_token_account back to vault_token_account (PDA signs).
+#[derive(Accounts)]
+#[instruction(stream_index: u64, nonce: u64)]
+pub struct CancelExpiredPayoutV2<'info> {
+    /// Business owner cancels expired unclaimed payout.
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, owner.key().as_ref()],
+        bump = business.bump,
+        has_one = owner,
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED, business.key().as_ref()],
+        bump = vault.bump,
+        has_one = business,
+    )]
+    pub vault: Account<'info, BusinessVault>,
+
+    #[account(
+        mut,
+        seeds = [
+            SHIELDED_PAYOUT_V2_SEED,
+            business.key().as_ref(),
+            &stream_index.to_le_bytes(),
+            &nonce.to_le_bytes()
+        ],
+        bump = shielded_payout.bump,
+        constraint = shielded_payout.business == business.key(),
+    )]
+    pub shielded_payout: Account<'info, ShieldedPayoutV2>,
+
+    /// CHECK: Shielded payout PDA's Inco token account (source — return funds from here).
+    #[account(mut)]
+    pub payout_token_account: AccountInfo<'info>,
+
+    /// CHECK: Vault's Inco Token account (destination — funds return here).
+    #[account(mut, address = vault.token_account)]
+    pub vault_token_account: AccountInfo<'info>,
+
+    /// CHECK: Inco Token Program
+    pub inco_token_program: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning Program
+    #[account(address = INCO_LIGHTNING_ID)]
+    pub inco_lightning_program: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+// ============================================================
+// Phase 2: Programmable Viewing Policies
+// ============================================================
+
+/// Owner revokes decrypt access for a wallet on a stream's handles.
+#[derive(Accounts)]
+#[instruction(stream_index: u64)]
+pub struct RevokeViewAccessV2<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
+        bump = business.bump
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        seeds = [STREAM_CONFIG_V2_SEED, business.key().as_ref()],
+        bump = stream_config_v2.bump,
+        has_one = business
+    )]
+    pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+
+    /// CHECK: Employee stream PDA. May be delegated; we only read/validate PDA key.
+    pub employee: AccountInfo<'info>,
+
+    /// CHECK: Wallet whose access is being revoked.
+    pub target_wallet: AccountInfo<'info>,
+
+    /// CHECK: Optional Keeper wallet for off-chain authorization.
+    pub keeper_wallet: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning allowance PDA for salary handle.
+    #[account(mut)]
+    pub salary_allowance_account: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning allowance PDA for accrued handle.
+    #[account(mut)]
+    pub accrued_allowance_account: AccountInfo<'info>,
+
+    /// CHECK: Verified by address constraint.
+    #[account(address = INCO_LIGHTNING_ID)]
+    pub inco_lightning_program: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Owner grants an auditor read-only access to salary + accrued handles.
+#[derive(Accounts)]
+#[instruction(stream_index: u64)]
+pub struct GrantAuditorViewAccessV2<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
+        bump = business.bump
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        seeds = [STREAM_CONFIG_V2_SEED, business.key().as_ref()],
+        bump = stream_config_v2.bump,
+        has_one = business
+    )]
+    pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+
+    /// CHECK: Employee stream PDA.
+    pub employee: AccountInfo<'info>,
+
+    /// CHECK: Auditor wallet to grant access to.
+    pub auditor_wallet: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning allowance PDA for salary handle.
+    #[account(mut)]
+    pub salary_allowance_account: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning allowance PDA for accrued handle.
+    #[account(mut)]
+    pub accrued_allowance_account: AccountInfo<'info>,
+
+    /// CHECK: Verified by address constraint.
+    #[account(address = INCO_LIGHTNING_ID)]
+    pub inco_lightning_program: AccountInfo<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+// ============================================================
+// Phase 2: Keeper-Relayed Claims
+// ============================================================
+
+/// Keeper claims a shielded payout on behalf of the worker.
+/// The worker's wallet never appears as a signer in this tx.
+#[derive(Accounts)]
+#[instruction(stream_index: u64, nonce: u64)]
+pub struct KeeperClaimOnBehalfV2<'info> {
+    /// Keeper is the signer (not the worker).
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+
+    #[account(
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
+        bump = business.bump
+    )]
+    pub business: Account<'info, Business>,
+
+    #[account(
+        seeds = [STREAM_CONFIG_V2_SEED, business.key().as_ref()],
+        bump = stream_config_v2.bump,
+        has_one = business
+    )]
+    pub stream_config_v2: Account<'info, BusinessStreamConfigV2>,
+
+    #[account(
+        mut,
+        seeds = [
+            SHIELDED_PAYOUT_V2_SEED,
+            business.key().as_ref(),
+            &stream_index.to_le_bytes(),
+            &nonce.to_le_bytes()
+        ],
+        bump = shielded_payout.bump,
+        constraint = shielded_payout.business == business.key(),
+    )]
+    pub shielded_payout: Account<'info, ShieldedPayoutV2>,
+
+    /// CHECK: Shielded payout PDA's Inco token account (source).
+    #[account(mut)]
+    pub payout_token_account: AccountInfo<'info>,
+
+    /// CHECK: Worker's destination Inco token account.
+    #[account(mut)]
+    pub destination_token_account: AccountInfo<'info>,
+
+    /// CHECK: Inco Token Program
+    pub inco_token_program: AccountInfo<'info>,
+
+    /// CHECK: Inco Lightning Program
+    #[account(address = INCO_LIGHTNING_ID)]
+    pub inco_lightning_program: AccountInfo<'info>,
+
+    /// CHECK: Ed25519 program for signature verification.
+    /// address = ed25519_program::ID
+    pub ed25519_program: AccountInfo<'info>,
+
     pub system_program: Program<'info, System>,
 }

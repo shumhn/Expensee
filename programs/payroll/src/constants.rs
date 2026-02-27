@@ -45,6 +45,10 @@ pub const EMPLOYEE_V2_SEED: &[u8] = b"employee_v2";
 
 /// v2 withdraw request seed
 pub const WITHDRAW_REQUEST_V2_SEED: &[u8] = b"withdraw_request_v2";
+/// v2 shielded payout seed (Phase 2: who-paid-whom privacy)
+pub const SHIELDED_PAYOUT_V2_SEED: &[u8] = b"shielded_payout";
+/// Default expiry for unclaimed shielded payouts: 7 days
+pub const DEFAULT_PAYOUT_EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
 pub const RATE_HISTORY_V2_SEED: &[u8] = b"rate_history_v2";
 pub const RATE_HISTORY_MAX_ENTRIES: usize = 16;
 

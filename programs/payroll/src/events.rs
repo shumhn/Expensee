@@ -54,3 +54,43 @@ pub struct StreamDeactivated {
     pub stream_index: u64,
     pub timestamp: i64,
 }
+
+// ============================================================
+// Phase 2: Shielded Payout Events
+// ============================================================
+
+#[event]
+pub struct PayoutBuffered {
+    /// Stream index the payout belongs to.
+    pub stream_index: u64,
+    /// One-time nonce for this payout.
+    pub nonce: u64,
+    /// Encrypted amount handle (for audit trail).
+    pub amount_handle: u128,
+    /// Inco token account holding the buffered funds.
+    pub payout_token_account: Pubkey,
+    /// When the payout was created.
+    pub created_at: i64,
+    /// When the payout expires (claimable until then).
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct PayoutClaimed {
+    /// Stream index the payout belongs to.
+    pub stream_index: u64,
+    /// One-time nonce for this payout.
+    pub nonce: u64,
+    /// Timestamp of the claim.
+    pub claimed_at: i64,
+}
+
+#[event]
+pub struct PayoutCancelled {
+    /// Stream index the payout belongs to.
+    pub stream_index: u64,
+    /// One-time nonce for this payout.
+    pub nonce: u64,
+    /// Timestamp of the cancellation.
+    pub cancelled_at: i64,
+}
