@@ -960,7 +960,10 @@ pub mod payroll {
 
         if elapsed <= 0 {
             // Nothing left to accrue. For bounded streams this means period end has been reached.
-            // Keep stream active so withdraw/redelegate flows remain valid; accrual stays clipped by period_end.
+            // Keep stream active so withdraw/redelegate flows remain valid.
+            // IMPORTANT: Still update last_accrual_time so the freshness guard in
+            // process_withdraw_request_v2 passes after this accrue call.
+            employee.last_accrual_time = clock.unix_timestamp;
             return Ok(());
         }
 
