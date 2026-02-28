@@ -82,6 +82,7 @@ flowchart TB
     %% 1. FRONTEND LAYER
     EMPLOYER["Employer Dashboard\n(/employer)"]
     EMPLOYEE["Employee Dashboard\n(/employee)"]
+    BRIDGE_UI["Token Bridge\n(/bridge)"]
     
     %% 2. AGENT & WALLET LAYER
     AGENT["OnyxFii AI Agent\n(Conversational UI)"]
@@ -90,10 +91,12 @@ flowchart TB
     EMPLOYER --> AGENT
     EMPLOYER --> WALLET
     EMPLOYEE --> WALLET
+    BRIDGE_UI --> WALLET
 
     %% 3. API LAYER
     APIS["Next.js API Routes\n(Agent, Bridge, Faucet)"]
     AGENT --> APIS
+    BRIDGE_UI -->|"Wrap/Unwrap"| APIS
     
     %% 4. BACKEND AUTOMATION LAYER
     KEEPER["Keeper Service (:9090)\nWorker Loop + REST API"]
@@ -118,6 +121,7 @@ flowchart TB
     MAGIC["MagicBlock TEE\n(Ephemeral Rollups)"]
 
     RELAY -->|"Init Account"| INCO_T
+    APIS -->|"Mint/Burn"| INCO_T
     PAYROLL --> INCO_T
     PAYROLL --> INCO_L
     PAYROLL --> MAGIC
@@ -131,6 +135,7 @@ flowchart TB
 | **Keeper Service** | TypeScript · Node.js | ~3,200 | Off-chain orchestrator: withdraw queue processing, accrual, settlement, claim relay |
 | **Umbra Relay** | Node.js (CJS) | ~420 | Stealth destination provisioning: creates ephemeral token accounts per payout |
 | **OnyxFii AI Agent** | Next.js APIs + React | ~1,950 | Conversational payroll assistant: multi-step guided setup, LLM planner, execution state |
+| **Token Bridge** | Next.js + Smart Contracts | ~400 | Wrap/unwrap interface converting standard SPL tokens to/from confidential Inco tokens |
 | **Frontend** | Next.js · React | ~260KB | Employer/Employee dashboards, AI agent chat, bridge UI |
 | **Inco Lightning** | Solana Program | — | Fully Homomorphic Encryption engine for encrypted arithmetic |
 | **Inco Token Program** | Solana Program | — | Confidential token transfers with encrypted balances |
@@ -294,6 +299,35 @@ flowchart TB
     PIPELINE --> ALLOW
     PIPELINE --> DELEGATE
     COMMIT --> PIPELINE
+```
+
+### 5. Cross-Chain Token Bridge (Wrap/Unwrap)
+
+```mermaid
+sequenceDiagram
+    participant U as User (Wallet)
+    participant UI as Bridge UI
+    participant API as Bridge API
+    participant S as SPL Token Program
+    participant I as Inco Token Program
+    participant E as Escrow Keypair (Backend)
+
+    Note over U,I: Phase 1 — Wrap (Public -> Private)
+    U->>UI: Input amount & confidential account
+    UI->>API: POST /api/bridge/build-wrap
+    API-->>UI: Return transaction (mint/burn instructions)
+    UI->>U: Request signature
+    U->>S: Transfer public tokens to Escrow
+    U->>I: Mint/Transfer confidential tokens to User's private account
+
+    Note over U,I: Phase 2 — Unwrap (Private -> Public)
+    U->>UI: Input amount & destination wallet
+    UI->>API: POST /api/bridge/build-unwrap
+    API-->>API: Escrow partial-signs transaction
+    API-->>UI: Return partial-signed transaction
+    UI->>U: Request signature
+    U->>I: Burn/Transfer confidential tokens to Escrow
+    E->>S: Transfer public tokens from Escrow to User's workspace
 ```
 
 ---
