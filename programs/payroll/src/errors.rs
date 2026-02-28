@@ -115,4 +115,7 @@ pub enum PayrollError {
     #[msg("Caller is not the configured keeper")]
     KeeperNotAuthorized,
 
+    #[msg("Fixed destination route is disabled; use private shield route")]
+    FixedDestinationRouteDisabled,
+
 }

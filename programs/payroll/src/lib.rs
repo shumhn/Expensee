@@ -318,7 +318,10 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Add a v2 employee stream with fixed payout destination.
+    /// Add a v2 employee stream.
+    ///
+    /// `employee_token_account` must be `Pubkey::default()` in strict privacy mode.
+    /// Destination is selected at claim-time via the shielded payout flow.
     pub fn add_employee_stream_v2(
         ctx: Context<AddEmployeeStreamV2>,
         employee_auth_hash: [u8; 32],
@@ -339,6 +342,10 @@ pub mod payroll {
             !ctx.accounts.stream_config_v2.is_paused,
             PayrollError::StreamPaused
         );
+        require!(
+            employee_token_account == Pubkey::default(),
+            PayrollError::FixedDestinationRouteDisabled
+        );
 
         let cfg = &mut ctx.accounts.stream_config_v2;
         let stream = &mut ctx.accounts.employee_stream_v2;
@@ -353,7 +360,7 @@ pub mod payroll {
         stream.business = ctx.accounts.business.key();
         stream.stream_index = stream_index;
         stream.employee_auth_hash = employee_auth_hash;
-        stream.employee_token_account = employee_token_account;
+        stream.destination_route_commitment = employee_token_account.to_bytes();
         // Register the encrypted salary rate with Inco Lightning and store the returned handle.
         // IMPORTANT: Lightning expects a ciphertext payload here (not a handle).
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
@@ -391,7 +398,7 @@ pub mod payroll {
 
         msg!("✅ v2 employee stream created");
         msg!("   Stream Index: {}", stream.stream_index);
-        msg!("   Payout Token Account: {}", stream.employee_token_account);
+        msg!("   Destination Route: claim-time only (no fixed on-chain destination)");
         msg!("   Salary: ENCRYPTED");
         if period_end != 0 {
             msg!("   Period: {} → {}", period_start, period_end);
@@ -1045,7 +1052,11 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Auto-settle v2 stream to fixed employee token account.
+    /// Auto-settle v2 stream.
+    ///
+    /// For legacy streams with a non-zero fixed destination commitment, destination
+    /// must match that pinned account. For privacy streams (all-zero commitment),
+    /// destination is supplied per settlement call.
     pub fn auto_settle_stream_v2(
         ctx: Context<AutoSettleStreamV2>,
         stream_index: u64,
@@ -1083,10 +1094,13 @@ pub mod payroll {
         let mut employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
         require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
-        require!(
-            ctx.accounts.employee_token_account.key() == employee.employee_token_account,
-            PayrollError::InvalidPayoutDestination
-        );
+        if employee.destination_route_commitment != [0u8; 32] {
+            let pinned_destination = Pubkey::new_from_array(employee.destination_route_commitment);
+            require!(
+                ctx.accounts.employee_token_account.key() == pinned_destination,
+                PayrollError::InvalidPayoutDestination
+            );
+        }
 
         let clock = Clock::get()?;
         let elapsed_since_settle = clock
@@ -1224,9 +1238,9 @@ pub mod payroll {
 
         // Authenticate requester via employee auth hash.
         let requester = ctx.accounts.employee_signer.key();
-        let digest: [u8; 32] = Sha256::digest(requester.as_ref()).into();
+        let requester_auth_hash: [u8; 32] = Sha256::digest(requester.as_ref()).into();
         require!(
-            digest == employee.employee_auth_hash,
+            requester_auth_hash == employee.employee_auth_hash,
             PayrollError::InvalidEmployeeSigner
         );
 
@@ -1234,7 +1248,7 @@ pub mod payroll {
         let req = &mut ctx.accounts.withdraw_request_v2;
         req.business = business_key;
         req.stream_index = stream_index;
-        req.requester = requester;
+        req.requester_auth_hash = requester_auth_hash;
         req.requested_at = clock.unix_timestamp;
         req.is_pending = true;
         req.bump = ctx.bumps.withdraw_request_v2;
@@ -1247,11 +1261,10 @@ pub mod payroll {
     /// Keeper requests a v2 withdrawal on behalf of an employee (Ghost Mode).
     ///
     /// The worker signs an off-chain payload and the Keeper executes this.
-    /// Does not require the worker_pubkey to remain perfectly private.
+    /// Stores only the worker auth commitment hash on-chain (no raw worker pubkey).
     pub fn keeper_request_withdraw_v2(
         ctx: Context<KeeperRequestWithdrawV2>,
         stream_index: u64,
-        worker_pubkey: Pubkey,
     ) -> Result<()> {
         let business_key = ctx.accounts.business.key();
         let stream_index_bytes = stream_index.to_le_bytes();
@@ -1271,19 +1284,12 @@ pub mod payroll {
             PayrollError::InvalidStreamIndex
         );
 
-        // Verify the worker_pubkey matches the stream's employee_auth_hash
-        let digest: [u8; 32] = Sha256::digest(worker_pubkey.as_ref()).into();
-        require!(
-            digest == employee.employee_auth_hash,
-            PayrollError::InvalidWithdrawRequester
-        );
-
         let clock = Clock::get()?;
         let req = &mut ctx.accounts.withdraw_request_v2;
         req.business = business_key;
         req.stream_index = stream_index;
-        // Store the worker's pubkey (verified above) so process_withdraw can re-check.
-        req.requester = worker_pubkey;
+        // Store only auth commitment; do not write worker pubkey on-chain.
+        req.requester_auth_hash = employee.employee_auth_hash;
         req.requested_at = clock.unix_timestamp;
         req.is_pending = true;
         req.bump = ctx.bumps.withdraw_request_v2;
@@ -1357,11 +1363,10 @@ pub mod payroll {
             PayrollError::InvalidStreamIndex
         );
 
-        // Ensure the withdraw request is from the correct employee wallet.
-        let requester = ctx.accounts.withdraw_request_v2.requester;
-        let digest: [u8; 32] = Sha256::digest(requester.as_ref()).into();
+        // Ensure the withdraw request is from the correct employee auth commitment.
+        let requester_auth_hash = ctx.accounts.withdraw_request_v2.requester_auth_hash;
         require!(
-            digest == employee.employee_auth_hash,
+            requester_auth_hash == employee.employee_auth_hash,
             PayrollError::InvalidWithdrawRequester
         );
 

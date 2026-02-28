@@ -55,8 +55,10 @@ pub struct EmployeeStreamV2 {
     pub stream_index: u64,
     /// SHA-256 hash commitment of employee wallet.
     pub employee_auth_hash: [u8; 32],
-    /// Fixed payout destination account.
-    pub employee_token_account: Pubkey,
+    /// Optional legacy fixed destination bytes.
+    /// - `[0u8; 32]` means no fixed destination (privacy mode; destination chosen at claim-time).
+    /// - non-zero bytes are interpreted as a legacy fixed destination pubkey.
+    pub destination_route_commitment: [u8; 32],
     /// Encrypted salary rate handle.
     pub encrypted_salary_rate: EncryptedHandle,
     /// Encrypted accrued amount handle.
@@ -82,7 +84,7 @@ impl EmployeeStreamV2 {
         32 +                     // business
         8 +                      // stream_index
         32 +                     // employee_auth_hash
-        32 +                     // employee_token_account
+        32 +                     // destination_route_commitment
         32 +                     // encrypted_salary_rate
         32 +                     // encrypted_accrued
         8 +                      // last_accrual_time
