@@ -7,20 +7,20 @@ export const COPY = {
     ops: 'Operations',
   },
   home: {
-    eyebrow: 'Real-time · Agentic · Private Payroll on Solana',
-    title: 'Stop managing payroll. Hire an Agent.',
+    eyebrow: 'Realtime Private Payroll on Solana',
+    title: 'Private Payroll for Realtime Teams',
     subtitle:
-      'OnyxFii is the world\'s first Autonomous Payroll Agent. Tell it who to pay. It handles the privacy, the math, and the movement of money.',
+      'Encrypt salary data, run continuous earnings, and settle payouts on demand with automation built in.',
     companiesTitle: 'For Companies',
     companiesText:
-      'Chat with the OnyxFii Agent to set up encrypted payroll streams. No forms, no spreadsheets — just tell the Agent your intent.',
+      'Set up private payroll records, fund your vault, and run payout operations with guided automation.',
     workersTitle: 'For Employees',
     workersText:
-      'Watch your earnings tick up in real-time. Cash out whenever you want. Your salary stays fully private on-chain.',
+      'Track live earnings, request payout when needed, and claim securely while salary amounts stay encrypted.',
   },
   employer: {
-    title: 'OnyxFii Agent',
-    subtitle: 'Your autonomous payroll assistant',
+    title: 'Expensee Payroll Console',
+    subtitle: 'Operate private realtime payroll with guided automation',
     step1: {
       title: 'Company setup',
       description: 'Create your company profile and payroll wallet.',
@@ -39,15 +39,15 @@ export const COPY = {
     },
     step5: {
       title: 'Go live and monitor',
-      description: 'Track readiness and payroll status before demoing payouts.',
+      description: 'Track readiness and payroll status before live payouts.',
     },
   },
   employee: {
     title: 'Employee Portal',
-    subtitle: 'View earnings and request payout',
+    subtitle: 'Track encrypted earnings and request payout anytime',
     sectionA: 'Find my payroll stream',
     sectionB: 'Live earnings',
-    sectionC: 'Withdraw payout',
+    sectionC: 'Payout journey',
     sectionD: 'Share verified earnings statement',
   },
 } as const;

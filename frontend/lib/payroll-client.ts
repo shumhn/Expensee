@@ -2137,6 +2137,19 @@ export interface ShieldedPayoutV2Account {
   bump: number;
 }
 
+export interface WorkerPayoutReceipt {
+  streamIndex: number;
+  nonce: number;
+  payoutPda: string;
+  payoutTokenAccount: string;
+  createdAt: number;
+  claimed: boolean;
+  cancelled: boolean;
+  bufferTx: string | null;
+  claimTx: string | null;
+  destinationTokenAccount: string | null;
+}
+
 /**
  * Fetch and parse a ShieldedPayoutV2 account.
  * Returns null if the account doesn't exist.
@@ -2249,6 +2262,150 @@ export async function getPendingPayoutsForWorker(
   // Sort by creation time (newest first).
   pending.sort((a, b) => b.createdAt - a.createdAt);
   return pending;
+}
+
+function discriminatorMatches(data: Buffer, expected: Buffer): boolean {
+  if (data.length < 8) return false;
+  return data.subarray(0, 8).equals(expected);
+}
+
+function instructionDataToBuffer(data: Buffer | Uint8Array | string): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (typeof data === 'string') return Buffer.from(bs58.decode(data));
+  return Buffer.from(data);
+}
+
+function resolveMessageAccountKeys(message: any): PublicKey[] {
+  try {
+    if (typeof message?.getAccountKeys === 'function') {
+      const keys = message.getAccountKeys();
+      if (Array.isArray(keys?.staticAccountKeys)) {
+        return keys.staticAccountKeys as PublicKey[];
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  if (Array.isArray(message?.accountKeys)) {
+    return message.accountKeys.map((k: any) => {
+      if (k instanceof PublicKey) return k;
+      if (k?.pubkey) return new PublicKey(k.pubkey);
+      return new PublicKey(k);
+    });
+  }
+  return [];
+}
+
+/**
+ * Fetch the latest payout receipt for a worker on a business.
+ * This includes auto-routed keeper claims, so UI can always show
+ * where the latest payout was delivered.
+ */
+export async function getLatestPayoutReceiptForWorker(
+  connection: Connection,
+  business: PublicKey,
+  workerWallet: PublicKey,
+): Promise<WorkerPayoutReceipt | null> {
+  const workerDigest = await crypto.subtle.digest('SHA-256', new Uint8Array(workerWallet.toBytes()));
+  const workerAuthHash = new Uint8Array(workerDigest);
+
+  const accounts = await connection.getProgramAccounts(PAYROLL_PROGRAM_ID, {
+    filters: [
+      { memcmp: { offset: 0, bytes: bs58.encode(SHIELDED_PAYOUT_V2_DISCRIMINATOR) } },
+      { memcmp: { offset: 8, bytes: business.toBase58() } },
+    ],
+  });
+
+  const mine = accounts
+    .map(({ pubkey, account }) => parseShieldedPayoutV2(pubkey, account.data as Buffer))
+    .filter((payout) =>
+      workerAuthHash.length === payout.employeeAuthHash.length &&
+      workerAuthHash.every((b, i) => b === payout.employeeAuthHash[i]),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  if (mine.length === 0) return null;
+  const latest = mine[0]!;
+
+  let bufferTx: string | null = null;
+  let claimTx: string | null = null;
+  let destinationTokenAccount: string | null = null;
+
+  try {
+    const sigs = await connection.getSignaturesForAddress(latest.address, { limit: 20 }, 'confirmed');
+    for (const s of sigs) {
+      if (s.err) continue;
+      const tx = await connection.getTransaction(s.signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      });
+      if (!tx) continue;
+
+      const msg: any = tx.transaction.message as any;
+      const accountKeys = resolveMessageAccountKeys(msg);
+      const instructions: any[] = Array.isArray(msg?.compiledInstructions)
+        ? msg.compiledInstructions
+        : [];
+
+      for (const ix of instructions) {
+        const programId = accountKeys[ix.programIdIndex];
+        if (!programId || !programId.equals(PAYROLL_PROGRAM_ID)) continue;
+        const data = instructionDataToBuffer(ix.data);
+
+        if (discriminatorMatches(data, DISCRIMINATORS.process_withdraw_request_v2)) {
+          const payoutPdaIdx = ix.accountKeyIndexes?.[6];
+          const payoutPda = typeof payoutPdaIdx === 'number' ? accountKeys[payoutPdaIdx] : null;
+          if (payoutPda && payoutPda.equals(latest.address) && !bufferTx) {
+            bufferTx = s.signature;
+          }
+        }
+
+        if (discriminatorMatches(data, DISCRIMINATORS.keeper_claim_on_behalf_v2)) {
+          const payoutPdaIdx = ix.accountKeyIndexes?.[3];
+          const destinationIdx = ix.accountKeyIndexes?.[5];
+          const payoutPda = typeof payoutPdaIdx === 'number' ? accountKeys[payoutPdaIdx] : null;
+          const destination = typeof destinationIdx === 'number' ? accountKeys[destinationIdx] : null;
+          if (payoutPda && payoutPda.equals(latest.address)) {
+            if (!claimTx) claimTx = s.signature;
+            if (destination && !destinationTokenAccount) {
+              destinationTokenAccount = destination.toBase58();
+            }
+          }
+        }
+
+        if (discriminatorMatches(data, DISCRIMINATORS.claim_payout_v2)) {
+          const payoutPdaIdx = ix.accountKeyIndexes?.[2];
+          const destinationIdx = ix.accountKeyIndexes?.[4];
+          const payoutPda = typeof payoutPdaIdx === 'number' ? accountKeys[payoutPdaIdx] : null;
+          const destination = typeof destinationIdx === 'number' ? accountKeys[destinationIdx] : null;
+          if (payoutPda && payoutPda.equals(latest.address)) {
+            if (!claimTx) claimTx = s.signature;
+            if (destination && !destinationTokenAccount) {
+              destinationTokenAccount = destination.toBase58();
+            }
+          }
+        }
+      }
+
+      if (claimTx && bufferTx && destinationTokenAccount) break;
+    }
+  } catch {
+    // Best-effort only; receipt still returns core payout data.
+  }
+
+  return {
+    streamIndex: latest.streamIndex,
+    nonce: latest.nonce,
+    payoutPda: latest.address.toBase58(),
+    payoutTokenAccount: latest.payoutTokenAccount.toBase58(),
+    createdAt: latest.createdAt,
+    claimed: latest.claimed,
+    cancelled: latest.cancelled,
+    bufferTx,
+    claimTx,
+    destinationTokenAccount,
+  };
 }
 /**
  * Worker claims a shielded payout (Hop 2 of 2-hop).

@@ -18,6 +18,8 @@
     "lint": "cd frontend && npm run lint",
     "deploy": "anchor deploy",
     "keeper:dev": "set -a && . backend/keeper/.env && set +a && npx ts-node --prefer-ts-exts -P backend/keeper/tsconfig.json backend/keeper/src/index.ts",
+    "umbra:relay:dev": "node services/umbra-relay/server.cjs",
+    "umbra:relay:self-test": "node services/umbra-relay/self-test.cjs",
     "privacy:purge": "node frontend/scripts/purge-v2-privacy.cjs"
   },
   "dependencies": {
