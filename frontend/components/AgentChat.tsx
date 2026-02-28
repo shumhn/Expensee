@@ -62,8 +62,6 @@ type AgentChatProps = {
     hydrated: boolean;
     onCancelBusy?: () => void;
     onClearChat?: () => void;
-    autoGrantDecrypt?: boolean;
-    setAutoGrantDecrypt?: (val: boolean) => void;
     autoGrantKeeperDecrypt?: boolean;
     setAutoGrantKeeperDecrypt?: (val: boolean) => void;
     boundPresetPeriod?: boolean;
@@ -121,8 +119,6 @@ export default function AgentChat({
     busy,
     onCancelBusy,
     onClearChat,
-    autoGrantDecrypt,
-    setAutoGrantDecrypt,
     autoGrantKeeperDecrypt,
     setAutoGrantKeeperDecrypt,
     boundPresetPeriod,
@@ -185,7 +181,6 @@ export default function AgentChat({
                         payPreset,
                         payAmount,
                         streamIndex,
-                        autoGrantDecrypt,
                         autoGrantKeeperDecrypt,
                         boundPresetPeriod
                     },
@@ -199,7 +194,7 @@ export default function AgentChat({
             console.error('[AgentChat] askGrok fetch error:', err);
             return { reply: `I couldn't reach my brain. Please try again.` };
         }
-    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase, autoGrantDecrypt, autoGrantKeeperDecrypt, boundPresetPeriod]);
+    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase, autoGrantKeeperDecrypt, boundPresetPeriod]);
 
     const handleSend = useCallback(async () => {
         const text = input.trim();
@@ -354,14 +349,14 @@ export default function AgentChat({
                             // Check if high-speed mode step exists and is pending
                             const hsStep = executionSteps.find(s => s.key === 'enable-high-speed');
                             if (hsStep && hsStep.status === 'pending') {
-                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The worker can now open the **Worker Portal** and view their live earnings.${proof}\n\n*Worker view access and automation decrypt were already handled in options.*\n\nType ${randomGoCmd()} to continue with **Enable High-speed Mode**, or you're all set!`);
+                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\nType ${randomGoCmd()} to continue with **Enable High-speed Mode**, or you're all set!`);
                                 setPhase('confirm_plan');
                             } else {
-                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The worker can now open the **Worker Portal** and view their live earnings.${proof}\n\n*Worker view access and automation decrypt were already handled in options.*\n\n🎉 **Setup is complete!** The worker can now open the **Worker Portal** at /employee.`);
+                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\n🎉 **Setup is complete!** The employee can now open the **Employee Portal** at /employee.`);
                                 setPhase('done');
                             }
                         } else if (step.key === 'enable-high-speed') {
-                            addAgentMsg(`⚡ **Step 8 (High-speed mode) enabled!** Your payroll stream is now delegated to MagicBlock TEE for real-time salary accrual.${proof}\n\n🎉 **Setup is complete!** The worker can now open the **Worker Portal** at /employee to view their live earnings and request withdrawals.`);
+                            addAgentMsg(`⚡ **Step 8 (High-speed mode) enabled!** Your payroll stream is now delegated to MagicBlock for faster delegated execution.${proof}\n\n🎉 **Setup is complete!** The employee can now open the **Employee Portal** at /employee for earnings and withdrawals.`);
                             setPhase('done');
                         } else if (step.key === 'create-depositor-token') {
                             addAgentMsg(`✅ **Step 5 (Company source account) created!** ${proof}\n\n**How much payroll funds** do you want to deposit into the vault for Step 6? (e.g. type "10" or "fund 100")`);
@@ -405,7 +400,6 @@ export default function AgentChat({
                     try {
                         const { reply } = await askGrok(text);
                         const questions = [
-                            `👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`,
                             `🤖 **Should the automation service be allowed to process confidential payouts automatically?** (yes/no)`,
                             `⏱️ **Should the payroll stop automatically at the end of this pay period?** (yes/no)`,
                         ];
@@ -419,16 +413,11 @@ export default function AgentChat({
                 }
 
                 if (optionStep === 0) {
-                    setAutoGrantDecrypt?.(isYes);
-                    addAgentMsg(isYes ? `✅ **Worker view access granted.**\n\n` : `⬜ **Manual view only.**\n\n`);
-                    addAgentMsg(`🤖 **Allow automation service to process payouts confidentiallly?** (yes/no)`);
-                    setOptionStep(1);
-                } else if (optionStep === 1) {
                     setAutoGrantKeeperDecrypt?.(isYes);
                     addAgentMsg(isYes ? `✅ **Automation enabled.**\n\n` : `⬜ **Manual settlement only.**\n\n`);
                     addAgentMsg(`⏱️ **Stop payroll automatically at the end of period?** (yes/no)`);
-                    setOptionStep(2);
-                } else if (optionStep === 2) {
+                    setOptionStep(1);
+                } else if (optionStep === 1) {
                     setBoundPresetPeriod?.(isYes);
                     addAgentMsg(isYes ? `✅ **Auto-stop active.**\n\n` : `⬜ **Continuous streaming.**\n\n`);
                     addAgentMsg(`🎯 **All options configured!** Type ${randomGoCmd()} to move to **Step 11: Create worker payroll record**.`);
@@ -440,7 +429,7 @@ export default function AgentChat({
             // ---- EDIT / MODIFY PLAN HANDLER ----
             if (hasNumber || isEditKeyword || isOptionsKeyword) {
                 if (isOptionsKeyword) {
-                    addAgentMsg(`Sure! Let's re-configure options.\n\n👁️ **Allow worker view access?** (yes/no)`);
+                    addAgentMsg(`Sure! Let's re-configure options.\n\n🤖 **Allow automation service decrypt access?** (yes/no)`);
                     setOptionStep(0);
                     setPhase('ask_options');
                     return;
@@ -491,7 +480,7 @@ export default function AgentChat({
         businessExists, vaultExists, configExists, addAgentMsg, addUserMsg,
         askGrok, executionSteps, onDraftPlan, onExecutePlan, onApplyPlan,
         setInput, walletAddress, setDepositAmount, setOptionStep, optionStep,
-        setAutoGrantDecrypt, setAutoGrantKeeperDecrypt, setBoundPresetPeriod
+        setAutoGrantKeeperDecrypt, setBoundPresetPeriod
     ]);
 
     const handleKeyDown = useCallback(

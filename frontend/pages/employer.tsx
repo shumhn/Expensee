@@ -11,8 +11,8 @@ import {
   INCO_TOKEN_PROGRAM_ID,
   adminWithdrawVaultV2,
   addEmployeeStreamV2,
+  commitAndUndelegateStreamV2,
   deactivateStreamV2,
-  grantEmployeeViewAccessV2,
   grantKeeperViewAccessV2,
   createIncoTokenAccount,
   createVaultTokenAccount,
@@ -28,14 +28,14 @@ import {
   getVaultAccount,
   initRateHistoryV2,
   initStreamConfigV2,
+  getMagicblockValidatorForRegion,
   updateKeeperV2,
   initVault,
   pauseStreamV2,
   registerBusiness,
+  redelegateStreamV2,
   resumeStreamV2,
   updateSalaryRateV2,
-  checkAllowanceStale,
-  getEmployeeStreamV2DecryptHandles,
   revokeViewAccessV2,
   grantAuditorViewAccessV2,
 } from "../lib/payroll-client";
@@ -59,6 +59,7 @@ const DEFAULT_AUTOMATION_WALLET =
   process.env.NEXT_PUBLIC_KEEPER_PUBKEY?.trim() ||
   "";
 type PayPreset = "per_second" | "hourly" | "weekly" | "monthly" | "fixed_total";
+type DestinationRouteMode = "private_shield";
 type AgentPlanDraft = {
   source: "heuristic" | "llm" | "toolkit";
   intent: string;
@@ -71,7 +72,6 @@ type AgentPlanDraft = {
   fixedTotalDays?: string;
   salaryPerSecond?: string;
   boundPresetPeriod?: boolean;
-  autoGrantDecrypt?: boolean;
   autoGrantKeeperDecrypt?: boolean;
   streamIndex?: number;
   bonusAmount?: string;
@@ -185,24 +185,26 @@ export default function EmployerPage() {
   const [settleIntervalSecs, setSettleIntervalSecs] = useState("10");
   const [depositAmount, setDepositAmount] = useState("10");
   const [hasConfirmedDeposit, setHasConfirmedDeposit] = useState(false);
+  const [vaultFundingObserved, setVaultFundingObserved] = useState(false);
   const [depositorTokenAccount, setDepositorTokenAccount] = useState("");
   const depositorTokenAccountRef = useRef(depositorTokenAccount);
   useEffect(() => { depositorTokenAccountRef.current = depositorTokenAccount; }, [depositorTokenAccount]);
-  const [depositorBalance, setDepositorBalance] = useState<string | null>(null);
-  const [vaultBalance, setVaultBalance] = useState<string | null>(null);
   const [vaultWithdrawAmount, setVaultWithdrawAmount] = useState("1");
   const [vaultWithdrawTokenAccount, setVaultWithdrawTokenAccount] =
     useState("");
 
   const [employeeWallet, setEmployeeWallet] = useState("");
   const [employeeTokenAccount, setEmployeeTokenAccount] = useState("");
+  const [destinationRouteMode, setDestinationRouteMode] =
+    useState<DestinationRouteMode>("private_shield");
   const [salaryPerSecond, setSalaryPerSecond] = useState("0.0001");
   const [payPreset, setPayPreset] = useState<PayPreset>("per_second");
   const [payAmount, setPayAmount] = useState("100"); // amount per hour/week/month or total amount (fixed_total)
   const [fixedTotalDays, setFixedTotalDays] = useState("30"); // used only when payPreset === 'fixed_total'
   const [boundPresetPeriod, setBoundPresetPeriod] = useState(true);
-  const [autoGrantDecrypt, setAutoGrantDecrypt] = useState(true);
   const [autoGrantKeeperDecrypt, setAutoGrantKeeperDecrypt] = useState(true);
+  const [autoEnableHighSpeedOnCreate, setAutoEnableHighSpeedOnCreate] =
+    useState(false);
 
   const [agentPrompt, setAgentPrompt] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
@@ -225,8 +227,6 @@ export default function EmployerPage() {
   const [v2ConfigExists, setV2ConfigExists] = useState(false);
   const [vaultMintMismatch, setVaultMintMismatch] = useState(false);
   const [fixingVaultMint, setFixingVaultMint] = useState(false);
-  const [allowanceStale, setAllowanceStale] = useState(false);
-  const [fixingAllowance, setFixingAllowance] = useState(false);
 
   const [v2Config, setV2Config] = useState<{
     keeper: string;
@@ -244,6 +244,7 @@ export default function EmployerPage() {
   const [streamStatus, setStreamStatus] = useState<{
     address: string;
     streamIndex: number;
+    hasFixedDestination: boolean;
     employeeTokenAccount: string;
     isActive: boolean;
     isDelegated: boolean;
@@ -291,6 +292,8 @@ export default function EmployerPage() {
   }, [streamIndexInput]);
 
   const hasWorkerRecord = Boolean(streamStatus);
+  const hasProgressedPastFunding = v2ConfigExists || hasWorkerRecord;
+  const hasVaultFundingSignal = vaultFundingObserved || hasProgressedPastFunding;
   const highSpeedOn = Boolean(
     streamStatus?.isDelegated || streamRoute?.delegated,
   );
@@ -308,7 +311,7 @@ export default function EmployerPage() {
   const stepStates = getEmployerStepStates({
     businessReady: businessExists,
     vaultReady: vaultExists,
-    vaultFunded: Number(vaultBalance || 0) > 0,
+    vaultFunded: hasVaultFundingSignal,
     configReady: v2ConfigExists,
     hasWorkerRecord,
     highSpeedOn,
@@ -401,6 +404,7 @@ export default function EmployerPage() {
         setEmployeeWallet(parsed.employeeWallet);
       if (typeof parsed?.employeeTokenAccount === "string")
         setEmployeeTokenAccount(parsed.employeeTokenAccount);
+      setDestinationRouteMode("private_shield");
       if (typeof parsed?.salaryPerSecond === "string")
         setSalaryPerSecond(parsed.salaryPerSecond);
       if (
@@ -412,8 +416,12 @@ export default function EmployerPage() {
       if (typeof parsed?.fixedTotalDays === "string")
         setFixedTotalDays(parsed.fixedTotalDays);
       setBoundPresetPeriod(typeof parsed?.boundPresetPeriod === "boolean" ? parsed.boundPresetPeriod : true);
-      setAutoGrantDecrypt(typeof parsed?.autoGrantDecrypt === "boolean" ? parsed.autoGrantDecrypt : true);
-      setAutoGrantKeeperDecrypt(typeof parsed?.autoGrantKeeperDecrypt === "boolean" ? parsed.autoGrantKeeperDecrypt : true);
+      setAutoGrantKeeperDecrypt(true);
+      setAutoEnableHighSpeedOnCreate(
+        typeof parsed?.autoEnableHighSpeedOnCreate === "boolean"
+          ? parsed.autoEnableHighSpeedOnCreate
+          : false,
+      );
       if (typeof parsed?.streamIndexInput === "string")
         setStreamIndexInput(parsed.streamIndexInput);
       if (typeof parsed?.agentApprovalMode === "string") {
@@ -426,6 +434,8 @@ export default function EmployerPage() {
       }
       if (typeof parsed?.hasConfirmedDeposit === "boolean")
         setHasConfirmedDeposit(parsed.hasConfirmedDeposit);
+      if (typeof parsed?.vaultFundingObserved === "boolean")
+        setVaultFundingObserved(parsed.vaultFundingObserved);
     } catch {
       // ignore
     }
@@ -586,7 +596,7 @@ export default function EmployerPage() {
             text:
               `Welcome back to OnyxFii! I've synchronized with the blockchain. 🤖\n\n` +
               `Your account status:\n✅ Company registered\n✅ Payroll vault ready\n✅ Automation configured\n\n` +
-              `Everything is set up. Ready to create a new payment stream? Just paste a **worker's wallet address** to begin.`,
+              `Everything is set up. Ready to create a new payment stream? Paste an **employee auth wallet address** to begin.`,
             timestamp: Date.now(),
           },
         ]);
@@ -637,7 +647,7 @@ export default function EmployerPage() {
           text:
             `Welcome back to OnyxFii! I've synchronized with the blockchain. 🤖\n\n` +
             `Your account status:\n${statusParts.join("\n")}\n\n` +
-            `The company is fully initialized. Ready to set up a new payment stream? Just paste a **worker's wallet address** to begin.`,
+            `The company is fully initialized. Ready to set up a new payment stream? Paste an **employee auth wallet address** to begin.`,
           timestamp: Date.now(),
         },
       ]);
@@ -687,16 +697,18 @@ export default function EmployerPage() {
           settleIntervalSecs,
           employeeWallet,
           employeeTokenAccount,
+          destinationRouteMode,
           salaryPerSecond,
           payPreset,
           payAmount,
           fixedTotalDays,
           boundPresetPeriod,
-          autoGrantDecrypt,
           autoGrantKeeperDecrypt,
+          autoEnableHighSpeedOnCreate,
           streamIndexInput,
           agentApprovalMode,
           hasConfirmedDeposit,
+          vaultFundingObserved,
         }),
       );
     } catch {
@@ -709,6 +721,7 @@ export default function EmployerPage() {
     vaultWithdrawTokenAccount,
     employeeTokenAccount,
     employeeWallet,
+    destinationRouteMode,
     keeperPubkey,
     ownerPubkey,
     salaryPerSecond,
@@ -716,13 +729,14 @@ export default function EmployerPage() {
     payAmount,
     fixedTotalDays,
     boundPresetPeriod,
-    autoGrantDecrypt,
     autoGrantKeeperDecrypt,
+    autoEnableHighSpeedOnCreate,
     agentApprovalMode,
     settleIntervalSecs,
     streamIndexInput,
     vaultTokenAccount,
     hasConfirmedDeposit,
+    vaultFundingObserved,
   ]);
 
   const loadState = useCallback(async () => {
@@ -828,7 +842,10 @@ export default function EmployerPage() {
           setStreamStatus({
             address: stream.address.toBase58(),
             streamIndex: stream.streamIndex,
-            employeeTokenAccount: stream.employeeTokenAccount.toBase58(),
+            hasFixedDestination: stream.hasFixedDestination,
+            employeeTokenAccount: stream.hasFixedDestination
+              ? stream.employeeTokenAccount.toBase58()
+              : "",
             isActive: stream.isActive,
             isDelegated: stream.isDelegated,
             owner: stream.owner.toBase58(),
@@ -837,58 +854,7 @@ export default function EmployerPage() {
             accruedHandle: accrued.toString(),
           });
 
-          // ── Auto-detect stale decrypt allowances ──
-          // If handles have rotated (after accrue/settle), the old Inco allowance PDAs become stale.
-          try {
-            const handles = getEmployeeStreamV2DecryptHandles(stream);
-            const workerAddr = employeeWallet
-              ? new PublicKey(employeeWallet)
-              : null;
-            const keeperAddr = v2Config?.keeper
-              ? new PublicKey(v2Config.keeper)
-              : null;
-
-            // Check salary handle allowance for employee
-            const salaryStale = workerAddr
-              ? await checkAllowanceStale(connection, handles.salaryHandleValue, workerAddr)
-              : false;
-
-            // Check salary handle allowance for keeper
-            const keeperStale = keeperAddr
-              ? await checkAllowanceStale(connection, handles.salaryHandleValue, keeperAddr)
-              : false;
-
-            setAllowanceStale(salaryStale || keeperStale);
-          } catch (e: any) {
-            console.warn('Allowance stale check failed:', e?.message);
-            setAllowanceStale(false);
-          }
         }
-      }
-
-      // Fetch token balances for agent context
-      try {
-        if (vault?.tokenAccount) {
-          const vBal = await connection.getTokenAccountBalance(vault.tokenAccount, 'confirmed').catch(() => null);
-          setVaultBalance(vBal?.value?.uiAmountString ?? null);
-        } else {
-          setVaultBalance(null);
-        }
-      } catch {
-        setVaultBalance(null);
-      }
-
-      // Fetch depositor (source account) balance
-      try {
-        if (depositorTokenAccount) {
-          const depPubkey = new PublicKey(depositorTokenAccount);
-          const dBal = await connection.getTokenAccountBalance(depPubkey, 'confirmed').catch(() => null);
-          setDepositorBalance(dBal?.value?.uiAmountString ?? null);
-        } else {
-          setDepositorBalance(null);
-        }
-      } catch {
-        setDepositorBalance(null);
       }
 
       setInitialDataLoaded(true);
@@ -919,6 +885,35 @@ export default function EmployerPage() {
       message: `Automation service wallet updated to ${keeper.toBase58()}`,
     };
   }, [connection, effectiveKeeperPubkey, wallet]);
+
+  const grantAutomationDecryptAccessTask = useCallback(
+    async (targetStreamIndex: number) => {
+      if (!ownerPubkey) throw new Error("Wallet not connected");
+      const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
+      if (!keeperKey) throw new Error("Automation wallet missing");
+      const keeper = mustPubkey("automation wallet", keeperKey);
+
+      const txid = await grantKeeperViewAccessV2(
+        connection,
+        wallet,
+        ownerPubkey,
+        targetStreamIndex,
+        keeper,
+      );
+      const relayTxid = await grantAuditorViewAccessV2(
+        connection,
+        wallet,
+        ownerPubkey,
+        targetStreamIndex,
+        keeper,
+      );
+      return {
+        txid: relayTxid,
+        message: "Automation decrypt + keeper relay reveal access granted.",
+      };
+    },
+    [connection, effectiveKeeperPubkey, ownerPubkey, v2Config?.keeper, wallet],
+  );
 
   useEffect(() => {
     if (!busy) return;
@@ -998,8 +993,7 @@ export default function EmployerPage() {
     if (draft.fixedTotalDays) setFixedTotalDays(draft.fixedTotalDays);
     if (draft.salaryPerSecond) setSalaryPerSecond(draft.salaryPerSecond);
     setBoundPresetPeriod(typeof draft.boundPresetPeriod === "boolean" ? draft.boundPresetPeriod : true);
-    setAutoGrantDecrypt(typeof draft.autoGrantDecrypt === "boolean" ? draft.autoGrantDecrypt : true);
-    setAutoGrantKeeperDecrypt(typeof draft.autoGrantKeeperDecrypt === "boolean" ? draft.autoGrantKeeperDecrypt : true);
+    setAutoGrantKeeperDecrypt(true);
     if (draft.depositAmount) setDepositAmount(draft.depositAmount);
     if (draft.recoverAmount) setVaultWithdrawAmount(draft.recoverAmount);
     if (draft.bonusAmount) setBonusAmount(draft.bonusAmount);
@@ -1009,30 +1003,34 @@ export default function EmployerPage() {
   }, []);
 
   const createWorkerDestinationAccountTask = useCallback(async () => {
-    const employee = mustPubkey("worker wallet", employeeWallet);
+    if (!ownerPubkey) throw new Error("Wallet not connected");
     const { txid, tokenAccount } = await createIncoTokenAccount(
       connection,
       wallet,
-      employee,
+      ownerPubkey,
       PAYUSD_MINT,
     );
     setEmployeeTokenAccount(tokenAccount.toBase58());
     return { txid, tokenAccount: tokenAccount.toBase58() };
-  }, [connection, employeeWallet, wallet]);
+  }, [connection, ownerPubkey, wallet]);
 
   const createWorkerPayrollRecordTask = useCallback(
-    async (overrideTokenAccount?: string) => {
+    async (
+      overrideTokenAccount?: string,
+      options?: {
+        autoEnableHighSpeed?: boolean;
+      },
+    ) => {
       if (!ownerPubkey) throw new Error("Wallet not connected");
-      const employee = mustPubkey("worker wallet", employeeWallet);
-      const tokenStr = overrideTokenAccount || employeeTokenAccount;
-      const employeeToken = mustPubkey("worker token account", tokenStr);
+      const employee = mustPubkey("employee auth wallet", employeeWallet);
+      const destinationRouteCommitment = PublicKey.default;
       const ratePerSecond = computePerSecondRate();
       const { periodStart, periodEnd } = computePeriodBounds();
       const result = await addEmployeeStreamV2(
         connection,
         wallet,
         employee,
-        employeeToken,
+        destinationRouteCommitment,
         ratePerSecond,
         periodStart,
         periodEnd,
@@ -1046,61 +1044,218 @@ export default function EmployerPage() {
         historyMessage = `rate history init failed (${reason})`;
       }
 
-      let decryptMessage = "worker view access skipped";
-      if (autoGrantDecrypt) {
-        try {
-          await grantEmployeeViewAccessV2(
-            connection,
-            wallet,
-            ownerPubkey,
-            result.streamIndex,
-            employee,
-          );
-          decryptMessage = "worker view access granted";
-        } catch (grantError: any) {
-          const reason = grantError?.message || "unknown error";
-          decryptMessage = `worker view grant failed (${reason})`;
-        }
-      }
+      const decryptMessage = "auth wallet decrypt disabled (privacy mode)";
 
       let keeperMessage = "automation decrypt skipped";
       if (autoGrantKeeperDecrypt) {
         try {
-          const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
-          if (!keeperKey) throw new Error("automation wallet missing");
-          const keeper = mustPubkey("automation wallet", keeperKey);
-          await grantKeeperViewAccessV2(
-            connection,
-            wallet,
-            ownerPubkey,
+          const grantRes = await grantAutomationDecryptAccessTask(
             result.streamIndex,
-            keeper,
           );
-          keeperMessage = "automation decrypt granted";
+          keeperMessage = grantRes.message;
         } catch (keeperError: any) {
           const reason = keeperError?.message || "unknown error";
           keeperMessage = `automation decrypt grant failed (${reason})`;
         }
       }
 
+      let highSpeedMessage = "high-speed mode remains off";
+      if (options?.autoEnableHighSpeed) {
+        try {
+          const validator = getMagicblockValidatorForRegion("eu");
+          await delegateStreamV2(
+            connection,
+            wallet,
+            ownerPubkey,
+            result.streamIndex,
+            validator,
+          );
+          highSpeedMessage = "high-speed mode enabled";
+        } catch (delegateError: any) {
+          const reason = delegateError?.message || "unknown error";
+          highSpeedMessage = `high-speed enable failed (${reason})`;
+        }
+      }
+
       return {
         txid: result.txid,
         streamIndex: result.streamIndex,
-        message: `Worker payroll record #${result.streamIndex} created: ${historyMessage}; ${decryptMessage}; ${keeperMessage}.`,
+        message: `Private payroll record #${result.streamIndex} created: ${historyMessage}; ${decryptMessage}; ${keeperMessage}; ${highSpeedMessage}.`,
       };
     },
     [
-      autoGrantDecrypt,
       autoGrantKeeperDecrypt,
       computePeriodBounds,
       connection,
       effectiveKeeperPubkey,
-      employeeTokenAccount,
       employeeWallet,
+      grantAutomationDecryptAccessTask,
       ownerPubkey,
+      getMagicblockValidatorForRegion,
       v2Config?.keeper,
       wallet,
     ],
+  );
+
+  const waitForStreamDelegationState = useCallback(
+    async (
+      businessPda: PublicKey,
+      index: number,
+      delegated: boolean,
+      attempts = 45,
+      delayMs = 1000,
+    ): Promise<boolean> => {
+      for (let i = 0; i < attempts; i += 1) {
+        const stream = await getEmployeeStreamV2Account(
+          connection,
+          businessPda,
+          index,
+        );
+        if (stream && stream.isDelegated === delegated) return true;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      return false;
+    },
+    [connection],
+  );
+
+  const runStreamMutationWithHighSpeedRecovery = useCallback(
+    async (
+      index: number,
+      label: string,
+      mutate: () => Promise<string>,
+      opts?: { forceHighSpeedAfter?: boolean },
+    ) => {
+      if (!ownerPubkey) throw new Error("Wallet not connected");
+
+      const business = await getBusinessAccount(connection, ownerPubkey);
+      if (!business) throw new Error("Business not found");
+
+      const streamBefore = await getEmployeeStreamV2Account(
+        connection,
+        business.address,
+        index,
+      );
+      if (!streamBefore) throw new Error(`Payroll record #${index} not found`);
+
+      const wasDelegated = streamBefore.isDelegated;
+      let didUndelegate = false;
+      if (wasDelegated) {
+        await commitAndUndelegateStreamV2(connection, wallet, ownerPubkey, index);
+        const undelegated = await waitForStreamDelegationState(
+          business.address,
+          index,
+          false,
+        );
+        if (!undelegated) {
+          throw new Error(
+            "Undelegation callback is still pending. Retry in a few seconds.",
+          );
+        }
+        didUndelegate = true;
+      }
+
+      const txid = await mutate();
+
+      const shouldEnableHighSpeedAfter =
+        opts?.forceHighSpeedAfter === true || wasDelegated;
+      let didRedelegate = false;
+      if (shouldEnableHighSpeedAfter) {
+        const streamAfter = await getEmployeeStreamV2Account(
+          connection,
+          business.address,
+          index,
+        );
+        if (streamAfter?.isActive && !streamAfter.isDelegated) {
+          const validator = getMagicblockValidatorForRegion("eu");
+          await redelegateStreamV2(
+            connection,
+            wallet,
+            ownerPubkey,
+            index,
+            validator,
+          );
+          didRedelegate = true;
+        }
+      }
+
+      const message =
+        didUndelegate && didRedelegate
+          ? `${label} applied; temporarily switched to base layer, then re-enabled high-speed mode.`
+          : didUndelegate
+            ? `${label} applied after temporary base-layer commit+undelegate.`
+            : didRedelegate
+              ? `${label} applied; high-speed mode re-enabled for this payroll record.`
+              : `${label} applied.`;
+
+      return { txid, message };
+    },
+    [
+      connection,
+      getMagicblockValidatorForRegion,
+      ownerPubkey,
+      waitForStreamDelegationState,
+      wallet,
+    ],
+  );
+
+  const ensureHighSpeedForStream = useCallback(
+    async (index: number): Promise<boolean> => {
+      if (!ownerPubkey) throw new Error("Wallet not connected");
+      const business = await getBusinessAccount(connection, ownerPubkey);
+      if (!business) throw new Error("Business not found");
+
+      const stream = await getEmployeeStreamV2Account(
+        connection,
+        business.address,
+        index,
+      );
+      if (!stream || !stream.isActive || stream.isDelegated) return false;
+
+      const validator = getMagicblockValidatorForRegion("eu");
+      await delegateStreamV2(connection, wallet, ownerPubkey, index, validator);
+      return true;
+    },
+    [connection, getMagicblockValidatorForRegion, ownerPubkey, wallet],
+  );
+
+  const deactivateStreamSafelyTask = useCallback(
+    async (index: number) => {
+      if (!ownerPubkey) throw new Error("Wallet not connected");
+      const business = await getBusinessAccount(connection, ownerPubkey);
+      if (!business) throw new Error("Business not found");
+      const stream = await getEmployeeStreamV2Account(
+        connection,
+        business.address,
+        index,
+      );
+      if (!stream) throw new Error(`Payroll record #${index} not found`);
+
+      let undelegated = false;
+      if (stream.isDelegated) {
+        await commitAndUndelegateStreamV2(connection, wallet, ownerPubkey, index);
+        const settled = await waitForStreamDelegationState(
+          business.address,
+          index,
+          false,
+        );
+        if (!settled) {
+          throw new Error(
+            "Undelegation callback is still pending. Retry in a few seconds.",
+          );
+        }
+        undelegated = true;
+      }
+
+      const txid = await deactivateStreamV2(connection, wallet, index);
+      return {
+        txid,
+        message: undelegated
+          ? "Stream was delegated, so it was first committed+undelegated, then deactivated."
+          : "Stream deactivated.",
+      };
+    },
+    [connection, ownerPubkey, waitForStreamDelegationState, wallet],
   );
 
   const buildAgentExecutionQueue = useCallback((): AgentExecutionStep[] => {
@@ -1195,25 +1350,25 @@ export default function EmployerPage() {
       requiresSignature: true,
     });
 
-    // Smart status: If they have tokens in their wallet OR in the vault, they've finished minting
-    // Also mark as done if the vault exists and is funded, or if they've progressed to later steps (automation/worker)
-    const hasObtainedTokens =
-      Number(depositorBalance || 0) > 0 || Number(vaultBalance || 0) > 0;
-    const hasProgressedPastFunding = !!v2ConfigExists || !!employeeTokenAccount.trim();
+    // In privacy mode, avoid plain RPC balance checks. Funding completion is inferred
+    // from successful deposit actions or progression to downstream setup steps.
+    const hasProgressedPastFunding =
+      !!v2ConfigExists || !!employeeTokenAccount.trim();
+    const hasVaultFunds = vaultFundingObserved || hasProgressedPastFunding;
+    const hasObtainedTokens = hasConfirmedDeposit || hasVaultFunds;
     steps.push({
       key: "mint-demo-tokens",
       label: "Get 1,000 demo tokens",
-      status: (hasObtainedTokens || hasConfirmedDeposit || Number(vaultBalance || 0) > 0 || hasProgressedPastFunding) ? "done" : "pending",
+      status: hasObtainedTokens ? "done" : "pending",
       required: true,
       risk: "safe",
       requiresSignature: false,
     });
 
-    const hasVaultFunds = Number(vaultBalance || 0) > 0;
     steps.push({
       key: "configure-deposit-amount",
       label: "Confirm deposit amount",
-      status: (hasConfirmedDeposit || hasVaultFunds || hasProgressedPastFunding) ? "done" : "pending",
+      status: hasConfirmedDeposit || hasVaultFunds ? "done" : "pending",
       required: true,
       risk: "safe",
       requiresSignature: false,
@@ -1257,16 +1412,16 @@ export default function EmployerPage() {
 
       steps.push({
         key: "create-worker-token",
-        label: "Create worker destination account",
-        status: employeeTokenAccount.trim() ? "done" : "pending",
-        required: true,
-        risk: "review",
-        requiresSignature: true,
+        label: "No fixed destination needed (privacy mode)",
+        status: "done",
+        required: false,
+        risk: "safe",
+        requiresSignature: false,
       });
 
       steps.push({
         key: "configure-worker-options",
-        label: "Configure worker record options",
+        label: "Configure auth and privacy options",
         status: "pending",
         required: true,
         risk: "safe",
@@ -1275,7 +1430,7 @@ export default function EmployerPage() {
 
       steps.push({
         key: "create-worker-record",
-        label: "Create worker payroll record",
+        label: "Create private payroll record",
         status: "pending",
         required: true,
         risk: "review",
@@ -1341,16 +1496,6 @@ export default function EmployerPage() {
         requiresSignature: true,
       });
     } else if (intent === "grant_access") {
-      if (agentDraft?.employeeWallet) {
-        steps.push({
-          key: "grant-worker-access",
-          label: "Grant view access to worker",
-          status: "pending",
-          required: true,
-          risk: "safe",
-          requiresSignature: true,
-        });
-      }
       steps.push({
         key: "grant-keeper-access",
         label: "Grant decrypt access to automation",
@@ -1372,9 +1517,9 @@ export default function EmployerPage() {
     effectiveKeeperPubkey,
     v2Config?.keeper,
     employeeTokenAccount,
+    destinationRouteMode,
     hasConfirmedDeposit,
-    depositorBalance,
-    vaultBalance,
+    vaultFundingObserved,
   ]);
 
   // Self-heal the agent queue if the code introduces new steps that aren't in localStorage.
@@ -1399,7 +1544,7 @@ export default function EmployerPage() {
     const workerWallet = employeeWallet.trim();
     if (!workerWallet) {
       setError(
-        "Add a worker wallet first (or ask the assistant to include one).",
+        "Add an employee auth wallet first (or ask the assistant to include one).",
       );
       return;
     }
@@ -1577,10 +1722,8 @@ export default function EmployerPage() {
               vault.tokenAccount,
               amount,
             );
-
-            // Instantly update UI state so Step 2 turns green
-            const currentBal = Number(vaultBalance || 0);
-            setVaultBalance((currentBal + amount).toString());
+            setHasConfirmedDeposit(true);
+            setVaultFundingObserved(true);
 
             updateStep(step.key, { status: "done", txid });
             continue;
@@ -1622,14 +1765,10 @@ export default function EmployerPage() {
           }
 
           if (step.key === "create-worker-token") {
-            const workerWallet = employeeWallet.trim();
-            if (!workerWallet)
-              throw new Error(
-                "Worker wallet address is missing. Please provide one.",
-              );
-            const result = await createWorkerDestinationAccountTask();
-            createdTokenAccount = result.tokenAccount;
-            updateStep(step.key, { status: "done", txid: result.txid });
+            updateStep(step.key, {
+              status: "done",
+              detail: "Skipped: privacy mode uses claim-time destination.",
+            });
             continue;
           }
 
@@ -1637,7 +1776,7 @@ export default function EmployerPage() {
             const workerWallet = employeeWallet.trim();
             if (!workerWallet)
               throw new Error(
-                "Worker wallet address is missing. Please provide one.",
+                "Employee auth wallet address is missing. Please provide one.",
               );
             const result =
               await createWorkerPayrollRecordTask(createdTokenAccount);
@@ -1659,11 +1798,13 @@ export default function EmployerPage() {
                 "No payroll record number available to enable high-speed mode",
               );
             }
+            const validator = getMagicblockValidatorForRegion("eu");
             const txid = await delegateStreamV2(
               connection,
               wallet,
               ownerPubkey,
               validIndex,
+              validator,
             );
             updateStep(step.key, { status: "done", txid });
             continue;
@@ -1682,70 +1823,81 @@ export default function EmployerPage() {
 
           if (step.key === "resume-stream") {
             const txid = await resumeStreamV2(connection, wallet);
-            updateStep(step.key, { status: "done", txid });
+            let detail = "Payroll resumed.";
+            if (streamIndex !== null) {
+              try {
+                const reenabled = await ensureHighSpeedForStream(streamIndex);
+                if (reenabled) {
+                  detail =
+                    "Payroll resumed and high-speed mode re-enabled for the selected payroll record.";
+                }
+              } catch (resumeHighSpeedError: any) {
+                const reason =
+                  resumeHighSpeedError?.message || "high-speed re-enable failed";
+                detail = `Payroll resumed; high-speed re-enable failed (${reason}).`;
+              }
+            }
+            updateStep(step.key, { status: "done", txid, detail });
             continue;
           }
 
           if (step.key === "apply-raise") {
             const index = Number(streamIndexInput);
             const rate = Number(agentDraft?.salaryPerSecond || salaryPerSecond);
-            const txid = await updateSalaryRateV2(
-              connection,
-              wallet,
+            const result = await runStreamMutationWithHighSpeedRecovery(
               index,
-              rate,
+              "Salary rate update",
+              async () =>
+                updateSalaryRateV2(
+                  connection,
+                  wallet,
+                  index,
+                  rate,
+                ),
             );
-            updateStep(step.key, { status: "done", txid });
+            updateStep(step.key, {
+              status: "done",
+              txid: result.txid,
+              detail: result.message,
+            });
             continue;
           }
 
           if (step.key === "apply-bonus") {
             const index = Number(streamIndexInput);
             const amount = Number(agentDraft?.bonusAmount || bonusAmount);
-            const txid = await grantBonusV2(connection, wallet, index, amount);
-            updateStep(step.key, { status: "done", txid });
+            const result = await runStreamMutationWithHighSpeedRecovery(
+              index,
+              "Bonus grant",
+              async () => grantBonusV2(connection, wallet, index, amount),
+            );
+            updateStep(step.key, {
+              status: "done",
+              txid: result.txid,
+              detail: result.message,
+            });
             continue;
           }
 
           if (step.key === "deactivate-stream") {
             const index = Number(streamIndexInput);
-            const txid = await deactivateStreamV2(connection, wallet, index);
-            updateStep(step.key, { status: "done", txid });
-            continue;
-          }
-
-          if (step.key === "grant-worker-access") {
-            const workerWallet = employeeWallet.trim();
-            if (!workerWallet)
-              throw new Error(
-                "Worker wallet address is missing for access grant.",
-              );
-            const index = Number(streamIndexInput);
-            const employee = mustPubkey("worker wallet", employeeWallet);
-            const txid = await grantEmployeeViewAccessV2(
-              connection,
-              wallet,
-              ownerPubkey,
-              index,
-              employee,
-            );
-            updateStep(step.key, { status: "done", txid });
+            const result = await deactivateStreamSafelyTask(index);
+            updateStep(step.key, {
+              status: "done",
+              txid: result.txid,
+              detail: result.message,
+            });
             continue;
           }
 
           if (step.key === "grant-keeper-access") {
             const index = Number(streamIndexInput);
-            const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
-            if (!keeperKey) throw new Error("automation wallet missing");
-            const keeper = mustPubkey("automation wallet", keeperKey);
-            const txid = await grantKeeperViewAccessV2(
-              connection,
-              wallet,
-              ownerPubkey,
-              index,
-              keeper,
-            );
-            updateStep(step.key, { status: "done", txid });
+            const grantRes = await grantAutomationDecryptAccessTask(index);
+            updateStep(step.key, {
+              status: "done",
+              txid: grantRes.txid,
+              detail: grantRes.message,
+            });
             continue;
           }
         } catch (stepError: any) {
@@ -1756,7 +1908,7 @@ export default function EmployerPage() {
       }
 
       setMessage(
-        "Assistant execution completed. Review Step 5 and Worker Portal.",
+        "Assistant execution completed. Review Step 5 and Employee Portal.",
       );
       await loadState();
     } catch (e: any) {
@@ -1774,11 +1926,15 @@ export default function EmployerPage() {
     connection,
     createWorkerDestinationAccountTask,
     createWorkerPayrollRecordTask,
+    deactivateStreamSafelyTask,
     effectiveKeeperPubkey,
     employeeWallet,
+    ensureHighSpeedForStream,
+    grantAutomationDecryptAccessTask,
     loadState,
     ownerPubkey,
     rotateAutomationWalletTask,
+    runStreamMutationWithHighSpeedRecovery,
     settleIntervalSecs,
     streamIndexInput,
     wallet,
@@ -1959,10 +2115,8 @@ export default function EmployerPage() {
             vault.tokenAccount,
             amount,
           );
-
-          // Instantly update UI state so Step 2 turns green
-          const currentBal = Number(vaultBalance || 0);
-          setVaultBalance((currentBal + amount).toString());
+          setHasConfirmedDeposit(true);
+          setVaultFundingObserved(true);
 
           result = { txid, detail: `Deposited ${amount} payUSD into payroll wallet.` };
         } else if (nextStep.key === "init-automation") {
@@ -1981,13 +2135,11 @@ export default function EmployerPage() {
           const rotateRes = await rotateAutomationWalletTask();
           result = { txid: rotateRes.txid, detail: rotateRes.message || "Automation wallet rotated." };
         } else if (nextStep.key === "create-worker-token") {
-          const workerWallet = employeeWallet.trim();
-          if (!workerWallet)
-            throw new Error(
-              "Worker wallet address is missing. Please provide one.",
-            );
           const workerTokenRes = await createWorkerDestinationAccountTask();
-          result = { txid: workerTokenRes.txid, detail: "Worker destination account created." };
+          result = {
+            txid: workerTokenRes.txid,
+            detail: "Private payout route account created.",
+          };
         } else if (nextStep.key === "configure-worker-options") {
           // This step triggers the ask_options conversational flow in AgentChat
           // No transaction needed — mark it done so we can move to the next step later
@@ -2001,71 +2153,82 @@ export default function EmployerPage() {
           const workerWallet = employeeWallet.trim();
           if (!workerWallet)
             throw new Error(
-              "Worker wallet address is missing. Please provide one.",
+              "Employee auth wallet address is missing. Please provide one.",
             );
           const workerRecordRes = await createWorkerPayrollRecordTask();
           result = {
             txid: workerRecordRes.txid,
-            detail: workerRecordRes.message || "Worker payroll record created successfully.",
+            detail: workerRecordRes.message || "Private payroll record created successfully.",
           };
         } else if (nextStep.key === "enable-high-speed") {
           const index = Number(streamIndexInput);
+          const validator = getMagicblockValidatorForRegion("eu");
           const txid = await delegateStreamV2(
             connection,
             wallet,
             ownerPubkey,
             index,
+            validator,
           );
-          result = { txid, detail: "High-speed mode enabled via TEE." };
+          result = { txid, detail: "High-speed mode enabled." };
         } else if (nextStep.key === "pause-stream") {
           const txid = await pauseStreamV2(connection, wallet, ownerPubkey, 1);
           result = { txid, detail: "Payroll stream paused." };
         } else if (nextStep.key === "resume-stream") {
           const txid = await resumeStreamV2(connection, wallet);
-          result = { txid, detail: "Payroll stream resumed." };
+          let detail = "Payroll stream resumed.";
+          if (streamIndex !== null) {
+            try {
+              const reenabled = await ensureHighSpeedForStream(streamIndex);
+              if (reenabled) {
+                detail =
+                  "Payroll stream resumed and high-speed mode re-enabled for the selected payroll record.";
+              }
+            } catch (resumeHighSpeedError: any) {
+              const reason =
+                resumeHighSpeedError?.message || "high-speed re-enable failed";
+              detail = `Payroll stream resumed; high-speed re-enable failed (${reason}).`;
+            }
+          }
+          result = { txid, detail };
         } else if (nextStep.key === "apply-raise") {
           const index = Number(streamIndexInput);
           const rate = Number(agentDraft?.salaryPerSecond || salaryPerSecond);
-          const txid = await updateSalaryRateV2(
-            connection,
-            wallet,
+          const raiseRes = await runStreamMutationWithHighSpeedRecovery(
             index,
-            rate,
+            "Salary rate update",
+            async () =>
+              updateSalaryRateV2(
+                connection,
+                wallet,
+                index,
+                rate,
+              ),
           );
-          result = { txid, detail: "Salary rate updated successfully." };
+          result = { txid: raiseRes.txid, detail: raiseRes.message };
         } else if (nextStep.key === "apply-bonus") {
           const index = Number(streamIndexInput);
           const amount = Number(agentDraft?.bonusAmount || bonusAmount);
-          const txid = await grantBonusV2(connection, wallet, index, amount);
-          result = { txid, detail: `Bonus of ${amount} granted.` };
+          const bonusRes = await runStreamMutationWithHighSpeedRecovery(
+            index,
+            "Bonus grant",
+            async () => grantBonusV2(connection, wallet, index, amount),
+          );
+          result = { txid: bonusRes.txid, detail: bonusRes.message };
         } else if (nextStep.key === "deactivate-stream") {
           const index = Number(streamIndexInput);
-          const txid = await deactivateStreamV2(connection, wallet, index);
-          result = { txid, detail: "Payroll stream deactivated." };
-        } else if (nextStep.key === "grant-worker-access") {
-          const index = Number(streamIndexInput);
-          const employee = mustPubkey("worker wallet", employeeWallet);
-          const txid = await grantEmployeeViewAccessV2(
-            connection,
-            wallet,
-            ownerPubkey,
-            index,
-            employee,
-          );
-          result = { txid, detail: "Worker view access granted." };
+          const deactivateRes = await deactivateStreamSafelyTask(index);
+          result = {
+            txid: deactivateRes.txid,
+            detail: deactivateRes.message,
+          };
         } else if (nextStep.key === "grant-keeper-access") {
           const index = Number(streamIndexInput);
-          const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
-          if (!keeperKey) throw new Error("automation wallet missing");
-          const keeper = mustPubkey("automation wallet", keeperKey);
-          const txid = await grantKeeperViewAccessV2(
-            connection,
-            wallet,
-            ownerPubkey,
-            index,
-            keeper,
-          );
-          result = { txid, detail: "Automation service access granted." };
+          const grantRes = await grantAutomationDecryptAccessTask(index);
+          result = {
+            txid: grantRes.txid,
+            detail: grantRes.message,
+          };
         } else if (nextStep.key === "rotate-vault-mint") {
           const token = mustPubkey(
             "payroll wallet token account",
@@ -2135,11 +2298,16 @@ export default function EmployerPage() {
       connection,
       createWorkerDestinationAccountTask,
       createWorkerPayrollRecordTask,
+      deactivateStreamSafelyTask,
+      destinationRouteMode,
       effectiveKeeperPubkey,
       employeeWallet,
+      ensureHighSpeedForStream,
+      grantAutomationDecryptAccessTask,
       loadState,
       ownerPubkey,
       rotateAutomationWalletTask,
+      runStreamMutationWithHighSpeedRecovery,
       settleIntervalSecs,
       streamIndexInput,
       wallet,
@@ -2187,7 +2355,7 @@ export default function EmployerPage() {
       applyAgentDraft(draft);
       const confidencePct = Math.round((draft.confidence || 0) * 100);
       setMessage(
-        `Assistant draft applied (${draft.source}, ${confidencePct}% confidence). Review Step 3 and click "Create Worker Payroll Record".`,
+        `Assistant draft applied (${draft.source}, ${confidencePct}% confidence). Review Step 3 and click "Create Private Payroll Record".`,
       );
     } catch (e: any) {
       setError(e?.message || "Assistant draft failed");
@@ -2271,8 +2439,7 @@ export default function EmployerPage() {
       setDepositAmount(String(plan.depositAmount));
       setHasConfirmedDeposit(true);
     }
-    setAutoGrantDecrypt(typeof plan.autoGrantDecrypt === "boolean" ? plan.autoGrantDecrypt : true);
-    setAutoGrantKeeperDecrypt(typeof plan.autoGrantKeeperDecrypt === "boolean" ? plan.autoGrantKeeperDecrypt : true);
+    setAutoGrantKeeperDecrypt(true);
     if (plan.recoverAmount && (typeof plan.recoverAmount === "string" || typeof plan.recoverAmount === "number"))
       setVaultWithdrawAmount(String(plan.recoverAmount));
     if (plan.intent && typeof plan.intent === "string") {
@@ -2329,8 +2496,8 @@ export default function EmployerPage() {
         businessExists={businessExists}
         vaultExists={vaultExists}
         configExists={v2ConfigExists}
-        depositorBalance={depositorBalance}
-        vaultBalance={vaultBalance}
+        depositorBalance={null}
+        vaultBalance={null}
         depositorTokenAccount={depositorTokenAccount}
         employeeWallet={employeeWallet}
         payPreset={payPreset}
@@ -2355,10 +2522,8 @@ export default function EmployerPage() {
           setAgentDraft(null);
           setAgentQueue([]);
         }}
-        autoGrantDecrypt={autoGrantDecrypt}
-        setAutoGrantDecrypt={setAutoGrantDecrypt}
-        autoGrantKeeperDecrypt={autoGrantKeeperDecrypt}
-        setAutoGrantKeeperDecrypt={setAutoGrantKeeperDecrypt}
+        autoGrantKeeperDecrypt={true}
+        setAutoGrantKeeperDecrypt={() => {}}
         boundPresetPeriod={boundPresetPeriod}
         setBoundPresetPeriod={setBoundPresetPeriod}
       />
@@ -2419,65 +2584,6 @@ export default function EmployerPage() {
                         className="mt-3 rounded-lg bg-amber-500 px-5 py-2.5 text-xs font-black text-white uppercase tracking-widest shadow-lg shadow-amber-500/30 transition-all hover:bg-amber-600 hover:translate-y-[-1px] active:translate-y-[1px] disabled:opacity-50"
                       >
                         {fixingVaultMint ? 'Fixing...' : 'Fix Vault Mint →'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Stale Decrypt Allowance Warning ── */}
-              {allowanceStale && streamStatus && (
-                <div className="mt-6 rounded-2xl border-2 border-violet-400/50 bg-gradient-to-r from-violet-50 to-purple-50 p-5 shadow-lg shadow-violet-500/10">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600 text-lg border border-violet-200">
-                      🔑
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-sm font-black text-violet-900 uppercase tracking-wider">Decrypt Access Expired</div>
-                      <p className="mt-1 text-xs text-violet-700/80 leading-relaxed">
-                        Salary data handles have rotated after a recent accrual or settlement. The automation service
-                        and/or worker can no longer decrypt salary information until access is re-granted.
-                      </p>
-                      <button
-                        onClick={async () => {
-                          if (!wallet.publicKey || !ownerPubkey) return;
-                          setFixingAllowance(true);
-                          try {
-                            const idx = streamStatus.streamIndex;
-                            // Re-grant worker access
-                            if (employeeWallet) {
-                              try {
-                                await grantEmployeeViewAccessV2(
-                                  connection, wallet, ownerPubkey, idx,
-                                  new PublicKey(employeeWallet)
-                                );
-                              } catch (e: any) {
-                                console.warn('Re-grant worker access failed:', e?.message);
-                              }
-                            }
-                            // Re-grant keeper access
-                            const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
-                            if (keeperKey) {
-                              try {
-                                await grantKeeperViewAccessV2(
-                                  connection, wallet, ownerPubkey, idx,
-                                  new PublicKey(keeperKey)
-                                );
-                              } catch (e: any) {
-                                console.warn('Re-grant keeper access failed:', e?.message);
-                              }
-                            }
-                            setAllowanceStale(false);
-                          } catch (e: any) {
-                            console.error('Re-grant decrypt access failed:', e);
-                          } finally {
-                            setFixingAllowance(false);
-                          }
-                        }}
-                        disabled={fixingAllowance || !wallet.connected}
-                        className="mt-3 rounded-lg bg-violet-500 px-5 py-2.5 text-xs font-black text-white uppercase tracking-widest shadow-lg shadow-violet-500/30 transition-all hover:bg-violet-600 hover:translate-y-[-1px] active:translate-y-[1px] disabled:opacity-50"
-                      >
-                        {fixingAllowance ? 'Re-Granting...' : 'Re-Grant Decrypt Access →'}
                       </button>
                     </div>
                   </div>
@@ -2562,7 +2668,7 @@ export default function EmployerPage() {
                       </p>
                     </div>
 
-                    {/* Worker Readiness */}
+                    {/* Employee Readiness */}
                     <div className={`p-4 rounded-2xl border transition-all duration-300 ${hasWorkerRecord ? 'bg-blue-50 border-blue-100 shadow-sm' : 'bg-slate-50 border-slate-100 shadow-inner'
                       }`}>
                       <div className="flex items-center justify-between mb-3">
@@ -2576,9 +2682,9 @@ export default function EmployerPage() {
                           {hasWorkerRecord ? 'Mapped' : 'Empty'}
                         </span>
                       </div>
-                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Worker Sync</h4>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Employee Sync</h4>
                       <p className={`text-sm font-black ${hasWorkerRecord ? 'text-slate-900' : 'text-slate-300'}`}>
-                        {hasWorkerRecord ? 'Contract Pair Established' : 'No Worker Selected'}
+                        {hasWorkerRecord ? 'Auth Link Ready' : 'No Employee Selected'}
                       </p>
                     </div>
 
@@ -2969,6 +3075,8 @@ export default function EmployerPage() {
                           vault.tokenAccount,
                           Number(depositAmount),
                         );
+                        setHasConfirmedDeposit(true);
+                        setVaultFundingObserved(true);
                       })
                     }
                     className="w-full md:col-span-2 premium-btn bg-slate-900 text-white shadow-xl hover:shadow-2xl transition-all disabled:opacity-50"
@@ -3138,11 +3246,11 @@ export default function EmployerPage() {
                 ) : null}
 
                 <div className="mt-6 border-t border-slate-100 pt-6">
-                  <h3 className="text-sm font-bold text-slate-900 mb-4">Worker Onboarding</h3>
+                  <h3 className="text-sm font-bold text-slate-900 mb-4">Employee Identity Setup</h3>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
-                        Worker Wallet
+                        Employee Auth Wallet
                       </label>
                       <input
                         value={employeeWallet}
@@ -3160,33 +3268,25 @@ export default function EmployerPage() {
                         }}
                         className="w-full premium-btn premium-btn-secondary py-[11px] disabled:opacity-50"
                       >
-                        Self-Onboard for Demo
+                        Use Connected Wallet as Employee (Demo)
                       </button>
                     </div>
-                    <div>
+                    <div className="md:col-span-2">
                       <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
-                        Worker Destination Token Account
+                        Destination Route Mode
                       </label>
-                      <input
-                        value={employeeTokenAccount}
-                        onChange={(e) => setEmployeeTokenAccount(e.target.value)}
-                        placeholder="Address..."
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
-                      />
-                    </div>
-                    <div className="flex items-end">
-                      <button
-                        disabled={busy || !employeeWallet}
-                        onClick={() =>
-                          run(
-                            "Create worker destination account",
-                            createWorkerDestinationAccountTask,
-                          )
-                        }
-                        className="w-full premium-btn premium-btn-secondary py-[11px] disabled:opacity-50"
-                      >
-                        Deploy Worker Account
-                      </button>
+                      <div className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-semibold text-slate-800">
+                        Private shield route (enforced)
+                      </div>
+                      <p className="mt-1.5 text-xs text-slate-500">
+                        Private shield route does not pin any employee destination
+                        in stream state. Employee selects destination later from
+                        the Employee Portal at claim time.
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        No destination token account is needed during employer
+                        onboarding.
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -3227,28 +3327,15 @@ export default function EmployerPage() {
                   </div>
 
                   <div className="mt-4 flex flex-col gap-3">
-                    <label className="flex items-center gap-3 group cursor-pointer">
+                    <label className="flex items-center gap-3 group cursor-default">
                       <input
                         type="checkbox"
-                        checked={autoGrantDecrypt}
-                        onChange={(e) => setAutoGrantDecrypt(e.target.checked)}
-                        disabled={busy}
+                        checked={true}
+                        disabled={true}
                         className="h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
                       />
-                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
-                        Auto-grant worker view access
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-3 group cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={autoGrantKeeperDecrypt}
-                        onChange={(e) => setAutoGrantKeeperDecrypt(e.target.checked)}
-                        disabled={busy}
-                        className="h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
-                      />
-                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
-                        Auto-authorize automation engine
+                      <span className="text-sm font-medium text-slate-700">
+                        Automation (keeper) decrypt access is enforced in private mode
                       </span>
                     </label>
                     <label className="flex items-center gap-3 group cursor-pointer">
@@ -3261,6 +3348,22 @@ export default function EmployerPage() {
                       />
                       <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
                         Stop payroll automatically at end of period
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-3 group cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoEnableHighSpeedOnCreate}
+                        onChange={(e) =>
+                          setAutoEnableHighSpeedOnCreate(e.target.checked)
+                        }
+                        disabled={busy}
+                        className="mt-0.5 h-5 w-5 rounded-md border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all"
+                      />
+                      <span className="text-sm font-medium text-slate-600 group-hover:text-slate-900 transition-colors">
+                        Auto-enable high-speed mode after payroll record is
+                        created (optional). Inco encrypted payroll amounts stay
+                        private.
                       </span>
                     </label>
                   </div>
@@ -3276,18 +3379,21 @@ export default function EmployerPage() {
                     disabled={busy || !v2ConfigExists}
                     onClick={() =>
                       run(
-                        "Create worker payroll record",
-                        createWorkerPayrollRecordTask,
+                        "Create private payroll record",
+                        () =>
+                          createWorkerPayrollRecordTask(undefined, {
+                            autoEnableHighSpeed: autoEnableHighSpeedOnCreate,
+                          }),
                       )
                     }
                     className="w-full premium-btn bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-500/20 shadow-xl disabled:opacity-50"
                   >
-                    Commit Worker to Blockchain
+                    Create Private Payroll Record
                   </button>
                 </div>
 
                 <InlineHelp>
-                  Success means the worker can now open Worker Portal and load
+                  Success means the employee can now open Employee Portal and load
                   this payroll record number.
                 </InlineHelp>
               </StepCard>
@@ -3310,14 +3416,42 @@ export default function EmployerPage() {
                       className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all"
                     />
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 ml-1">
+                      High-Speed Route
+                    </label>
+                    <div className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium text-slate-700">
+                      Automation-managed default route (no manual region selection)
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-3">
                     <button
                       disabled={busy || !v2ConfigExists || streamIndex === null}
                       onClick={() =>
                         run("Enable high-speed mode", async () => {
                           if (!ownerPubkey || streamIndex === null)
                             throw new Error("Invalid payroll record number");
+                          const validator = getMagicblockValidatorForRegion("eu");
                           return delegateStreamV2(
+                            connection,
+                            wallet,
+                            ownerPubkey,
+                            streamIndex,
+                            validator,
+                          );
+                        })
+                      }
+                      className="premium-btn bg-purple-600 hover:bg-purple-700 text-white shadow-purple-500/20 shadow-lg disabled:opacity-50"
+                    >
+                      🚀 Boost Execution
+                    </button>
+                    <button
+                      disabled={busy || !v2ConfigExists || streamIndex === null}
+                      onClick={() =>
+                        run("Disable high-speed mode", async () => {
+                          if (!ownerPubkey || streamIndex === null)
+                            throw new Error("Invalid payroll record number");
+                          return commitAndUndelegateStreamV2(
                             connection,
                             wallet,
                             ownerPubkey,
@@ -3325,9 +3459,9 @@ export default function EmployerPage() {
                           );
                         })
                       }
-                      className="premium-btn bg-purple-600 hover:bg-purple-700 text-white shadow-purple-500/20 shadow-lg disabled:opacity-50"
+                      className="premium-btn bg-amber-500 hover:bg-amber-600 text-white shadow-amber-500/20 shadow-lg disabled:opacity-50"
                     >
-                      🚀 Boost Execution
+                      ⛔ Base Layer
                     </button>
                     <button
                       disabled={busy}
@@ -3343,7 +3477,7 @@ export default function EmployerPage() {
                   </div>
                 </div>
                 <InlineHelp>
-                  High-speed mode enables delegated lifecycle behavior for near-instant settlement.
+                  High-speed mode controls MagicBlock delegation only. Inco encrypted amounts remain private.
                 </InlineHelp>
               </StepCard>
 
@@ -3392,7 +3526,25 @@ export default function EmployerPage() {
                     disabled={busy || !v2ConfigExists}
                     onClick={() =>
                       run("Resume payroll", async () => {
-                        await resumeStreamV2(connection, wallet);
+                        const txid = await resumeStreamV2(connection, wallet);
+                        let message = "Resume payroll succeeded";
+                        if (streamIndex !== null) {
+                          try {
+                            const reenabled = await ensureHighSpeedForStream(
+                              streamIndex,
+                            );
+                            if (reenabled) {
+                              message =
+                                "Resume payroll succeeded; high-speed mode re-enabled for selected payroll record.";
+                            }
+                          } catch (resumeHighSpeedError: any) {
+                            const reason =
+                              resumeHighSpeedError?.message ||
+                              "high-speed re-enable failed";
+                            message = `Resume payroll succeeded; high-speed re-enable failed (${reason}).`;
+                          }
+                        }
+                        return { txid, message };
                       })
                     }
                     className="premium-btn bg-teal-600 hover:bg-teal-700 text-white shadow-teal-500/20 shadow-lg disabled:opacity-50"
@@ -3417,8 +3569,10 @@ export default function EmployerPage() {
                           </a>
                         </div>
                         <div>
-                          Destination token account:{" "}
-                          {streamStatus.employeeTokenAccount}
+                          Destination route:{" "}
+                          {streamStatus.hasFixedDestination
+                            ? streamStatus.employeeTokenAccount
+                            : "Claim-time destination only (no fixed on-chain route)"}
                         </div>
                         <div>
                           Active: {streamStatus.isActive ? "yes" : "no"}
@@ -3455,56 +3609,14 @@ export default function EmployerPage() {
                     )}
                   </div>
 
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <button
-                      disabled={
-                        busy ||
-                        !v2ConfigExists ||
-                        streamIndex === null ||
-                        !employeeWallet
-                      }
-                      onClick={() =>
-                        run("Grant worker view access", async () => {
-                          if (!ownerPubkey || streamIndex === null)
-                            throw new Error("Invalid payroll record number");
-                          const employee = mustPubkey(
-                            "worker wallet",
-                            employeeWallet,
-                          );
-                          return grantEmployeeViewAccessV2(
-                            connection,
-                            wallet,
-                            ownerPubkey,
-                            streamIndex,
-                            employee,
-                          );
-                        })
-                      }
-                      className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm disabled:opacity-50"
-                    >
-                      Grant Worker View Access
-                    </button>
+                  <div className="mt-4 grid gap-3 md:grid-cols-1">
                     <button
                       disabled={busy || !v2ConfigExists || streamIndex === null}
                       onClick={() =>
                         run("Grant automation decrypt access", async () => {
                           if (!ownerPubkey || streamIndex === null)
                             throw new Error("Invalid payroll record number");
-                          const keeperKey =
-                            v2Config?.keeper || effectiveKeeperPubkey;
-                          if (!keeperKey)
-                            throw new Error("Automation wallet missing");
-                          const keeper = mustPubkey(
-                            "automation wallet",
-                            keeperKey,
-                          );
-                          return grantKeeperViewAccessV2(
-                            connection,
-                            wallet,
-                            ownerPubkey,
-                            streamIndex,
-                            keeper,
-                          );
+                          return grantAutomationDecryptAccessTask(streamIndex);
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm disabled:opacity-50"
@@ -3534,30 +3646,31 @@ export default function EmployerPage() {
                           run("Apply private raise", async () => {
                             if (streamIndex === null)
                               throw new Error("Invalid payroll record number");
-                            const txid = await updateSalaryRateV2(
-                              connection,
-                              wallet,
-                              streamIndex,
-                              Number(raiseSalaryPerSecond),
-                            );
+                            const raiseResult =
+                              await runStreamMutationWithHighSpeedRecovery(
+                                streamIndex,
+                                "Private raise",
+                                async () =>
+                                  updateSalaryRateV2(
+                                    connection,
+                                    wallet,
+                                    streamIndex,
+                                    Number(raiseSalaryPerSecond),
+                                  ),
+                              );
+                            const txid = raiseResult.txid;
+                            let message = raiseResult.message;
                             try {
-                              if (ownerPubkey && employeeWallet) {
-                                const employee = mustPubkey(
-                                  "worker wallet",
-                                  employeeWallet,
-                                );
-                                await grantEmployeeViewAccessV2(
-                                  connection,
-                                  wallet,
-                                  ownerPubkey,
+                              if (ownerPubkey && autoGrantKeeperDecrypt) {
+                                await grantAutomationDecryptAccessTask(
                                   streamIndex,
-                                  employee,
                                 );
+                                message = `${message} Automation decrypt access refreshed.`;
                               }
                             } catch {
                               // best-effort
                             }
-                            return txid;
+                            return { txid, message };
                           })
                         }
                         className="w-full rounded-lg bg-[#0B6E4F] px-4 py-2 text-sm text-white disabled:opacity-50"
@@ -3584,30 +3697,31 @@ export default function EmployerPage() {
                           run("Apply private bonus", async () => {
                             if (streamIndex === null)
                               throw new Error("Invalid payroll record number");
-                            const txid = await grantBonusV2(
-                              connection,
-                              wallet,
-                              streamIndex,
-                              Number(bonusAmount),
-                            );
+                            const bonusResult =
+                              await runStreamMutationWithHighSpeedRecovery(
+                                streamIndex,
+                                "Private bonus",
+                                async () =>
+                                  grantBonusV2(
+                                    connection,
+                                    wallet,
+                                    streamIndex,
+                                    Number(bonusAmount),
+                                  ),
+                              );
+                            const txid = bonusResult.txid;
+                            let message = bonusResult.message;
                             try {
-                              if (ownerPubkey && employeeWallet) {
-                                const employee = mustPubkey(
-                                  "worker wallet",
-                                  employeeWallet,
-                                );
-                                await grantEmployeeViewAccessV2(
-                                  connection,
-                                  wallet,
-                                  ownerPubkey,
+                              if (ownerPubkey && autoGrantKeeperDecrypt) {
+                                await grantAutomationDecryptAccessTask(
                                   streamIndex,
-                                  employee,
                                 );
+                                message = `${message} Automation decrypt access refreshed.`;
                               }
                             } catch {
                               // best-effort
                             }
-                            return txid;
+                            return { txid, message };
                           })
                         }
                         className="w-full rounded-lg bg-[#1D3557] px-4 py-2 text-sm text-white disabled:opacity-50"
@@ -3647,15 +3761,7 @@ export default function EmployerPage() {
                         run("Deactivate stream", async () => {
                           if (streamIndex === null)
                             throw new Error("Invalid payroll record number");
-                          if (streamStatus?.isDelegated)
-                            throw new Error(
-                              "Undelegate stream before deactivation",
-                            );
-                          return deactivateStreamV2(
-                            connection,
-                            wallet,
-                            streamIndex,
-                          );
+                          return deactivateStreamSafelyTask(streamIndex);
                         })
                       }
                       className="w-full rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-900 disabled:opacity-50"
@@ -3668,26 +3774,12 @@ export default function EmployerPage() {
                         run("Backfill automation decrypt access", async () => {
                           if (!ownerPubkey || !v2Config)
                             throw new Error("Missing config");
-                          const keeperKey =
-                            v2Config.keeper || effectiveKeeperPubkey;
-                          if (!keeperKey)
-                            throw new Error("Automation wallet missing");
-                          const keeper = mustPubkey(
-                            "automation wallet",
-                            keeperKey,
-                          );
                           const total = v2Config.nextStreamIndex;
                           let granted = 0;
                           let failed = 0;
                           for (let i = 0; i < total; i++) {
                             try {
-                              await grantKeeperViewAccessV2(
-                                connection,
-                                wallet,
-                                ownerPubkey,
-                                i,
-                                keeper,
-                              );
+                              await grantAutomationDecryptAccessTask(i);
                               granted++;
                             } catch (e: any) {
                               const msg = e?.message || "";

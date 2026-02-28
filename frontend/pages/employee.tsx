@@ -5,6 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  createIncoTokenAccount,
   getBusinessAccount,
   getBusinessPDA,
   getEmployeeStreamV2Account,
@@ -14,6 +15,7 @@ import {
   getWithdrawRequestV2Account,
   getPendingPayoutsForWorker,
   ShieldedPayoutV2Account,
+  PAYUSD_MINT,
   signClaimAuthorization,
   signWithdrawAuthorization,
 } from '../lib/payroll-client';
@@ -36,12 +38,18 @@ function formatTokenAmount(lamports: bigint): string {
   return negative ? `-${out}` : out;
 }
 
-function explorerTxUrl(sig: string): string {
-  return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+function estimateEarnedLamports(
+  accruedCheckpoint: bigint,
+  salaryPerSecond: bigint,
+  checkpointTime: number,
+  nowSec: number
+): bigint {
+  const dt = Math.max(0, nowSec - checkpointTime);
+  return accruedCheckpoint + salaryPerSecond * BigInt(dt);
 }
 
-function isDecryptNotAllowed(msg: string): boolean {
-  return msg.includes('Address is not allowed to decrypt this handle');
+function explorerTxUrl(sig: string): string {
+  return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
 }
 
 async function fetchWithTimeout(
@@ -87,9 +95,9 @@ export default function EmployeePage() {
   const [payslipLoading, setPayslipLoading] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
+  const [claimDestinationTokenAccount, setClaimDestinationTokenAccount] = useState('');
   const [revealMessage, setRevealMessage] = useState('');
   const [serverRevealHint, setServerRevealHint] = useState<string | null>(null);
-  const [requestAccessLoading, setRequestAccessLoading] = useState(false);
   const [decryptAllowed, setDecryptAllowed] = useState<{ salary: boolean; accrued: boolean } | null>(null);
   const [delegationRoute, setDelegationRoute] = useState<{
     delegated: boolean | null;
@@ -97,6 +105,8 @@ export default function EmployeePage() {
     fqdn: string | null;
     error: string | null;
   } | null>(null);
+  const [delegationRouteLoading, setDelegationRouteLoading] = useState(false);
+  const [delegationRouteCheckedAt, setDelegationRouteCheckedAt] = useState<number | null>(null);
 
   const [revealed, setRevealed] = useState<{
     salaryLamportsPerSec: bigint;
@@ -112,7 +122,9 @@ export default function EmployeePage() {
   const [payslipJson, setPayslipJson] = useState('');
   const [status, setStatus] = useState<{
     streamIndex: number;
+    streamAddress: string;
     owner: string;
+    hasFixedDestination: boolean;
     employeeTokenAccount: string;
     isActive: boolean;
     isDelegated: boolean;
@@ -123,7 +135,6 @@ export default function EmployeePage() {
     accruedHandleValue: string;
     salaryHandleValue: string;
     withdrawPending: boolean;
-    withdrawRequester: string | null;
     withdrawRequestedAt: number | null;
   } | null>(null);
   const [destinationBalance, setDestinationBalance] = useState<{
@@ -137,6 +148,7 @@ export default function EmployeePage() {
     requestedAt: number; // unix seconds
     wasDelegated: boolean;
   } | null>(null);
+  const [estimatedFrozenAt, setEstimatedFrozenAt] = useState<number | null>(null);
 
   const streamIndex = useMemo(() => {
     const n = Number(streamIndexInput);
@@ -177,8 +189,6 @@ export default function EmployeePage() {
         const [biz] = getBusinessPDA(new PublicKey(employerWallet));
         const found = await getPendingPayoutsForWorker(connection, biz, wallet.publicKey!);
         setPendingPayouts(found);
-        // If a payout was just claimed, we'll see it here as gone
-        if (found.length === 0) setClaimSuccessTx(null);
       } catch { /* ignore auto-scan errors */ }
     }
   }, [connection, employerWallet, wallet.publicKey]);
@@ -214,6 +224,45 @@ export default function EmployeePage() {
     void loadProofs();
   }, [connection, pendingPayouts]);
 
+  const loadDelegationRoute = useCallback(async (streamAddress: string) => {
+    setDelegationRouteLoading(true);
+    try {
+      const resp = await fetchWithTimeout(
+        `/api/magicblock/delegation-status?pubkey=${encodeURIComponent(streamAddress)}`
+      );
+      const json = await resp.json();
+      if (resp.ok && json?.ok) {
+        const r = json.result || {};
+        const delegatedRaw =
+          r?.delegated ?? r?.isDelegated ?? r?.delegation?.delegated ?? false;
+        const delegated = typeof delegatedRaw === 'number' ? delegatedRaw !== 0 : Boolean(delegatedRaw);
+        setDelegationRoute({
+          delegated,
+          endpoint: r?.endpoint || r?.delegation?.endpoint || null,
+          fqdn: r?.fqdn || r?.delegation?.fqdn || null,
+          error: null,
+        });
+      } else {
+        setDelegationRoute({
+          delegated: null,
+          endpoint: null,
+          fqdn: null,
+          error: json?.error || 'Router request failed',
+        });
+      }
+    } catch (e: any) {
+      setDelegationRoute({
+        delegated: null,
+        endpoint: null,
+        fqdn: null,
+        error: e?.message || 'Router request failed',
+      });
+    } finally {
+      setDelegationRouteCheckedAt(Date.now());
+      setDelegationRouteLoading(false);
+    }
+  }, []);
+
   const loadStatus = useCallback(async () => {
     if (!employerWallet || streamIndex === null) return;
 
@@ -230,57 +279,27 @@ export default function EmployeePage() {
       if (!stream) {
         throw new Error(`No v2 stream found for index ${streamIndex}`);
       }
+      const hasFixedDestination = stream.hasFixedDestination;
       let destinationBalanceUi: string | null = null;
       let destinationBalanceRaw: string | null = null;
       let destinationBalanceError: string | null = null;
-      try {
-        const bal = await connection.getTokenAccountBalance(stream.employeeTokenAccount, 'confirmed');
-        destinationBalanceUi = bal?.value?.uiAmountString ?? null;
-        destinationBalanceRaw = bal?.value?.amount ?? null;
-      } catch (e: any) {
-        const msg = e?.message || 'Destination token balance unavailable';
-        if (String(msg).toLowerCase().includes('not a token account')) {
-          destinationBalanceError =
-            'Confidential token balance is private in this view (standard SPL balance API is not applicable).';
-        } else {
-          destinationBalanceError = msg;
+      if (hasFixedDestination) {
+        try {
+          const bal = await connection.getTokenAccountBalance(stream.employeeTokenAccount, 'confirmed');
+          destinationBalanceUi = bal?.value?.uiAmountString ?? null;
+          destinationBalanceRaw = bal?.value?.amount ?? null;
+        } catch (e: any) {
+          const msg = e?.message || 'Destination token balance unavailable';
+          if (String(msg).toLowerCase().includes('not a token account')) {
+            destinationBalanceError =
+              'Confidential token balance is private in this view (standard SPL balance API is not applicable).';
+          } else {
+            destinationBalanceError = msg;
+          }
         }
       }
 
-      // Best-effort: ask MagicBlock router where this stream is delegated.
-      // This makes MagicBlock usage visible in the UI even when the base-layer owner is stale.
-      try {
-        const resp = await fetchWithTimeout(
-          `/api/magicblock/delegation-status?pubkey=${encodeURIComponent(stream.address.toBase58())}`
-        );
-        const json = await resp.json();
-        if (resp.ok && json?.ok) {
-          const r = json.result || {};
-          const delegatedRaw =
-            r?.delegated ?? r?.isDelegated ?? r?.delegation?.delegated ?? false;
-          const delegated = typeof delegatedRaw === 'number' ? delegatedRaw !== 0 : Boolean(delegatedRaw);
-          setDelegationRoute({
-            delegated,
-            endpoint: r?.endpoint || r?.delegation?.endpoint || null,
-            fqdn: r?.fqdn || r?.delegation?.fqdn || null,
-            error: null,
-          });
-        } else {
-          setDelegationRoute({
-            delegated: null,
-            endpoint: null,
-            fqdn: null,
-            error: json?.error || 'Router request failed',
-          });
-        }
-      } catch (e: any) {
-        setDelegationRoute({
-          delegated: null,
-          endpoint: null,
-          fqdn: null,
-          error: e?.message || 'Router request failed',
-        });
-      }
+      await loadDelegationRoute(stream.address.toBase58());
 
       const withdrawReq = await getWithdrawRequestV2Account(connection, business.address, streamIndex);
       const handles = getEmployeeStreamV2DecryptHandles(stream);
@@ -299,8 +318,12 @@ export default function EmployeePage() {
       }
       setStatus({
         streamIndex: stream.streamIndex,
+        streamAddress: stream.address.toBase58(),
         owner,
-        employeeTokenAccount: stream.employeeTokenAccount.toBase58(),
+        hasFixedDestination,
+        employeeTokenAccount: hasFixedDestination
+          ? stream.employeeTokenAccount.toBase58()
+          : "",
         isActive: stream.isActive,
         isDelegated,
         lastAccrualTime: stream.lastAccrualTime,
@@ -310,7 +333,6 @@ export default function EmployeePage() {
         accruedHandleValue: handles.accruedHandleValue.toString(),
         salaryHandleValue: handles.salaryHandleValue.toString(),
         withdrawPending: Boolean(withdrawReq?.isPending),
-        withdrawRequester: withdrawReq ? withdrawReq.requester.toBase58() : null,
         withdrawRequestedAt: withdrawReq ? withdrawReq.requestedAt : null,
       });
       setDestinationBalance({
@@ -326,7 +348,63 @@ export default function EmployeePage() {
     } finally {
       setStatusLoading(false);
     }
-  }, [connection, employerWallet, revealed, streamIndex]);
+  }, [connection, employerWallet, loadDelegationRoute, revealed, streamIndex]);
+
+  const revealViaKeeperRelay = useCallback(
+    async (streamIndexValue: number) => {
+      if (!wallet.publicKey || !wallet.signMessage) {
+        throw new Error('Wallet signature is required for keeper relay reveal.');
+      }
+      if (!employerWallet) {
+        throw new Error('Enter company wallet first.');
+      }
+      const timestamp = Math.floor(Date.now() / 1000);
+      const msg = new TextEncoder().encode(
+        `reveal:${employerWallet}:${streamIndexValue}:${timestamp}`
+      );
+      const signature = await wallet.signMessage(msg);
+      const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
+      const resp = await fetchWithTimeout(`${keeperUrl}/api/reveal-live`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workerPubkey: wallet.publicKey.toBase58(),
+          businessOwner: employerWallet,
+          streamIndex: streamIndexValue,
+          timestamp,
+          signature: Array.from(signature),
+          message: Array.from(msg),
+        }),
+      });
+      const result = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) {
+        throw new Error(result?.error || 'Keeper relay reveal failed');
+      }
+      const salaryLamportsPerSec = BigInt(result?.salaryLamportsPerSec || '0');
+      const accruedLamportsCheckpoint = BigInt(result?.accruedLamportsCheckpoint || '0');
+      const checkpointTime =
+        Number(result?.checkpointTime) > 0
+          ? Number(result?.checkpointTime)
+          : Math.floor(Date.now() / 1000);
+      setRevealed({
+        salaryLamportsPerSec,
+        accruedLamportsCheckpoint,
+        checkpointTime,
+        revealedAt: Math.floor(Date.now() / 1000),
+      });
+      setRevealMessage('Live earnings enabled via keeper confidential relay.');
+      setServerRevealHint(null);
+    },
+    [employerWallet, wallet.publicKey, wallet.signMessage]
+  );
+
+  // Fallback destination for claims: use stream destination unless worker picks another account.
+  useEffect(() => {
+    if (!status?.hasFixedDestination || !status?.employeeTokenAccount) return;
+    setClaimDestinationTokenAccount((prev) =>
+      prev && prev.trim().length > 0 ? prev : status.employeeTokenAccount
+    );
+  }, [status?.employeeTokenAccount, status?.hasFixedDestination]);
 
   // Polling for live updates when a payout is in flight
   useEffect(() => {
@@ -434,6 +512,56 @@ export default function EmployeePage() {
     };
   }, [delegationRoute?.delegated, status, withdrawFlow]);
 
+  // Freeze local estimate once a withdraw enters pending to avoid showing an amount that keeps
+  // increasing while on-chain settlement is finalizing.
+  useEffect(() => {
+    if (!status || !revealed) {
+      setEstimatedFrozenAt(null);
+      return;
+    }
+    const pending = Boolean(status.withdrawPending);
+    if (!pending) {
+      setEstimatedFrozenAt(null);
+      return;
+    }
+    const freezeAt =
+      status.withdrawRequestedAt ||
+      withdrawFlow?.requestedAt ||
+      Math.floor(Date.now() / 1000);
+    setEstimatedFrozenAt((prev) => prev ?? freezeAt);
+  }, [revealed, status, status?.withdrawPending, status?.withdrawRequestedAt, withdrawFlow?.requestedAt]);
+
+  const executionMode = useMemo(() => {
+    if (!status) {
+      return {
+        label: 'Unknown',
+        detail: 'Load payroll status to detect Boost Execution route.',
+        badgeClass: 'bg-gray-100 text-gray-700',
+      };
+    }
+    const routerDelegated = delegationRoute?.delegated;
+    const boosted = routerDelegated === true || status.isDelegated;
+    if (boosted) {
+      return {
+        label: 'Boost Execution',
+        detail: 'MagicBlock delegated route is active for this payroll stream.',
+        badgeClass: 'bg-emerald-100 text-emerald-800',
+      };
+    }
+    if (routerDelegated === false && !status.isDelegated) {
+      return {
+        label: 'Base Layer',
+        detail: 'No delegation detected; actions settle directly on Solana base layer.',
+        badgeClass: 'bg-slate-100 text-slate-700',
+      };
+    }
+    return {
+      label: 'Checking',
+      detail: 'Router and base ownership are still syncing. Refresh route in a few seconds.',
+      badgeClass: 'bg-amber-100 text-amber-800',
+    };
+  }, [delegationRoute?.delegated, status]);
+
   useEffect(() => {
     if (!autoRefresh || !employerWallet || streamIndex === null) return;
     const timer = setInterval(() => {
@@ -451,10 +579,14 @@ export default function EmployeePage() {
     if (!revealed) return;
 
     const tick = () => {
-      const now = Math.floor(Date.now() / 1000);
-      const dt = Math.max(0, now - revealed.checkpointTime);
+      const now = estimatedFrozenAt ?? Math.floor(Date.now() / 1000);
       setEarnedLamportsNow(
-        revealed.accruedLamportsCheckpoint + revealed.salaryLamportsPerSec * BigInt(dt)
+        estimateEarnedLamports(
+          revealed.accruedLamportsCheckpoint,
+          revealed.salaryLamportsPerSec,
+          revealed.checkpointTime,
+          now
+        )
       );
     };
 
@@ -466,7 +598,7 @@ export default function EmployeePage() {
         earnedTimerRef.current = null;
       }
     };
-  }, [revealed]);
+  }, [estimatedFrozenAt, revealed]);
 
   return (
     <PageShell
@@ -531,6 +663,45 @@ export default function EmployeePage() {
               >
                 {statusLoading ? 'Loading...' : 'Load Payroll Status'}
               </button>
+              {status ? (
+                <div className="rounded-lg border border-gray-200 bg-[#FAFBFF] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        Execution mode
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${executionMode.badgeClass}`}>
+                          {executionMode.label}
+                        </span>
+                        {delegationRouteCheckedAt ? (
+                          <span className="text-[11px] text-gray-500">
+                            Updated {new Date(delegationRouteCheckedAt).toLocaleTimeString()}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-xs text-gray-600">{executionMode.detail}</p>
+                      {delegationRoute?.endpoint ? (
+                        <p className="mt-1 truncate text-[11px] text-gray-500">
+                          Router: {delegationRoute.endpoint}
+                        </p>
+                      ) : null}
+                      {delegationRoute?.error ? (
+                        <p className="mt-1 text-[11px] text-amber-700">
+                          Router status unavailable: {delegationRoute.error}
+                        </p>
+                      ) : null}
+                    </div>
+                    <button
+                      onClick={() => void loadDelegationRoute(status.streamAddress)}
+                      disabled={delegationRouteLoading}
+                      className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs text-gray-700 disabled:opacity-50"
+                    >
+                      {delegationRouteLoading ? 'Refreshing...' : 'Refresh Route'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <button
                 onClick={() => {
                   if (typeof window === 'undefined') return;
@@ -576,7 +747,7 @@ export default function EmployeePage() {
                   active: hasBuffered || hasClaimed,
                   proof: bufferProof
                 },
-                { label: 'Auto-Claim', active: hasBuffered && !hasClaimed },
+                { label: 'Claim', active: hasBuffered && !hasClaimed },
                 {
                   label: 'Claimed',
                   active: hasClaimed,
@@ -630,6 +801,7 @@ export default function EmployeePage() {
                         const timestamp = Math.floor(Date.now() / 1000);
                         const { signature, message } = await signWithdrawAuthorization(
                           wallet,
+                          new PublicKey(employerWallet),
                           streamIndex,
                           timestamp
                         );
@@ -686,11 +858,90 @@ export default function EmployeePage() {
                   </p>
                 </div>
               )}
+              {withdrawProgress ? (
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                    MagicBlock Processing
+                  </div>
+                  <div className="mt-2 grid gap-1 text-xs text-indigo-900">
+                    <div>
+                      Route: {withdrawProgress.delegationUsed ? 'Boost Execution (MagicBlock)' : 'Base Layer'}
+                    </div>
+                    <div>
+                      Undelegation checkpoint:{' '}
+                      {withdrawProgress.undelegatedObserved ? 'observed' : 'waiting'}
+                    </div>
+                    <div>
+                      Settlement:{' '}
+                      {withdrawProgress.settled
+                        ? 'complete'
+                        : withdrawProgress.pendingOnChain
+                          ? 'pending on-chain'
+                          : 'queued'}
+                    </div>
+                    <div>
+                      Re-delegation:{' '}
+                      {withdrawProgress.redelegated
+                        ? 'active'
+                        : withdrawProgress.settled
+                          ? 'pending confirmation'
+                          : 'in progress'}
+                    </div>
+                  </div>
+                  {withdrawProgress.settled &&
+                  !status?.withdrawPending &&
+                  pendingPayouts.length === 0 &&
+                  !claimSuccessTx ? (
+                    <div className="mt-3 rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-900">
+                      Settlement finished. If no claim card appears, connect the same Employee Auth wallet used during onboarding, then refresh status.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
-              {/* Step 2: Auto-Claim in Progress */}
+              {/* Step 2: Worker Claim */}
               {pendingPayouts.length > 0 && !claimSuccessTx && (
                 <div className="space-y-3">
-                  <div className="mb-2 text-xs font-semibold uppercase font-bold text-[#005B96]">Step 2: Auto-Claiming</div>
+                  <div className="mb-2 text-xs font-semibold uppercase font-bold text-[#005B96]">Step 2: Claim Buffered Payout</div>
+                  <div className="rounded-lg border border-[#005B96]/20 bg-[#005B96]/5 p-4">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-[#005B96]">
+                      Claim Destination Token Account
+                    </div>
+                    <input
+                      value={claimDestinationTokenAccount}
+                      onChange={(e) => setClaimDestinationTokenAccount(e.target.value)}
+                      placeholder="Destination confidential token account..."
+                      className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                    />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={async () => {
+                          if (!wallet.publicKey) return;
+                          setError('');
+                          setActionMessage('');
+                          try {
+                            const { tokenAccount } = await createIncoTokenAccount(
+                              connection,
+                              wallet,
+                              wallet.publicKey,
+                              PAYUSD_MINT
+                            );
+                            setClaimDestinationTokenAccount(tokenAccount.toBase58());
+                            setActionMessage('New private destination account created for claim.');
+                          } catch (e: any) {
+                            setError(e?.message || 'Failed to create destination account');
+                          }
+                        }}
+                        disabled={claimLoading || !wallet.publicKey}
+                        className="rounded-md border border-[#005B96]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#005B96] disabled:opacity-50"
+                      >
+                        Create Private Destination
+                      </button>
+                      <div className="text-[11px] text-gray-500">
+                        Recommended: use a fresh destination per claim to reduce address linkability.
+                      </div>
+                    </div>
+                  </div>
                   {pendingPayouts.map((p) => {
                     const proof = bufferProofTxByNonce[p.nonce];
                     return (
@@ -705,10 +956,75 @@ export default function EmployeePage() {
                               Settled on-chain {new Date(p.createdAt * 1000).toLocaleTimeString()}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 rounded-lg bg-blue-50 border border-blue-200 px-4 py-2.5">
-                            <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-                            <span className="text-xs font-semibold text-blue-700">Keeper auto-claiming...</span>
-                          </div>
+                          <button
+                            onClick={async () => {
+                              if (!wallet.publicKey || !employerWallet) return;
+                              if (!claimDestinationTokenAccount.trim()) {
+                                setError('Enter a claim destination token account first.');
+                                return;
+                              }
+                              setError('');
+                              setActionMessage('');
+                              setClaimLoading(true);
+                              setClaimingNonce(p.nonce);
+                              try {
+                                const destination = new PublicKey(claimDestinationTokenAccount.trim());
+                                const { signature, message } = await signClaimAuthorization(
+                                  wallet,
+                                  new PublicKey(employerWallet),
+                                  p.streamIndex,
+                                  p.nonce,
+                                  destination,
+                                  0,
+                                );
+
+                                const keeperUrl =
+                                  process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
+                                const res = await fetch(`${keeperUrl}/api/claim-auth`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    workerPubkey: wallet.publicKey.toBase58(),
+                                    streamIndex: p.streamIndex,
+                                    nonce: p.nonce,
+                                    signature: Array.from(signature),
+                                    message: Array.from(message),
+                                    businessOwner: employerWallet,
+                                    destinationTokenAccount: destination.toBase58(),
+                                    expiry: 0,
+                                  }),
+                                });
+
+                                if (!res.ok) {
+                                  const errBody = await res.json().catch(() => ({}));
+                                  throw new Error(
+                                    errBody.error || `Failed to submit claim auth: ${res.statusText}`,
+                                  );
+                                }
+
+                                setLastClaimProof({
+                                  nonce: p.nonce,
+                                  payoutPda: p.address.toBase58(),
+                                  bufferTx: proof || null,
+                                  claimTx: 'relay_pending',
+                                });
+                                setActionMessage(
+                                  'Claim authorization sent. Keeper will relay claim to your selected destination.',
+                                );
+                                // Keeper relays asynchronously; poll status/payout list.
+                                await Promise.all([scanPayouts(), loadStatus()]);
+                              } catch (e: any) {
+                                setError(e?.message || 'Claim failed');
+                              } finally {
+                                setClaimLoading(false);
+                                setClaimingNonce(null);
+                              }
+                            }}
+                            disabled={claimLoading || claimingNonce === p.nonce || !wallet.publicKey}
+                            className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-2.5 text-xs font-semibold text-blue-700 disabled:opacity-50"
+                          >
+                            {claimLoading && claimingNonce === p.nonce ? 'Authorizing...' : 'Authorize Keeper Claim'}
+                          </button>
                         </div>
                         <AdvancedDetails title="Audit Trail">
                           <div className="mt-3 grid gap-2 text-[10px] text-gray-500">
@@ -836,7 +1152,7 @@ export default function EmployeePage() {
           <section className="panel-card">
             <h2 className="text-lg font-semibold text-[#2D2D2A]">{COPY.employee.sectionB}</h2>
             <p className="mt-1 text-sm text-gray-600">
-              Approve with your wallet to reveal your live earnings ticker.
+              Reveal live earnings via keeper confidential relay (strict mode).
             </p>
             <div className="mt-4 space-y-3">
               <button
@@ -855,32 +1171,13 @@ export default function EmployeePage() {
                   setServerRevealHint(null);
                   setRevealLoading(true);
                   try {
-                    const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-                    const result = await decrypt([status.salaryHandle, status.accruedHandle], {
-                      address: wallet.publicKey,
-                      signMessage: wallet.signMessage,
-                    });
-
-                    const salaryLamportsPerSec = BigInt(result.plaintexts[0] || '0');
-                    const accruedLamportsCheckpoint = BigInt(result.plaintexts[1] || '0');
-                    const checkpointTime =
-                      status.lastAccrualTime > 0 ? status.lastAccrualTime : status.lastSettleTime;
-                    const now = Math.floor(Date.now() / 1000);
-                    setRevealed({
-                      salaryLamportsPerSec,
-                      accruedLamportsCheckpoint,
-                      checkpointTime,
-                      revealedAt: now,
-                    });
-                    setRevealMessage('Live earnings enabled.');
+                    await revealViaKeeperRelay(status.streamIndex);
                   } catch (e: any) {
                     const msg = e?.message || 'Secure reveal failed';
                     setError(msg);
-                    if (isDecryptNotAllowed(msg)) {
-                      setServerRevealHint(
-                        'This wallet does not have view permission yet. Ask your company admin to click "Grant Worker View Access" for your payroll record, then try again.'
-                      );
-                    }
+                    setServerRevealHint(
+                      'Keeper relay could not reveal this stream. Confirm automation decrypt access is enabled in Employer setup, then try again.'
+                    );
                   } finally {
                     setRevealLoading(false);
                   }
@@ -888,7 +1185,7 @@ export default function EmployeePage() {
                 disabled={revealLoading || !status}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
               >
-                {revealLoading ? 'Revealing...' : 'Reveal Live Earnings'}
+                {revealLoading ? 'Revealing via Keeper...' : 'Reveal Live Earnings (Keeper)'}
               </button>
               {serverRevealHint ? (
                 <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -896,39 +1193,22 @@ export default function EmployeePage() {
                   <div className="mt-1">{serverRevealHint}</div>
                   <button
                     onClick={async () => {
-                      if (!wallet.publicKey || !wallet.signMessage || !status) return;
-                      setRequestAccessLoading(true);
+                      if (!status) return;
+                      setRevealLoading(true);
+                      setError('');
+                      setRevealMessage('');
                       try {
-                        const timestamp = Math.floor(Date.now() / 1000);
-                        const msgStr = `view:${status.streamIndex}:${timestamp}`;
-                        const msg = new TextEncoder().encode(msgStr);
-                        const signature = await wallet.signMessage(msg);
-                        const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
-                        const resp = await fetch(`${keeperUrl}/api/request-view-access`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            streamIndex: status.streamIndex,
-                            timestamp,
-                            workerPubkey: wallet.publicKey.toBase58(),
-                            signature: Array.from(signature),
-                            message: Array.from(msg),
-                            businessOwner: employerWallet,
-                          }),
-                        });
-                        const result = await resp.json();
-                        if (!resp.ok) throw new Error(result.error || 'Failed to request access');
-                        setServerRevealHint('✅ Request sent securely to Keeper. Your access will be granted in ~15s. Please reload or try decrypting again shortly.');
+                        await revealViaKeeperRelay(status.streamIndex);
                       } catch (err: any) {
-                        setError(err?.message || 'Access request failed');
+                        setError(err?.message || 'Keeper relay reveal failed');
                       } finally {
-                        setRequestAccessLoading(false);
+                        setRevealLoading(false);
                       }
                     }}
-                    disabled={requestAccessLoading}
-                    className="mt-3 rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+                    disabled={revealLoading || !status}
+                    className="mt-3 rounded-md bg-[#1D3557] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#15304d] disabled:opacity-50"
                   >
-                    {requestAccessLoading ? 'Requesting...' : 'Request Auto-Grant'}
+                    {revealLoading ? 'Revealing...' : 'Reveal via Keeper Relay'}
                   </button>
                 </div>
               ) : null}
@@ -936,21 +1216,42 @@ export default function EmployeePage() {
             </div>
 
             <div className="mt-4 grid gap-2 text-sm text-gray-700">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Estimated live earnings
+              </div>
+              <div>
+                Reveal mode: Keeper confidential relay
+              </div>
               <div className="text-3xl font-semibold text-[#0B6E4F]">
                 {revealed ? `${formatTokenAmount(earnedLamportsNow)}` : '-'}{' '}
                 <span className="text-sm text-gray-600">cUSDC-like (confidential)</span>
               </div>
+              {estimatedFrozenAt ? (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  Finalizing on-chain payout. Live estimate is frozen until settlement confirms.
+                </div>
+              ) : null}
               <div>
-                View permission:{' '}
+                Worker wallet decrypt grant (legacy):{' '}
                 {decryptAllowed === null
                   ? 'Unknown'
                   : decryptAllowed.salary && decryptAllowed.accrued
-                    ? 'Allowed'
-                    : 'Not allowed'}
+                    ? 'Granted'
+                    : 'Not granted'}
+              </div>
+              <div className="text-xs text-gray-500">
+                Strict mode reveal uses keeper relay and does not require worker wallet decrypt grants.
               </div>
               <div>Earning rate: {revealed ? `${formatTokenAmount(revealed.salaryLamportsPerSec)}/sec` : '-'}</div>
               <div>Starting balance: {revealed ? formatTokenAmount(revealed.accruedLamportsCheckpoint) : '-'}</div>
               <div>Starting time: {revealed ? revealed.checkpointTime : '-'}</div>
+              <div>
+                Last settled on-chain:{' '}
+                {status?.lastSettleTime ? new Date(status.lastSettleTime * 1000).toLocaleString() : '-'}
+              </div>
+              <div className="text-xs text-gray-500">
+                Wallet payout reflects finalized on-chain settlement and may differ briefly from the live estimate.
+              </div>
             </div>
           </section>
 
@@ -1057,7 +1358,8 @@ export default function EmployeePage() {
                       employer: employer.toBase58(),
                       business: business.address.toBase58(),
                       streamIndex,
-                      destinationTokenAccount: status.employeeTokenAccount,
+                      destinationTokenAccount:
+                        claimDestinationTokenAccount.trim() || status.employeeTokenAccount || null,
                       periodStart: startSec,
                       periodEnd: endSec,
                       earnedLamports: total.toString(),
@@ -1095,23 +1397,36 @@ export default function EmployeePage() {
             <h2 className="text-lg font-semibold text-[#2D2D2A]">Where payout was sent</h2>
             {status ? (
               <div className="mt-3 grid gap-2 text-sm text-gray-700">
-                <div>
-                  Destination token account:{' '}
-                  <a
-                    href={`https://explorer.solana.com/address/${status.employeeTokenAccount}?cluster=devnet`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-[#005B96] underline"
-                  >
-                    {status.employeeTokenAccount}
-                  </a>
-                </div>
-                <div>
-                  Current balance:{' '}
-                  {destinationBalance?.error
-                    ? `Unavailable (${destinationBalance.error})`
-                    : destinationBalance?.uiAmount ?? destinationBalance?.rawAmount ?? '-'}
-                </div>
+                {status.hasFixedDestination ? (
+                  <>
+                    <div>
+                      Destination token account:{' '}
+                      <a
+                        href={`https://explorer.solana.com/address/${status.employeeTokenAccount}?cluster=devnet`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono text-[#005B96] underline"
+                      >
+                        {status.employeeTokenAccount}
+                      </a>
+                    </div>
+                    <div>
+                      Current balance:{' '}
+                      {destinationBalance?.error
+                        ? `Unavailable (${destinationBalance.error})`
+                        : destinationBalance?.uiAmount ?? destinationBalance?.rawAmount ?? '-'}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      Destination route: claim-time only (no fixed on-chain destination).
+                    </div>
+                    <div>
+                      Use "Claim Destination Token Account" above when authorizing keeper claim.
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <p className="mt-3 text-sm text-gray-600">Load payroll status to see payout destination details.</p>
@@ -1132,12 +1447,16 @@ export default function EmployeePage() {
                         : delegationRoute.delegated
                           ? 'yes'
                           : 'no'}
+                      {delegationRoute.fqdn ? ` [${delegationRoute.fqdn}]` : ''}
                       {delegationRoute.endpoint ? ` (${delegationRoute.endpoint})` : ''}
                       {delegationRoute.error ? ` (err: ${delegationRoute.error})` : ''}
                     </div>
                   ) : null}
+                  <div>
+                    Delegation route checked at:{' '}
+                    {delegationRouteCheckedAt ? new Date(delegationRouteCheckedAt).toISOString() : '-'}
+                  </div>
                   <div>Withdrawal pending: {status.withdrawPending ? 'yes' : 'no'}</div>
-                  <div>Withdrawal requester: {status.withdrawRequester ?? '-'}</div>
                   <div>Withdrawal requested at: {status.withdrawRequestedAt ?? '-'}</div>
                   <div>Last accrual time: {status.lastAccrualTime}</div>
                   <div>Last settle time: {status.lastSettleTime}</div>
