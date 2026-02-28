@@ -42,6 +42,7 @@ const BUFFER_SEED = Buffer.from('buffer');
 const DELEGATION_SEED = Buffer.from('delegation');
 const DELEGATION_METADATA_SEED = Buffer.from('delegation-metadata');
 const SHIELDED_PAYOUT_V2_SEED = Buffer.from('shielded_payout');
+const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
 
 const INCO_LIGHTNING_ID = new PublicKey(
   process.env.KEEPER_INCO_LIGHTNING_ID ||
@@ -118,6 +119,20 @@ const AUTO_CLAIM_ON_BUFFER = process.env.KEEPER_AUTO_CLAIM_ON_BUFFER === 'true';
 const AUTO_CLAIM_SWEEP_ENABLED = process.env.KEEPER_AUTO_CLAIM_SWEEP === 'true';
 // Privacy-first default: disable worker view-relay grants unless explicitly enabled.
 const ENABLE_VIEW_RELAY = process.env.KEEPER_ENABLE_VIEW_RELAY === 'true';
+type PrivacyPayoutRouteMode = 'off' | 'shadow' | 'enforced';
+const PRIVACY_PAYOUT_ROUTE_MODE = parsePrivacyPayoutRouteMode(
+  process.env.KEEPER_PRIVACY_PAYOUT_ROUTE_MODE || 'off'
+);
+const UMBRA_RELAY_URL = (process.env.KEEPER_UMBRA_RELAY_URL || '').trim();
+const UMBRA_POOL_ID = (process.env.KEEPER_UMBRA_POOL_ID || '').trim();
+const UMBRA_RELAYER_KEY_ID = (process.env.KEEPER_UMBRA_RELAYER_KEY_ID || '').trim();
+const UMBRA_RELAY_API_KEY = (process.env.KEEPER_UMBRA_RELAY_API_KEY || '').trim();
+const UMBRA_ROUTE_TIMEOUT_MS = Number(process.env.KEEPER_UMBRA_ROUTE_TIMEOUT_MS || '7000');
+const UMBRA_ROUTE_RETRIES = Number(process.env.KEEPER_UMBRA_ROUTE_RETRIES || '3');
+const UMBRA_FORWARD_SIGNED_CLAIM = process.env.KEEPER_UMBRA_FORWARD_SIGNED_CLAIM === 'true';
+const UMBRA_FORWARD_URL = resolveUmbraForwardUrl(UMBRA_RELAY_URL, process.env.KEEPER_UMBRA_FORWARD_URL || '');
+const UMBRA_ROUTE_ENABLED = PRIVACY_PAYOUT_ROUTE_MODE !== 'off';
+const UMBRA_ROUTE_CONFIGURED = UMBRA_RELAY_URL.length > 0 && UMBRA_POOL_ID.length > 0;
 // If a stream is delegated, attempt to run accrue_v2 on the ER endpoint before commit+undelegate.
 // This makes MagicBlock the compute engine for the accrual checkpoint.
 const ACCRUE_ON_ER_BEFORE_COMMIT = process.env.KEEPER_ACCRUE_ON_ER_BEFORE_COMMIT !== 'false';
@@ -291,6 +306,39 @@ type WithdrawRequestV2Record = {
   isPending: boolean;
 };
 
+type UmbraRouteDecision = {
+  handled: boolean;
+  reason: string;
+};
+
+type UmbraRouteInput = {
+  request: WithdrawRequestV2Record;
+  stream: EmployeeStreamV2Record;
+  payoutNonce: number;
+  shieldedPayout: PublicKey;
+  payoutTokenAccount: PublicKey;
+  routeOwnerPubkey?: string | null;
+};
+
+type UmbraRouteRelayResult = {
+  ok: boolean;
+  reason: string;
+  statusCode?: number;
+  jobId?: string;
+  relayStatus?: string;
+  destinationTokenAccount?: string;
+  deferClaim?: boolean;
+};
+
+type UmbraForwardResult = {
+  ok: boolean;
+  reason: string;
+  statusCode?: number;
+  relayTxSignature?: string;
+  relayerPublicKey?: string;
+  jobId?: string;
+};
+
 const idempotency = new Set<string>();
 const withdrawDecryptRetryAfter = new Map<string, number>();
 const complianceCache = new Map<string, ComplianceCacheRecord>();
@@ -318,6 +366,32 @@ function requiredEnv(name: string, fallback?: string): string {
 
 function normalizeRpcUrl(url: string): string {
   return url.replace(/\/+$/, '');
+}
+
+function parsePrivacyPayoutRouteMode(input: string): PrivacyPayoutRouteMode {
+  const normalized = String(input || '')
+    .trim()
+    .toLowerCase();
+  if (normalized === 'shadow') return 'shadow';
+  if (normalized === 'enforced') return 'enforced';
+  return 'off';
+}
+
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'invalid_url';
+  }
+}
+
+function resolveUmbraForwardUrl(routeUrl: string, explicitForwardUrl: string): string {
+  const explicit = (explicitForwardUrl || '').trim();
+  if (explicit.length > 0) return explicit;
+  const route = (routeUrl || '').trim();
+  if (!route) return '';
+  if (route.endsWith('/route')) return `${route.slice(0, -'/route'.length)}/forward-claim`;
+  return `${route.replace(/\/+$/, '')}/forward-claim`;
 }
 
 function isRetryableReadRpcError(error: unknown): boolean {
@@ -884,6 +958,78 @@ function processWithdrawRequestIx(
   });
 }
 
+function keeperClaimOnBehalfIx(
+  business: PublicKey,
+  streamIndex: number,
+  payoutNonce: number,
+  shieldedPayout: PublicKey,
+  payoutTokenAccount: PublicKey,
+  destinationTokenAccount: PublicKey,
+  expiry: number = 0,
+): TransactionInstruction {
+  const streamConfigPda = deriveStreamConfigPda(business);
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(payoutNonce));
+  const expiryBuf = Buffer.alloc(8);
+  expiryBuf.writeBigInt64LE(BigInt(expiry));
+
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // keeper
+      { pubkey: business, isSigner: false, isWritable: false }, // business
+      { pubkey: streamConfigPda, isSigner: false, isWritable: false }, // stream_config_v2
+      { pubkey: shieldedPayout, isSigner: false, isWritable: true }, // shielded_payout
+      { pubkey: payoutTokenAccount, isSigner: false, isWritable: true }, // payout_token_account
+      { pubkey: destinationTokenAccount, isSigner: false, isWritable: true }, // destination_token_account
+      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+      { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PROGRAM_ID,
+    data: Buffer.concat([
+      KEEPER_CLAIM_ON_BEHALF_V2_DISC,
+      streamIndexBuf,
+      nonceBuf,
+      expiryBuf,
+    ]),
+  });
+}
+
+async function sendKeeperClaimOnBehalf(
+  business: PublicKey,
+  streamIndex: number,
+  payoutNonce: number,
+  shieldedPayout: PublicKey,
+  payoutTokenAccount: PublicKey,
+  destinationTokenAccount: PublicKey,
+  expiry: number = 0,
+): Promise<string> {
+  const ix = keeperClaimOnBehalfIx(
+    business,
+    streamIndex,
+    payoutNonce,
+    shieldedPayout,
+    payoutTokenAccount,
+    destinationTokenAccount,
+    expiry,
+  );
+  const txBase64 = await buildSignedKeeperClaimOnBehalfTxBase64(ix);
+  const sig = await readConnection.sendRawTransaction(Buffer.from(txBase64, 'base64'), { skipPreflight: false });
+  await readConnection.confirmTransaction(sig, 'confirmed');
+  return sig;
+}
+
+async function buildSignedKeeperClaimOnBehalfTxBase64(ix: TransactionInstruction): Promise<string> {
+  const tx = new Transaction().add(ix);
+  tx.feePayer = payer.publicKey;
+  tx.recentBlockhash = (await readConnection.getLatestBlockhash()).blockhash;
+  tx.sign(payer);
+  return tx.serialize().toString('base64');
+}
+
 /**
  * Read the mint from an on-chain Inco token account.
  * Inco token account layout: discriminator(8) + mint(32) + owner(32) + ...
@@ -1134,6 +1280,16 @@ function isSettleTooSoonError(error: unknown): boolean {
   );
 }
 
+function isAccrualNotFreshError(error: unknown): boolean {
+  const message = String((error as any)?.message || error || '');
+  return (
+    message.includes('AccrualNotFresh') ||
+    message.includes('0x178c') ||
+    message.includes('Error Number: 6028') ||
+    message.includes('Accrual must be fresh')
+  );
+}
+
 function isBlockhashNotFoundError(error: unknown): boolean {
   const message = String((error as any)?.message || error || '');
   return message.includes('Blockhash not found');
@@ -1162,6 +1318,10 @@ function isRetryableRouterStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+function isRetryableUmbraStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 async function routerStatusFetch(url: string, body: string): Promise<any> {
   if (!fetchAny) throw new Error('fetch unavailable');
   const controller = new AbortController();
@@ -1176,6 +1336,155 @@ async function routerStatusFetch(url: string, body: string): Promise<any> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postUmbraRelay(payload: Record<string, any>): Promise<UmbraRouteRelayResult> {
+  if (!fetchAny) {
+    return { ok: false, reason: 'fetch_unavailable' };
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (UMBRA_RELAY_API_KEY) {
+    headers.Authorization = `Bearer ${UMBRA_RELAY_API_KEY}`;
+  }
+
+  let lastReason = 'unknown';
+  for (let attempt = 1; attempt <= UMBRA_ROUTE_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), UMBRA_ROUTE_TIMEOUT_MS);
+    try {
+      const res = await fetchAny(UMBRA_RELAY_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      let parsed: any = null;
+      try {
+        parsed = await res.json();
+      } catch {
+        parsed = null;
+      }
+
+      if (res.ok) {
+        const ok = parsed?.ok !== false;
+        if (ok) {
+          const destinationTokenAccount =
+            typeof parsed?.destinationTokenAccount === 'string'
+              ? parsed.destinationTokenAccount
+              : undefined;
+          const deferClaim = parsed?.deferClaim === true;
+          return {
+            ok: true,
+            reason: 'accepted',
+            statusCode: res.status,
+            jobId: parsed?.jobId ? String(parsed.jobId) : undefined,
+            relayStatus: parsed?.status ? String(parsed.status) : undefined,
+            destinationTokenAccount,
+            deferClaim,
+          };
+        }
+        lastReason = String(parsed?.error || parsed?.reason || 'relay_rejected');
+        if (attempt < UMBRA_ROUTE_RETRIES) {
+          const delay = DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+          await sleep(delay);
+          continue;
+        }
+        return { ok: false, reason: lastReason, statusCode: res.status };
+      }
+
+      const retryable = isRetryableUmbraStatus(res.status);
+      lastReason = String(parsed?.error || parsed?.reason || `http_${res.status}`);
+      if (retryable && attempt < UMBRA_ROUTE_RETRIES) {
+        const delay = DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+        await sleep(delay);
+        continue;
+      }
+      return { ok: false, reason: lastReason, statusCode: res.status };
+    } catch (e: any) {
+      lastReason = e?.name === 'AbortError' ? 'relay_timeout' : String(e?.message || 'relay_request_failed');
+      if (attempt < UMBRA_ROUTE_RETRIES) {
+        const delay = DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+        await sleep(delay);
+        continue;
+      }
+      return { ok: false, reason: lastReason };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return { ok: false, reason: lastReason };
+}
+
+async function postUmbraForward(payload: Record<string, any>): Promise<UmbraForwardResult> {
+  if (!fetchAny) {
+    return { ok: false, reason: 'fetch_unavailable' };
+  }
+  if (!UMBRA_FORWARD_URL) {
+    return { ok: false, reason: 'forward_url_missing' };
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (UMBRA_RELAY_API_KEY) {
+    headers.Authorization = `Bearer ${UMBRA_RELAY_API_KEY}`;
+  }
+
+  let lastReason = 'unknown';
+  for (let attempt = 1; attempt <= UMBRA_ROUTE_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), UMBRA_ROUTE_TIMEOUT_MS);
+    try {
+      const res = await fetchAny(UMBRA_FORWARD_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      let parsed: any = null;
+      try {
+        parsed = await res.json();
+      } catch {
+        parsed = null;
+      }
+
+      if (res.ok && parsed?.ok !== false) {
+        return {
+          ok: true,
+          reason: 'forwarded',
+          statusCode: res.status,
+          relayTxSignature: parsed?.relayTxSignature ? String(parsed.relayTxSignature) : undefined,
+          relayerPublicKey: parsed?.relayerPublicKey ? String(parsed.relayerPublicKey) : undefined,
+          jobId: parsed?.jobId ? String(parsed.jobId) : undefined,
+        };
+      }
+
+      const retryable = isRetryableUmbraStatus(res.status);
+      lastReason = String(parsed?.error || parsed?.reason || `http_${res.status}`);
+      if (retryable && attempt < UMBRA_ROUTE_RETRIES) {
+        const delay = DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+        await sleep(delay);
+        continue;
+      }
+      return { ok: false, reason: lastReason, statusCode: res.status };
+    } catch (e: any) {
+      lastReason = e?.name === 'AbortError' ? 'forward_timeout' : String(e?.message || 'forward_failed');
+      if (attempt < UMBRA_ROUTE_RETRIES) {
+        const delay = DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+        await sleep(delay);
+        continue;
+      }
+      return { ok: false, reason: lastReason };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return { ok: false, reason: lastReason };
 }
 
 async function getDelegationStatusWithRetry(
@@ -1377,6 +1686,176 @@ function isNoAccruedBalanceError(error: unknown): boolean {
   return message.includes('NoAccruedBalance') || message.includes('No accrued balance');
 }
 
+async function maybeHandleUmbraPayoutRouting(input: UmbraRouteInput): Promise<UmbraRouteDecision> {
+  if (!UMBRA_ROUTE_ENABLED) {
+    return { handled: false, reason: 'mode_off' };
+  }
+
+  if (!UMBRA_ROUTE_CONFIGURED) {
+    const reason = 'umbra_not_configured';
+    const remediation = 'Set KEEPER_UMBRA_RELAY_URL and KEEPER_UMBRA_POOL_ID';
+    if (PRIVACY_PAYOUT_ROUTE_MODE === 'enforced') {
+      log(
+        `[umbra-route] stream=${input.stream.streamIndex} nonce=${input.payoutNonce} ` +
+          `mode=enforced reason=${reason}; payout remains buffered`
+      );
+      await deadLetterWithdrawRequest('umbra_route_pending', input.request, `${reason}; ${remediation}`);
+      return { handled: true, reason };
+    }
+
+    log(
+      `[umbra-route] stream=${input.stream.streamIndex} nonce=${input.payoutNonce} ` +
+        `mode=shadow reason=${reason}; continuing current claim path`
+    );
+    return { handled: false, reason };
+  }
+
+  const relayHost = hostFromUrl(UMBRA_RELAY_URL);
+  const relayerLabel = UMBRA_RELAYER_KEY_ID || 'default';
+  const relayPayload = {
+    version: 1,
+    dryRun: PRIVACY_PAYOUT_ROUTE_MODE === 'shadow',
+    poolId: UMBRA_POOL_ID,
+    relayerKeyId: UMBRA_RELAYER_KEY_ID || null,
+    business: input.request.business.toBase58(),
+    streamIndex: input.request.streamIndex,
+    requestAddress: input.request.address.toBase58(),
+    requesterAuthHash: authHashHex(input.request.requesterAuthHash),
+    requestedAt: input.request.requestedAt,
+    payoutNonce: input.payoutNonce,
+    shieldedPayout: input.shieldedPayout.toBase58(),
+    payoutTokenAccount: input.payoutTokenAccount.toBase58(),
+    mint: PAYUSD_MINT.toBase58(),
+    keeper: payer.publicKey.toBase58(),
+    routeOwnerPubkey: input.routeOwnerPubkey || '',
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+  const baseLog =
+    `[umbra-route] stream=${input.stream.streamIndex} nonce=${input.payoutNonce} ` +
+    `payout_token=${input.payoutTokenAccount.toBase58()} relay=${relayHost} pool=${UMBRA_POOL_ID} relayer=${relayerLabel}`;
+
+  if (PRIVACY_PAYOUT_ROUTE_MODE === 'shadow') {
+    const result = await postUmbraRelay(relayPayload);
+    if (result.ok) {
+      const destinationLabel = result.destinationTokenAccount || 'n/a';
+      log(
+        `${baseLog} mode=shadow dry_run=true status=${result.relayStatus || 'accepted'} ` +
+          `job_id=${result.jobId || 'n/a'} route_destination=${destinationLabel}`
+      );
+      return { handled: false, reason: 'shadow_accepted' };
+    }
+    log(`${baseLog} mode=shadow dry_run=true failed=${result.reason}; continuing current claim path`);
+    return { handled: false, reason: 'shadow_failed' };
+  }
+
+  const result = await postUmbraRelay(relayPayload);
+  if (result.ok) {
+    const destination = result.destinationTokenAccount?.trim();
+    if (destination && !result.deferClaim) {
+      let destinationTokenAccount: PublicKey;
+      try {
+        destinationTokenAccount = new PublicKey(destination);
+      } catch {
+        const reason = `invalid_route_destination: ${destination}`;
+        await deadLetterWithdrawRequest('umbra_route_failed', input.request, reason);
+        await sendAlertWithdrawRequest('umbra_route_failed', input.request, reason);
+        log(`${baseLog} mode=enforced failed=${reason}; payout remains buffered`);
+        return { handled: true, reason: 'enforced_invalid_destination' };
+      }
+
+      try {
+        const claimIx = keeperClaimOnBehalfIx(
+          input.request.business,
+          input.request.streamIndex,
+          input.payoutNonce,
+          input.shieldedPayout,
+          input.payoutTokenAccount,
+          destinationTokenAccount,
+          0,
+        );
+
+        if (UMBRA_FORWARD_SIGNED_CLAIM) {
+          const signedTxBase64 = await buildSignedKeeperClaimOnBehalfTxBase64(claimIx);
+          const forwardResult = await postUmbraForward({
+            version: 1,
+            poolId: UMBRA_POOL_ID,
+            business: input.request.business.toBase58(),
+            streamIndex: input.request.streamIndex,
+            payoutNonce: input.payoutNonce,
+            destinationTokenAccount: destinationTokenAccount.toBase58(),
+            signedTransactionBase64: signedTxBase64,
+            createdAt: Math.floor(Date.now() / 1000),
+          });
+          if (forwardResult.ok) {
+            log(
+              `${baseLog} mode=enforced status=${result.relayStatus || 'accepted'} ` +
+                `job_id=${result.jobId || 'n/a'} route_destination=${destinationTokenAccount.toBase58()} ` +
+                `forwarded_tx=${forwardResult.relayTxSignature || 'pending'} relayer=${forwardResult.relayerPublicKey || 'n/a'}`
+            );
+            return { handled: true, reason: 'enforced_routed_forwarded' };
+          }
+
+          const forwardModeMismatch = String(forwardResult.reason || '')
+            .toLowerCase()
+            .includes('forward_mode_requires_umbra-network');
+          if (!forwardModeMismatch) {
+            const reason = `forward_claim_failed: ${forwardResult.reason}`;
+            await deadLetterWithdrawRequest('umbra_route_failed', input.request, reason);
+            await sendAlertWithdrawRequest('umbra_route_failed', input.request, reason);
+            log(`${baseLog} mode=enforced failed=${reason}; payout remains buffered`);
+            return { handled: true, reason: 'enforced_forward_failed' };
+          }
+
+          // Safety fallback: if relay is in destination mode, direct claim is still valid.
+          log(
+            `${baseLog} mode=enforced status=${result.relayStatus || 'accepted'} ` +
+              `job_id=${result.jobId || 'n/a'} route_destination=${destinationTokenAccount.toBase58()} ` +
+              `forward_unavailable=${forwardResult.reason}; fallback=direct_claim`
+          );
+        }
+
+        const claimSig = await retry(
+          `umbra_claim_intermediate stream=${input.request.streamIndex} nonce=${input.payoutNonce}`,
+          () =>
+            sendKeeperClaimOnBehalf(
+              input.request.business,
+              input.request.streamIndex,
+              input.payoutNonce,
+              input.shieldedPayout,
+              input.payoutTokenAccount,
+              destinationTokenAccount,
+              0,
+            ),
+        );
+        log(
+          `${baseLog} mode=enforced status=${result.relayStatus || 'accepted'} ` +
+            `job_id=${result.jobId || 'n/a'} route_destination=${destinationTokenAccount.toBase58()} ` +
+            `claim_tx=${claimSig}`
+        );
+        return { handled: true, reason: 'enforced_routed_claimed' };
+      } catch (e: any) {
+        const reason = `intermediate_claim_failed: ${e?.message || 'unknown'}`;
+        await deadLetterWithdrawRequest('umbra_route_failed', input.request, reason);
+        await sendAlertWithdrawRequest('umbra_route_failed', input.request, reason);
+        log(`${baseLog} mode=enforced failed=${reason}; payout remains buffered`);
+        return { handled: true, reason: 'enforced_claim_failed' };
+      }
+    }
+
+    log(
+      `${baseLog} mode=enforced status=${result.relayStatus || 'accepted'} ` +
+        `job_id=${result.jobId || 'n/a'} deferred=${result.deferClaim ? 'true' : 'false'}`
+    );
+    return { handled: true, reason: 'enforced_routed_async' };
+  }
+
+  const reason = `enforced route failed: ${result.reason}`;
+  await deadLetterWithdrawRequest('umbra_route_failed', input.request, reason);
+  await sendAlertWithdrawRequest('umbra_route_failed', input.request, reason);
+  log(`${baseLog} mode=enforced failed=${result.reason}; payout remains buffered`);
+  return { handled: true, reason: 'enforced_failed' };
+}
+
 
 
 
@@ -1425,11 +1904,18 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
     return;
   }
 
-  if (COMPLIANCE_ENABLED) {
-    const workerPubkeyStr = await getWorkerPubkeyForStream(
+  // Resolve worker wallet (from signed auth queue) for private route destination ownership.
+  let workerPubkeyStr: string | null = null;
+  try {
+    workerPubkeyStr = await getWorkerPubkeyForStream(
       request.streamIndex,
       business.owner.toBase58(),
     );
+  } catch {
+    workerPubkeyStr = null;
+  }
+
+  if (COMPLIANCE_ENABLED) {
     let compliance: ComplianceDecision;
     if (!workerPubkeyStr) {
       compliance = {
@@ -1644,68 +2130,76 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
     );
 
     // Step 2: Buffer the payout (vault → payout_token_account).
-    await retry(`process_withdraw_request_v2 stream=${request.streamIndex}`, () =>
+    const sendSettle = () =>
       sendInstruction(
         'process_withdraw_request_v2',
         processWithdrawRequestIx(request, payoutNonce, vault.tokenAccount, payoutTokenKeypair.publicKey),
         readConnection,
-      )
-    );
+      );
 
-    if (AUTO_CLAIM_ON_BUFFER) {
-      if (!employeeParsed.hasFixedDestination) {
-        log(
-          `Buffered payout created stream=${request.streamIndex} nonce=${payoutNonce}; ` +
-            'auto-claim skipped (no fixed destination route)'
-        );
-        return;
-      }
-      // Optional legacy mode: auto-claim buffered payouts to stream destination.
-      try {
-        const shieldedPayoutPda = deriveShieldedPayoutPda(request.business, request.streamIndex, payoutNonce);
-        const streamConfigPda = deriveStreamConfigPda(request.business);
+    try {
+      await retry(`process_withdraw_request_v2 stream=${request.streamIndex}`, sendSettle);
+    } catch (settleErr: any) {
+      // Self-heal freshness race in the same tick:
+      // if settle sees AccrualNotFresh, accrue once more immediately and retry settle.
+      if (!isAccrualNotFreshError(settleErr)) throw settleErr;
+      log(
+        `[freshness-recover] stream=${request.streamIndex} nonce=${payoutNonce} reason=accrual_not_fresh; ` +
+          'running immediate accrue+settle retry'
+      );
+      await retry(`accrue_v2(refresh) stream=${request.streamIndex}`, () =>
+        sendInstruction('accrue_v2', accrueIx(request.business, request.streamIndex), readConnection)
+      );
+      await retry(`process_withdraw_request_v2(refresh) stream=${request.streamIndex}`, sendSettle);
+    }
 
-        const streamIndexBuf = Buffer.alloc(8);
-        streamIndexBuf.writeBigUInt64LE(BigInt(request.streamIndex));
-        const nonceBuf = Buffer.alloc(8);
-        nonceBuf.writeBigUInt64LE(BigInt(payoutNonce));
-        const expiryBuf = Buffer.alloc(8);
-        expiryBuf.writeBigInt64LE(BigInt(0)); // no expiry for auto-claim
+    const umbraRoute = await maybeHandleUmbraPayoutRouting({
+      request,
+      stream: employeeParsed,
+      payoutNonce,
+      shieldedPayout: shieldedPayoutPda,
+      payoutTokenAccount: payoutTokenKeypair.publicKey,
+      routeOwnerPubkey: workerPubkeyStr,
+    });
 
-        const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
-
-        const claimIx = new TransactionInstruction({
-          keys: [
-            { pubkey: payer.publicKey, isSigner: true, isWritable: true },       // keeper
-            { pubkey: request.business, isSigner: false, isWritable: false },     // business
-            { pubkey: streamConfigPda, isSigner: false, isWritable: false },      // stream_config_v2
-            { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true },     // shielded_payout
-            { pubkey: payoutTokenKeypair.publicKey, isSigner: false, isWritable: true }, // payout_token_account
-            { pubkey: employeeParsed.employeeTokenAccount, isSigner: false, isWritable: true }, // destination
-            { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-            { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          ],
-          programId: PROGRAM_ID,
-          data: Buffer.concat([
-            KEEPER_CLAIM_ON_BEHALF_V2_DISC,
-            streamIndexBuf,
-            nonceBuf,
-            expiryBuf,
-          ]),
-        });
-
-        await retry(`keeper_claim_auto stream=${request.streamIndex} nonce=${payoutNonce}`, () =>
-          sendInstruction('keeper_claim_on_behalf_v2', claimIx, readConnection)
-        );
-        log(`✅ Auto-claim completed stream=${request.streamIndex} nonce=${payoutNonce} → ${employeeParsed.employeeTokenAccount.toBase58()}`);
-      } catch (claimErr: any) {
-        // Non-fatal: the worker can still manually claim later
-        log(`[auto-claim] Failed stream=${request.streamIndex} nonce=${payoutNonce}: ${claimErr?.message || 'unknown'}`);
+    if (!umbraRoute.handled) {
+      if (AUTO_CLAIM_ON_BUFFER) {
+        if (!employeeParsed.hasFixedDestination) {
+          log(
+            `Buffered payout created stream=${request.streamIndex} nonce=${payoutNonce}; ` +
+              'auto-claim skipped (no fixed destination route)'
+          );
+        } else {
+          // Optional legacy mode: auto-claim buffered payouts to stream destination.
+          try {
+            await retry(`keeper_claim_auto stream=${request.streamIndex} nonce=${payoutNonce}`, () =>
+              sendKeeperClaimOnBehalf(
+                request.business,
+                request.streamIndex,
+                payoutNonce,
+                shieldedPayoutPda,
+                payoutTokenKeypair.publicKey,
+                employeeParsed.employeeTokenAccount,
+                0,
+              )
+            );
+            log(
+              `✅ Auto-claim completed stream=${request.streamIndex} nonce=${payoutNonce} ` +
+                `→ ${employeeParsed.employeeTokenAccount.toBase58()}`
+            );
+          } catch (claimErr: any) {
+            // Non-fatal: the worker can still manually claim later
+            log(`[auto-claim] Failed stream=${request.streamIndex} nonce=${payoutNonce}: ${claimErr?.message || 'unknown'}`);
+          }
+        }
+      } else {
+        log(`Buffered payout awaiting worker claim stream=${request.streamIndex} nonce=${payoutNonce}`);
       }
     } else {
-      log(`Buffered payout awaiting worker claim stream=${request.streamIndex} nonce=${payoutNonce}`);
+      log(
+        `Private route handled stream=${request.streamIndex} nonce=${payoutNonce} ` +
+          `route=umbra reason=${umbraRoute.reason}`
+      );
     }
   } catch (e: any) {
     if (isSettleTooSoonError(e)) {
@@ -2179,7 +2673,6 @@ async function processClaimRelays(): Promise<void> {
         [Buffer.from('business'), businessOwner.toBuffer()],
         PROGRAM_ID,
       );
-      const streamConfigPda = deriveStreamConfigPda(businessPda);
       const shieldedPayoutPda = deriveShieldedPayoutPda(businessPda, auth.streamIndex, auth.nonce);
 
       // Read the shielded payout account to get the payout_token_account
@@ -2207,46 +2700,16 @@ async function processClaimRelays(): Promise<void> {
         continue;
       }
 
-      // Build keeper_claim_on_behalf_v2 instruction
-      const streamIndexBuf = Buffer.alloc(8);
-      streamIndexBuf.writeBigUInt64LE(BigInt(auth.streamIndex));
-      const nonceBuf = Buffer.alloc(8);
-      nonceBuf.writeBigUInt64LE(BigInt(auth.nonce));
-      const expiryBuf = Buffer.alloc(8);
-      expiryBuf.writeBigInt64LE(BigInt(auth.expiry));
       const payoutTokenAccount = new PublicKey(payoutData.subarray(138, 170));
-
-      const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
-
-      const ix = new TransactionInstruction({
-        keys: [
-          { pubkey: payer.publicKey, isSigner: true, isWritable: true },    // keeper
-          { pubkey: businessPda, isSigner: false, isWritable: false },      // business
-          { pubkey: streamConfigPda, isSigner: false, isWritable: false },  // stream_config_v2
-          { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true }, // shielded_payout
-          { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },// payout_token_account
-          { pubkey: destinationTokenAccount, isSigner: false, isWritable: true }, // destination_token_account
-          { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-          { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        programId: PROGRAM_ID,
-        data: Buffer.concat([
-          KEEPER_CLAIM_ON_BEHALF_V2_DISC,
-          streamIndexBuf,
-          nonceBuf,
-          expiryBuf,
-        ]),
-      });
-
-      const tx = new Transaction().add(ix);
-      tx.feePayer = payer.publicKey;
-      // Use base-layer RPC (readConnection) — MagicBlock Router doesn't serve reliable blockhashes for non-delegated txs
-      tx.recentBlockhash = (await readConnection.getLatestBlockhash()).blockhash;
-      tx.sign(payer);
-      const sig = await readConnection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-      await readConnection.confirmTransaction(sig, 'confirmed');
+      const sig = await sendKeeperClaimOnBehalf(
+        businessPda,
+        auth.streamIndex,
+        auth.nonce,
+        shieldedPayoutPda,
+        payoutTokenAccount,
+        destinationTokenAccount,
+        auth.expiry,
+      );
 
       await markClaimCompleted(auth.businessOwner, auth.streamIndex, auth.nonce, sig);
       log(`✅ Claim relayed stream=${auth.streamIndex} nonce=${auth.nonce} tx=${sig}`);
@@ -2610,43 +3073,19 @@ async function autoClaimUnclaimedPayouts(): Promise<void> {
     }
     const employeeTokenAccount = new PublicKey(destinationRouteCommitment);
 
-    const streamConfigPda = deriveStreamConfigPda(business);
     const shieldedPayoutPda = pubkey;
-
-    const streamIndexBuf = Buffer.alloc(8);
-    streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-    const nonceBuf = Buffer.alloc(8);
-    nonceBuf.writeBigUInt64LE(BigInt(nonce));
-    const expiryBuf = Buffer.alloc(8);
-    expiryBuf.writeBigInt64LE(BigInt(0)); // no expiry
-
-    const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
-
-    const claimIx = new TransactionInstruction({
-      keys: [
-        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-        { pubkey: business, isSigner: false, isWritable: false },
-        { pubkey: streamConfigPda, isSigner: false, isWritable: false },
-        { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true },
-        { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
-        { pubkey: employeeTokenAccount, isSigner: false, isWritable: true },
-        { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-        { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ],
-      programId: PROGRAM_ID,
-      data: Buffer.concat([
-        KEEPER_CLAIM_ON_BEHALF_V2_DISC,
-        streamIndexBuf,
-        nonceBuf,
-        expiryBuf,
-      ]),
-    });
 
     try {
       await retry(`auto-claim-sweep stream=${streamIndex} nonce=${nonce}`, () =>
-        sendInstruction('keeper_claim_on_behalf_v2', claimIx, readConnection)
+        sendKeeperClaimOnBehalf(
+          business,
+          streamIndex,
+          nonce,
+          shieldedPayoutPda,
+          payoutTokenAccount,
+          employeeTokenAccount,
+          0,
+        )
       );
       autoClaimIdempotency.add(idempotencyKey);
       claimedCount++;
@@ -2776,6 +3215,20 @@ async function main(): Promise<void> {
   log(`Compliance checks: ${COMPLIANCE_ENABLED ? 'enabled' : 'disabled'}`);
   log(`Redelegate after withdraw: ${REDELEGATE_AFTER_WITHDRAW ? 'enabled' : 'disabled'}`);
   log(`View relay: ${ENABLE_VIEW_RELAY ? 'enabled' : 'disabled (strict privacy default)'}`);
+  log(
+    `Privacy payout route: mode=${PRIVACY_PAYOUT_ROUTE_MODE} ` +
+      `umbra_configured=${UMBRA_ROUTE_CONFIGURED ? 'yes' : 'no'}`
+  );
+  log(`Umbra signed-claim forwarding: ${UMBRA_FORWARD_SIGNED_CLAIM ? 'enabled' : 'disabled'}`);
+  if (UMBRA_RELAY_URL) {
+    log(`Umbra relay host: ${hostFromUrl(UMBRA_RELAY_URL)}`);
+  }
+  if (UMBRA_FORWARD_URL) {
+    log(`Umbra forward host: ${hostFromUrl(UMBRA_FORWARD_URL)}`);
+  }
+  if (UMBRA_POOL_ID) {
+    log(`Umbra pool id: ${UMBRA_POOL_ID}`);
+  }
   magicCommitSupported = await detectMagicCommitSupport();
   log(`Magic commit support on read RPC: ${magicCommitSupported ? 'available' : 'unavailable'}`);
   try {

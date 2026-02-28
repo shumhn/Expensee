@@ -72,6 +72,10 @@ interface RevealRequestPayload {
     signature: number[];
 }
 
+interface RevealHandlesRequestPayload extends RevealRequestPayload {
+    handles: string[];
+}
+
 function requiredEnv(name: string, fallback?: string): string {
     const value = fallback || process.env[name];
     if (!value || value.trim().length === 0) {
@@ -137,6 +141,14 @@ function parseRevealPayload(data: any): RevealRequestPayload {
         timestamp: Number(data?.timestamp),
         signature: Array.isArray(data?.signature) ? data.signature : [],
     };
+}
+
+function parseRevealHandlesPayload(data: any): RevealHandlesRequestPayload {
+    const base = parseRevealPayload(data);
+    const handles = Array.isArray(data?.handles)
+        ? data.handles.map((v: any) => String(v || '').trim()).filter((v: string) => v.length > 0)
+        : [];
+    return { ...base, handles };
 }
 
 function assertRecentTimestamp(timestamp: number): void {
@@ -214,6 +226,57 @@ async function revealLiveWithKeeper(payload: RevealRequestPayload): Promise<{
         checkpointTime,
         streamAddress: streamPda.toBase58(),
     };
+}
+
+async function revealHandlesWithKeeper(payload: RevealHandlesRequestPayload): Promise<{
+    plaintexts: string[];
+    streamAddress: string;
+}> {
+    if (!Array.isArray(payload.handles) || payload.handles.length === 0) {
+        throw new Error('No handles provided');
+    }
+    if (payload.handles.length > 64) {
+        throw new Error('Too many handles requested');
+    }
+    const handles = payload.handles.map((h) => String(h || '').trim());
+    if (handles.some((h) => !/^\d+$/.test(h))) {
+        throw new Error('Invalid handle format');
+    }
+
+    // Reuse stream auth guard from reveal-live path so only the authorized worker can request decrypt.
+    const businessOwner = new PublicKey(payload.businessOwner);
+    const workerPubkey = new PublicKey(payload.workerPubkey);
+    const businessPda = deriveBusinessPda(businessOwner);
+    const streamPda = deriveEmployeeStreamPda(businessPda, payload.streamIndex);
+    const streamInfo = await revealReadConnection.getAccountInfo(streamPda, 'confirmed');
+    if (!streamInfo) {
+        throw new Error('Payroll stream not found');
+    }
+    if (streamInfo.data.length < EMPLOYEE_STREAM_V2_ACCOUNT_LEN) {
+        throw new Error('Invalid payroll stream account length');
+    }
+    if (!Buffer.from(streamInfo.data.subarray(0, 8)).equals(EMPLOYEE_STREAM_V2_DISC)) {
+        throw new Error('Invalid payroll stream discriminator');
+    }
+    const employeeAuthHash = Buffer.from(streamInfo.data.subarray(48, 80));
+    const expectedAuthHash = hashWorkerPubkey(workerPubkey);
+    if (!employeeAuthHash.equals(expectedAuthHash)) {
+        throw new Error('Worker authorization does not match this payroll record');
+    }
+
+    const { decrypt } = await import('@inco/solana-sdk');
+    const result = await decrypt(handles, {
+        address: keeperPayer.publicKey,
+        signMessage: async (message: Uint8Array) =>
+            Uint8Array.from(ed25519.sign(message, keeperSecretSeed)),
+    });
+    const plaintexts = Array.isArray(result?.plaintexts)
+        ? result.plaintexts.map((v: any) => String(v ?? '0'))
+        : [];
+    if (plaintexts.length !== handles.length) {
+        throw new Error('Handle reveal response length mismatch');
+    }
+    return { plaintexts, streamAddress: streamPda.toBase58() };
 }
 
 /** In-memory queue removed for DB integration. */
@@ -523,6 +586,70 @@ export function startHealthServer(): void {
                     assertRecentTimestamp(parsed.timestamp);
                     verifyRevealSignature(parsed);
                     const revealed = await revealLiveWithKeeper(parsed);
+
+                    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
+                    res.end(
+                        JSON.stringify({
+                            ok: true,
+                            mode: 'keeper',
+                            keeperWallet: keeperPayer.publicKey.toBase58(),
+                            ...revealed,
+                        }),
+                    );
+                } catch (e: any) {
+                    const msg = e?.message || 'Reveal failed';
+                    const lower = String(msg).toLowerCase();
+                    const status =
+                        lower.includes('invalid reveal signature') ||
+                        lower.includes('authorization') ||
+                        lower.includes('expired')
+                            ? 401
+                            : lower.includes('not allowed to decrypt')
+                                ? 403
+                                : 400;
+                    res.writeHead(status, { 'Content-Type': 'application/json', ...corsHeaders() });
+                    res.end(JSON.stringify({ error: msg }));
+                }
+            });
+            return;
+        }
+
+        // Keeper server-side generic handle reveal endpoint (used by statement generation fallback).
+        if (req.method === 'POST' && req.url === '/api/reveal-handles') {
+            if (!ENABLE_SERVER_DECRYPT) {
+                res.writeHead(403, { 'Content-Type': 'application/json', ...corsHeaders() });
+                res.end(
+                    JSON.stringify({
+                        error:
+                            'Keeper server decrypt is disabled. Enable KEEPER_ENABLE_SERVER_DECRYPT=true to allow this endpoint.',
+                    }),
+                );
+                return;
+            }
+            let body = '';
+            req.on('data', (chunk: Buffer) => {
+                body += chunk.toString();
+            });
+            req.on('end', async () => {
+                try {
+                    const parsed = parseRevealHandlesPayload(JSON.parse(body));
+                    if (
+                        !parsed.workerPubkey ||
+                        !parsed.businessOwner ||
+                        !Number.isFinite(parsed.streamIndex) ||
+                        !Number.isFinite(parsed.timestamp) ||
+                        parsed.signature.length === 0 ||
+                        !Array.isArray(parsed.handles) ||
+                        parsed.handles.length === 0
+                    ) {
+                        res.writeHead(400, { 'Content-Type': 'application/json', ...corsHeaders() });
+                        res.end(JSON.stringify({ error: 'Missing required fields' }));
+                        return;
+                    }
+
+                    assertRecentTimestamp(parsed.timestamp);
+                    verifyRevealSignature(parsed);
+                    const revealed = await revealHandlesWithKeeper(parsed);
 
                     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
                     res.end(
