@@ -1,8 +1,11 @@
 # Runbook: Expensee (Private Payroll v2, Devnet First)
 
-This repo runs a **pull-based payroll** model with **Ghost Mode** privacy:
-- Employee signs an off-chain message — the Keeper relays `keeper_request_withdraw_v2` on-chain (employee wallet never touches the blockchain).
-- Keeper checkpoints accrual (`accrue_v2`), decrypts the accrued Inco handle (attested decrypt), re-encrypts as ciphertext, then pays out using `process_withdraw_request_v2` (1 tx on base layer, plus commit+undelegate if the stream is delegated).
+Hybrid Umbra privacy rollout notes: see `/Users/sumangiri/Desktop/expensee/docs/umbra-hybrid-rollout.md`.
+
+This repo runs a **pull-based payroll** model with **strict private shield route**:
+- Employee signs off-chain auth messages (withdraw/claim); Keeper relays on-chain execution.
+- Amounts remain encrypted with Inco handles.
+- Payouts follow a 2-hop path: vault -> shielded payout account -> claim destination.
 
 ## 1. Preconditions
 
@@ -66,6 +69,11 @@ Optional:
 - `KEEPER_VALIDATOR` (EU/US/Asia ER validator identity)
 - `KEEPER_REDELEGATE_AFTER_WITHDRAW=true`
 - `KEEPER_ACCRUE_ON_ER_BEFORE_COMMIT=true` (recommended: uses ER as the accrual checkpoint engine for delegated streams)
+- Hybrid Umbra route controls:
+  - `KEEPER_PRIVACY_PAYOUT_ROUTE_MODE=enforced` (recommended for strict privacy demos)
+  - `KEEPER_UMBRA_RELAY_URL`, `KEEPER_UMBRA_POOL_ID`
+  - optional `KEEPER_UMBRA_RELAY_API_KEY`, `KEEPER_UMBRA_ROUTE_TIMEOUT_MS`, `KEEPER_UMBRA_ROUTE_RETRIES`
+  - optional `KEEPER_UMBRA_FORWARD_SIGNED_CLAIM`, `KEEPER_UMBRA_FORWARD_URL` (`KEEPER_UMBRA_FORWARD_SIGNED_CLAIM=true` only when relay mode is `umbra-network`; keep `false` for `destination` mode)
 - `KEEPER_COMPLIANCE_ENABLED=false` (default)
 - `KEEPER_RANGE_API_KEY` (only if compliance enabled)
 
@@ -76,18 +84,55 @@ npm install
 npm start
 ```
 
+Optional local Umbra relay for hybrid routing tests:
+```bash
+cd /Users/sumangiri/Desktop/expensee
+UMBRA_RELAY_MODE=destination \
+UMBRA_RELAY_DESTINATION_TOKEN_ACCOUNT=<intermediate_inco_token_account> \
+npm run umbra:relay:dev
+```
+
+One-time destination mode (recommended for stronger unlinkability):
+```bash
+cd /Users/sumangiri/Desktop/expensee
+UMBRA_RELAY_MODE=destination \
+UMBRA_RELAY_PROVISION_ONE_TIME_DESTINATION=true \
+UMBRA_RELAY_RPC_URL=https://api.devnet.solana.com \
+UMBRA_RELAY_PAYER_KEYPAIR_PATH=/absolute/path/to/relay-keypair.json \
+UMBRA_RELAY_PAYUSD_MINT=<payusd_mint> \
+npm run umbra:relay:dev
+```
+
+Quick validation while relay is running:
+```bash
+cd /Users/sumangiri/Desktop/expensee
+UMBRA_RELAY_TEST_URL=http://localhost:9191 \
+UMBRA_RELAY_TEST_POOL_ID=devnet-pool-1 \
+UMBRA_RELAY_TEST_RPC_URL=https://api.devnet.solana.com \
+UMBRA_RELAY_TEST_MINT=<payusd_mint> \
+npm run umbra:relay:self-test
+```
+
+Optional Umbra network forward mode:
+```bash
+cd /Users/sumangiri/Desktop/expensee
+UMBRA_RELAY_MODE=umbra-network \
+UMBRA_RELAY_DESTINATION_TOKEN_ACCOUNT=<intermediate_inco_token_account> \
+UMBRA_NETWORK_DISCOVERY_URL=https://relayer.umbraprivacy.com \
+UMBRA_NETWORK_FORWARD_BASE_URL=https://relayer.umbraprivacy.com/relay/{relayer} \
+npm run umbra:relay:dev
+```
+
 ## 5. Normal operations (MVP)
 
 Employer:
 1. Register business + init vault.
 2. Init v2 stream config (keeper pubkey + settle interval).
    - If you need to rotate keeper later, use **Update Keeper (Rotate Hot Key)** in `/employer`.
-3. Add employee stream v2 (fixed destination token account, encrypted salary rate).
+3. Add employee stream v2 in **private shield route mode** (no fixed destination in stream state).
 4. Fund vault.
 5. Optional: delegate stream to an ER validator (EU/US/Asia recommended on devnet).
-6. Grant decrypt permissions (recommended for devnet demos):
-   - Employee: call `grant_employee_view_access_v2` so they can use “Reveal Earnings”.
-   - Keeper (if keeper is a separate hot wallet): call `grant_keeper_view_access_v2` so withdraw processing can decrypt salary-rate handle.
+6. Keep automation (keeper) decrypt access enabled for private reveal and payout processing.
 
 Optional quick setup script (creates vault/stream + optional mint+deposit if you control mint authority):
 ```bash
@@ -107,9 +152,10 @@ Keeper:
 1. Scans pending `WithdrawRequestV2` accounts.
 2. If delegated: commit+undelegate via router and wait for base ownership.
 3. Calls `accrue_v2` to checkpoint the latest earned amount.
-4. Decrypts what it needs via Inco attested decrypt and re-encrypts as ciphertext.
-5. Calls `process_withdraw_request_v2` on base layer (confidential transfer of encrypted amount).
-6. Optionally redelegates.
+4. Calls `process_withdraw_request_v2` on base layer to buffer payout into shielded account.
+5. Routes claim destination via relay path (destination mode / one-time account recommended).
+6. Claims on behalf to routed destination or leaves buffered for authorized claim path.
+7. Optionally redelegates.
 
 ## 5b. Privacy purge for old test data
 
