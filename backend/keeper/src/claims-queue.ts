@@ -3,12 +3,41 @@ import { ClaimAuthRecord } from './healthcheck';
 
 const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
 const dbName = process.env.MONGODB_DB_NAME || 'expensee';
+const queueRetentionSecs = Number(process.env.KEEPER_QUEUE_RETENTION_SECS || '86400');
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
 let claimsCollection: Collection<PersistentClaimAuth> | null = null;
 let withdrawsCollection: Collection<PersistentWithdrawAuth> | null = null;
 let viewsCollection: Collection<PersistentViewAuth> | null = null;
+
+function sameIndexKey(a: Record<string, any>, b: Record<string, any>): boolean {
+    const aEntries = Object.entries(a || {});
+    const bEntries = Object.entries(b || {});
+    if (aEntries.length !== bEntries.length) return false;
+    for (let i = 0; i < aEntries.length; i += 1) {
+        const [aKey, aVal] = aEntries[i]!;
+        const [bKey, bVal] = bEntries[i]!;
+        if (aKey !== bKey || aVal !== bVal) return false;
+    }
+    return true;
+}
+
+async function ensureScopedUniqueIndex(
+    collection: Collection<any>,
+    legacyKey: Record<string, 1 | -1>,
+    scopedKey: Record<string, 1 | -1>,
+): Promise<void> {
+    const indexes = await collection.indexes();
+    for (const idx of indexes) {
+        if (!idx.unique) continue;
+        if (sameIndexKey(idx.key, legacyKey)) {
+            await collection.dropIndex(idx.name);
+            console.log(`[keeper db] Dropped legacy unique index ${collection.collectionName}.${idx.name}`);
+        }
+    }
+    await collection.createIndex(scopedKey, { unique: true });
+}
 
 export interface PersistentClaimAuth extends ClaimAuthRecord {
     status: 'pending' | 'completed' | 'failed';
@@ -63,19 +92,60 @@ export async function connectQueue(): Promise<void> {
         withdrawsCollection = db.collection<PersistentWithdrawAuth>('withdraws_queue');
         viewsCollection = db.collection<PersistentViewAuth>('views_queue');
 
-        // Create an index to quickly find pending claims, and deduplicate by stream+nonce
+        // Create indexes for queue scans and business-scoped dedupe.
         await claimsCollection.createIndex({ status: 1 });
-        await claimsCollection.createIndex({ streamIndex: 1, nonce: 1 }, { unique: true });
+        if (queueRetentionSecs > 0) {
+            await claimsCollection.createIndex(
+                { updatedAt: 1 },
+                {
+                    expireAfterSeconds: queueRetentionSecs,
+                    partialFilterExpression: { status: { $in: ['completed', 'failed'] } },
+                },
+            );
+        }
+        await ensureScopedUniqueIndex(
+            claimsCollection,
+            { streamIndex: 1, nonce: 1 },
+            { businessOwner: 1, streamIndex: 1, nonce: 1 },
+        );
 
         await withdrawsCollection.createIndex({ status: 1 });
-        // Deduplicate withdraws by timestamp
-        await withdrawsCollection.createIndex({ streamIndex: 1, timestamp: 1 }, { unique: true });
+        if (queueRetentionSecs > 0) {
+            await withdrawsCollection.createIndex(
+                { updatedAt: 1 },
+                {
+                    expireAfterSeconds: queueRetentionSecs,
+                    partialFilterExpression: { status: { $in: ['completed', 'failed'] } },
+                },
+            );
+        }
+        await ensureScopedUniqueIndex(
+            withdrawsCollection,
+            { streamIndex: 1, timestamp: 1 },
+            { businessOwner: 1, streamIndex: 1, timestamp: 1 },
+        );
 
         await viewsCollection.createIndex({ status: 1 });
-        // Deduplicate views by timestamp
-        await viewsCollection.createIndex({ streamIndex: 1, timestamp: 1 }, { unique: true });
+        if (queueRetentionSecs > 0) {
+            await viewsCollection.createIndex(
+                { updatedAt: 1 },
+                {
+                    expireAfterSeconds: queueRetentionSecs,
+                    partialFilterExpression: { status: { $in: ['completed', 'failed'] } },
+                },
+            );
+        }
+        await ensureScopedUniqueIndex(
+            viewsCollection,
+            { streamIndex: 1, timestamp: 1 },
+            { businessOwner: 1, streamIndex: 1, timestamp: 1 },
+        );
 
-        console.log(`[keeper db] Connected to MongoDB database: ${dbName}`);
+        const retentionLabel =
+            queueRetentionSecs > 0 ? `${queueRetentionSecs}s` : 'disabled';
+        console.log(
+            `[keeper db] Connected to MongoDB database: ${dbName} (queue retention: ${retentionLabel})`,
+        );
     }
 }
 
@@ -103,18 +173,28 @@ export async function getPendingClaimAuths(limit: number = 5): Promise<Persisten
     return claimsCollection!.find({ status: 'pending' }).limit(limit).toArray();
 }
 
-export async function markClaimCompleted(streamIndex: number, nonce: number, sig: string): Promise<void> {
+export async function markClaimCompleted(
+    businessOwner: string,
+    streamIndex: number,
+    nonce: number,
+    sig: string
+): Promise<void> {
     if (!claimsCollection) return;
     await claimsCollection.updateOne(
-        { streamIndex, nonce },
+        { businessOwner, streamIndex, nonce },
         { $set: { status: 'completed', txSignature: sig, updatedAt: Date.now() } }
     );
 }
 
-export async function markClaimFailed(streamIndex: number, nonce: number, reason: string): Promise<void> {
+export async function markClaimFailed(
+    businessOwner: string,
+    streamIndex: number,
+    nonce: number,
+    reason: string
+): Promise<void> {
     if (!claimsCollection) return;
     await claimsCollection.updateOne(
-        { streamIndex, nonce },
+        { businessOwner, streamIndex, nonce },
         { $set: { status: 'failed', errorReason: reason, updatedAt: Date.now() } }
     );
 }
@@ -145,18 +225,28 @@ export async function getPendingWithdrawAuths(limit: number = 5): Promise<Persis
     return withdrawsCollection!.find({ status: 'pending' }).limit(limit).toArray();
 }
 
-export async function markWithdrawCompleted(streamIndex: number, timestamp: number, sig: string): Promise<void> {
+export async function markWithdrawCompleted(
+    businessOwner: string,
+    streamIndex: number,
+    timestamp: number,
+    sig: string
+): Promise<void> {
     if (!withdrawsCollection) return;
     await withdrawsCollection.updateOne(
-        { streamIndex, timestamp },
+        { businessOwner, streamIndex, timestamp },
         { $set: { status: 'completed', txSignature: sig, updatedAt: Date.now() } }
     );
 }
 
-export async function markWithdrawFailed(streamIndex: number, timestamp: number, reason: string): Promise<void> {
+export async function markWithdrawFailed(
+    businessOwner: string,
+    streamIndex: number,
+    timestamp: number,
+    reason: string
+): Promise<void> {
     if (!withdrawsCollection) return;
     await withdrawsCollection.updateOne(
-        { streamIndex, timestamp },
+        { businessOwner, streamIndex, timestamp },
         { $set: { status: 'failed', errorReason: reason, updatedAt: Date.now() } }
     );
 }
@@ -182,25 +272,36 @@ export async function getPendingViewAuths(limit: number = 5): Promise<Persistent
     return viewsCollection!.find({ status: 'pending' }).limit(limit).toArray();
 }
 
-export async function markViewCompleted(streamIndex: number, timestamp: number, sig: string): Promise<void> {
+export async function markViewCompleted(
+    businessOwner: string,
+    streamIndex: number,
+    timestamp: number,
+    sig: string
+): Promise<void> {
     if (!viewsCollection) return;
     await viewsCollection.updateOne(
-        { streamIndex, timestamp },
+        { businessOwner, streamIndex, timestamp },
         { $set: { status: 'completed', txSignature: sig, updatedAt: Date.now() } }
     );
 }
 
-export async function markViewFailed(streamIndex: number, timestamp: number, reason: string): Promise<void> {
+export async function markViewFailed(
+    businessOwner: string,
+    streamIndex: number,
+    timestamp: number,
+    reason: string
+): Promise<void> {
     if (!viewsCollection) return;
     await viewsCollection.updateOne(
-        { streamIndex, timestamp },
+        { businessOwner, streamIndex, timestamp },
         { $set: { status: 'failed', errorReason: reason, updatedAt: Date.now() } }
     );
 }
 
-export async function getViewAccessTargets(streamIndex: number): Promise<string[]> {
+export async function getViewAccessTargets(streamIndex: number, businessOwner?: string): Promise<string[]> {
     if (!viewsCollection) return [];
-    const docs = await viewsCollection.find({ streamIndex }).toArray();
+    const filter = businessOwner ? { streamIndex, businessOwner } : { streamIndex };
+    const docs = await viewsCollection.find(filter).toArray();
     const uniqueKeys = new Set(docs.map(d => d.workerPubkey));
     return Array.from(uniqueKeys);
 }
@@ -210,10 +311,13 @@ export async function getViewAccessTargets(streamIndex: number): Promise<string[
  * Used by the auto-healing logic when the on-chain WithdrawRequestV2 PDA
  * has a stale requester (e.g., from before the Ghost Mode fix).
  */
-export async function getWorkerPubkeyForStream(streamIndex: number): Promise<string | null> {
+export async function getWorkerPubkeyForStream(
+    streamIndex: number,
+    businessOwner: string
+): Promise<string | null> {
     if (!withdrawsCollection) await connectQueue();
     const doc = await withdrawsCollection!.findOne(
-        { streamIndex },
+        { streamIndex, businessOwner },
         { sort: { receivedAt: -1 } }
     );
     return doc?.workerPubkey ?? null;

@@ -111,6 +111,36 @@ Keeper:
 5. Calls `process_withdraw_request_v2` on base layer (confidential transfer of encrypted amount).
 6. Optionally redelegates.
 
+## 5b. Privacy purge for old test data
+
+Use this when you want to retire old streams and revoke old decrypt grants after moving to strict privacy defaults.
+
+Dry-run preview:
+```bash
+cd /Users/sumangiri/Desktop/expensee
+set -a; source /Users/sumangiri/Desktop/expensee/backend/keeper/.env; set +a
+PURGE_OWNER_KEYPAIR_PATH=/absolute/path/to/employer-owner.json \
+PURGE_REVOKE_WALLETS=<old_worker_wallet_1>,<old_worker_wallet_2> \
+npm run privacy:purge
+```
+
+Execute live:
+```bash
+cd /Users/sumangiri/Desktop/expensee
+set -a; source /Users/sumangiri/Desktop/expensee/backend/keeper/.env; set +a
+PURGE_OWNER_KEYPAIR_PATH=/absolute/path/to/employer-owner.json \
+PURGE_REVOKE_WALLETS=<old_worker_wallet_1>,<old_worker_wallet_2> \
+PURGE_DRY_RUN=false \
+PURGE_CONFIRM=YES_I_UNDERSTAND \
+npm run privacy:purge
+```
+
+What it does:
+- Scans all stream indices in your business.
+- Commit+undelegates delegated streams.
+- Deactivates active streams.
+- Revokes view access for wallets listed in `PURGE_REVOKE_WALLETS` (when allowance accounts exist).
+
 ## 6. Vault Admin Withdraw (owner-only)
 
 Use this when you want to recover unused funds from the payroll vault without resetting state.

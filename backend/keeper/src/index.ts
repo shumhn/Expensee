@@ -11,6 +11,7 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
+import { ConnectionMagicRouter } from '@magicblock-labs/ephemeral-rollups-sdk';
 import { createHash } from 'crypto';
 import { startHealthServer, recordTick, recordFailure, ClaimAuthRecord } from './healthcheck';
 import {
@@ -65,7 +66,6 @@ const INCO_INIT_ACCOUNT_DISCRIMINATOR = Buffer.from([74, 115, 99, 93, 197, 69, 1
 const KEEPER_CLAIM_ON_BEHALF_V2_DISC = Buffer.from([161, 194, 33, 127, 138, 221, 153, 84]);
 const KEEPER_REQUEST_WITHDRAW_V2_DISC = Buffer.from([241, 181, 94, 57, 32, 108, 61, 165]);
 const GRANT_EMPLOYEE_VIEW_ACCESS_V2_DISC = Buffer.from([201, 191, 208, 133, 117, 221, 125, 147]);
-const GRANT_KEEPER_VIEW_ACCESS_V2_DISC = Buffer.from([60, 78, 33, 123, 183, 61, 107, 58]);
 const REVOKE_VIEW_ACCESS_V2_DISC = Buffer.from([79, 190, 166, 170, 246, 184, 119, 163]);
 
 const MAGIC_PROGRAM_ID = new PublicKey(
@@ -112,6 +112,12 @@ const ROUTER_STATUS_RETRIES = Number(process.env.KEEPER_ROUTER_STATUS_RETRIES ||
 const ROUTER_STATUS_BACKOFF_MS = Number(process.env.KEEPER_ROUTER_STATUS_BACKOFF_MS || '250');
 const ROUTER_STATUS_CACHE_MS = Number(process.env.KEEPER_ROUTER_STATUS_CACHE_MS || '15000');
 const REDELEGATE_AFTER_WITHDRAW = process.env.KEEPER_REDELEGATE_AFTER_WITHDRAW !== 'false';
+// Privacy-first default: do not auto-claim buffered payouts to a fixed destination unless explicitly enabled.
+const AUTO_CLAIM_ON_BUFFER = process.env.KEEPER_AUTO_CLAIM_ON_BUFFER === 'true';
+// Privacy-first default: disable blind auto-claim sweep unless explicitly enabled.
+const AUTO_CLAIM_SWEEP_ENABLED = process.env.KEEPER_AUTO_CLAIM_SWEEP === 'true';
+// Privacy-first default: disable worker view-relay grants unless explicitly enabled.
+const ENABLE_VIEW_RELAY = process.env.KEEPER_ENABLE_VIEW_RELAY === 'true';
 // If a stream is delegated, attempt to run accrue_v2 on the ER endpoint before commit+undelegate.
 // This makes MagicBlock the compute engine for the accrual checkpoint.
 const ACCRUE_ON_ER_BEFORE_COMMIT = process.env.KEEPER_ACCRUE_ON_ER_BEFORE_COMMIT !== 'false';
@@ -175,7 +181,30 @@ const RANGE_API_KEY = process.env.KEEPER_RANGE_API_KEY || process.env.RANGE_API_
 const TEE_AUTH_TOKEN =
   (process.env.KEEPER_TEE_AUTH_TOKEN || process.env.MAGICBLOCK_TEE_TOKEN || '').trim();
 
-const txConnection = new Connection(TX_RPC_URL, 'confirmed');
+function isMagicBlockRpcUrl(url: string): boolean {
+  try {
+    const host = new URL(url).host.toLowerCase();
+    return (
+      host === 'devnet-router.magicblock.app' ||
+      host === 'devnet-eu.magicblock.app' ||
+      host === 'devnet-us.magicblock.app' ||
+      host === 'devnet-as.magicblock.app' ||
+      host === 'tee.magicblock.app'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function createRpcConnection(url: string): Connection {
+  const normalized = normalizeRpcUrl(url);
+  if (isMagicBlockRpcUrl(normalized)) {
+    return new ConnectionMagicRouter(normalized, 'confirmed');
+  }
+  return new Connection(normalized, 'confirmed');
+}
+
+const txConnection = createRpcConnection(TX_RPC_URL);
 const readUrlsRaw =
   READ_RPC_URLS.length > 0 ? READ_RPC_URLS : [READ_RPC_PRIMARY_URL, READ_RPC_FALLBACK_URL];
 const readUrls: string[] = [];
@@ -185,7 +214,7 @@ for (const url of readUrlsRaw) {
   if (readUrls.some((u) => normalizeRpcUrl(u) === normalized)) continue;
   readUrls.push(url);
 }
-const readConnections = readUrls.map((url) => new Connection(url, 'confirmed'));
+const readConnections = readUrls.map((url) => createRpcConnection(url));
 if (readConnections.length === 0) {
   // Should never happen because defaults include api.devnet.solana.com
   throw new Error('No READ RPC URLs configured');
@@ -208,6 +237,8 @@ type EmployeeStreamV2Record = {
   owner: PublicKey;
   business: PublicKey;
   streamIndex: number;
+  destinationRouteCommitment: Buffer;
+  hasFixedDestination: boolean;
   employeeTokenAccount: PublicKey;
   lastSettleTime: number;
   salaryHandle: bigint;
@@ -255,7 +286,7 @@ type WithdrawRequestV2Record = {
   address: PublicKey;
   business: PublicKey;
   streamIndex: number;
-  requester: PublicKey;
+  requesterAuthHash: Buffer;
   requestedAt: number;
   isPending: boolean;
 };
@@ -378,6 +409,19 @@ function instructionDiscriminator(name: string): Buffer {
   return createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
 }
 
+function hashWorkerPubkey(workerPubkey: PublicKey): Buffer {
+  return createHash('sha256').update(workerPubkey.toBuffer()).digest();
+}
+
+function authHashMatchesWorker(requesterAuthHash: Uint8Array, workerPubkey: PublicKey): boolean {
+  const expected = hashWorkerPubkey(workerPubkey);
+  return Buffer.from(requesterAuthHash).equals(expected);
+}
+
+function authHashHex(requesterAuthHash: Uint8Array): string {
+  return Buffer.from(requesterAuthHash).toString('hex');
+}
+
 function deriveStreamConfigPda(business: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([STREAM_CONFIG_V2_SEED, business.toBuffer()], PROGRAM_ID)[0];
 }
@@ -427,16 +471,31 @@ function readU128LE(buffer: Buffer, offset: number): bigint {
   return out;
 }
 
+function isAllZero32(bytes: Uint8Array): boolean {
+  if (bytes.length !== 32) return false;
+  for (let i = 0; i < 32; i += 1) {
+    if (bytes[i] !== 0) return false;
+  }
+  return true;
+}
+
 function parseEmployeeStreamV2(address: PublicKey, owner: PublicKey, data: Buffer): EmployeeStreamV2Record | null {
   if (data.length < EMPLOYEE_STREAM_V2_ACCOUNT_LEN) return null;
   if (!data.subarray(0, 8).equals(accountDiscriminator('EmployeeStreamV2'))) return null;
+  const destinationRouteCommitment = Buffer.from(data.subarray(80, 112));
+  const hasFixedDestination = !isAllZero32(destinationRouteCommitment);
 
   return {
     address,
     owner,
     business: new PublicKey(data.subarray(8, 40)),
     streamIndex: Number(data.readBigUInt64LE(40)),
-    employeeTokenAccount: new PublicKey(data.subarray(80, 112)),
+    destinationRouteCommitment,
+    hasFixedDestination,
+    // Legacy route compatibility: when a fixed route exists, interpret bytes as pubkey.
+    employeeTokenAccount: hasFixedDestination
+      ? new PublicKey(destinationRouteCommitment)
+      : PublicKey.default,
     lastSettleTime: Number(data.readBigInt64LE(184)),
     salaryHandle: readU128LE(data, 112),
     // EncryptedHandle stores a u128 Lightning handle in the first 16 bytes (little-endian).
@@ -488,7 +547,7 @@ function parseWithdrawRequestV2(address: PublicKey, data: Buffer): WithdrawReque
     address,
     business: new PublicKey(data.subarray(8, 40)),
     streamIndex: Number(data.readBigUInt64LE(40)),
-    requester: new PublicKey(data.subarray(48, 80)),
+    requesterAuthHash: Buffer.from(data.subarray(48, 80)),
     requestedAt: Number(data.readBigInt64LE(80)),
     isPending: data[88] === 1,
   };
@@ -644,40 +703,92 @@ async function sendInstruction(
   connection: Connection = txConnection,
   extraSigners: Keypair[] = [],
 ): Promise<string> {
-  const tx = new Transaction().add(instruction);
-  tx.feePayer = payer.publicKey;
-  const endpoint = rpcEndpoint(connection);
-  try {
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('processed');
-    tx.recentBlockhash = blockhash;
-    tx.sign(payerSigner, ...extraSigners);
+  const isRouterSend = connection instanceof ConnectionMagicRouter;
+  const candidateConnections: Connection[] = [];
+  if (isRouterSend) {
+    const initialEndpoint = rpcEndpoint(connection);
+    const endpoints = [initialEndpoint, ...ROUTER_RPC_URLS]
+      .map((url) => normalizeRpcUrl(url))
+      .filter((url) => url && url !== 'unknown');
+    for (const endpoint of endpoints) {
+      if (candidateConnections.some((c) => rpcEndpoint(c) === endpoint)) continue;
+      candidateConnections.push(connectionForRpc(endpoint));
+    }
+    if (candidateConnections.length === 0) {
+      candidateConnections.push(connection);
+    }
+  } else {
+    candidateConnections.push(connection);
+  }
 
-    const signature = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-      preflightCommitment: 'processed',
-    });
-    await connection.confirmTransaction(
-      { signature, blockhash, lastValidBlockHeight },
-      'confirmed'
-    );
-    log(`${label} tx=${signature} rpc=${endpoint}`);
-    return signature;
-  } catch (e: any) {
-    let programLogs = '';
-    if (e instanceof SendTransactionError && typeof e.getLogs === 'function') {
-      try {
-        const logs = await e.getLogs(connection);
-        if (logs && logs.length > 0) {
-          programLogs = logs.slice(-20).join(' | ');
+  let lastError: Error | null = null;
+  const attemptedEndpoints: string[] = [];
+
+  for (let i = 0; i < candidateConnections.length; i += 1) {
+    const conn = candidateConnections[i]!;
+    const endpoint = rpcEndpoint(conn);
+    attemptedEndpoints.push(endpoint);
+    const tx = new Transaction().add(instruction);
+    tx.feePayer = payer.publicKey;
+
+    try {
+      if (conn instanceof ConnectionMagicRouter) {
+        const signature = await conn.sendAndConfirmTransaction(
+          tx,
+          [payerSigner, ...extraSigners],
+          {
+            commitment: 'confirmed',
+            preflightCommitment: 'processed',
+          },
+        );
+        log(`${label} tx=${signature} rpc=${endpoint} via=magic_router`);
+        return signature;
+      }
+
+      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('processed');
+      tx.recentBlockhash = blockhash;
+      tx.sign(payerSigner, ...extraSigners);
+
+      const signature = await conn.sendRawTransaction(tx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+        preflightCommitment: 'processed',
+      });
+      await conn.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+      log(`${label} tx=${signature} rpc=${endpoint}`);
+      return signature;
+    } catch (e: any) {
+      let programLogs = '';
+      if (e instanceof SendTransactionError && typeof e.getLogs === 'function') {
+        try {
+          const logs = await e.getLogs(conn);
+          if (logs && logs.length > 0) {
+            programLogs = logs.slice(-20).join(' | ');
+          }
+        } catch {
+          // Keep original error if log extraction fails.
         }
-      } catch {
-        // Keep original error if log extraction fails.
+      }
+      const logsSuffix = programLogs.length > 0 ? ` | program_logs=${programLogs}` : '';
+      const err = new Error(
+        `${label} failed rpc=${endpoint} reason=${e?.message || 'unknown'}${logsSuffix}`,
+      );
+      lastError = err;
+      const isLast = i === candidateConnections.length - 1;
+      if (!isLast) {
+        log(`${label} send failed on rpc=${endpoint}; attempting failover`);
+        continue;
       }
     }
-    const logsSuffix = programLogs.length > 0 ? ` | program_logs=${programLogs}` : '';
-    throw new Error(`${label} failed rpc=${endpoint} reason=${e?.message || 'unknown'}${logsSuffix}`);
   }
+
+  if (lastError) {
+    throw new Error(`${lastError.message} | attempted_rpcs=${attemptedEndpoints.join(',')}`);
+  }
+  throw new Error(`${label} failed with unknown send error`);
 }
 
 function accrueIx(business: PublicKey, streamIndex: number): TransactionInstruction {
@@ -983,7 +1094,7 @@ function connectionForRpc(url: string): Connection {
   const normalized = normalizeRpcUrl(url);
   const existing = txConnectionCache.get(normalized);
   if (existing) return existing;
-  const created = new Connection(normalized, 'confirmed');
+  const created = createRpcConnection(normalized);
   txConnectionCache.set(normalized, created);
   return created;
 }
@@ -1315,7 +1426,30 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
   }
 
   if (COMPLIANCE_ENABLED) {
-    const compliance = await checkComplianceFailClosed(request.requester.toBase58());
+    const workerPubkeyStr = await getWorkerPubkeyForStream(
+      request.streamIndex,
+      business.owner.toBase58(),
+    );
+    let compliance: ComplianceDecision;
+    if (!workerPubkeyStr) {
+      compliance = {
+        ok: false,
+        reason: 'worker_identity_unavailable_for_compliance',
+        hardFail: false,
+      };
+    } else {
+      const workerPubkey = new PublicKey(workerPubkeyStr);
+      if (!authHashMatchesWorker(request.requesterAuthHash, workerPubkey)) {
+        compliance = {
+          ok: false,
+          reason: 'requester_auth_hash_mismatch',
+          hardFail: true,
+        };
+      } else {
+        compliance = await checkComplianceFailClosed(workerPubkey.toBase58());
+      }
+    }
+
     if (!compliance.ok) {
       if (!compliance.hardFail && !PAUSE_ON_COMPLIANCE_SOFT_FAIL) {
         const reason = `compliance_soft_fail_skip: ${compliance.reason}`;
@@ -1518,50 +1652,60 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
       )
     );
 
-    // Step 3: Auto-claim — move funds from payout_token_account → worker's token account.
-    // This eliminates the need for a second signature from the worker.
-    try {
-      const shieldedPayoutPda = deriveShieldedPayoutPda(request.business, request.streamIndex, payoutNonce);
-      const streamConfigPda = deriveStreamConfigPda(request.business);
+    if (AUTO_CLAIM_ON_BUFFER) {
+      if (!employeeParsed.hasFixedDestination) {
+        log(
+          `Buffered payout created stream=${request.streamIndex} nonce=${payoutNonce}; ` +
+            'auto-claim skipped (no fixed destination route)'
+        );
+        return;
+      }
+      // Optional legacy mode: auto-claim buffered payouts to stream destination.
+      try {
+        const shieldedPayoutPda = deriveShieldedPayoutPda(request.business, request.streamIndex, payoutNonce);
+        const streamConfigPda = deriveStreamConfigPda(request.business);
 
-      const streamIndexBuf = Buffer.alloc(8);
-      streamIndexBuf.writeBigUInt64LE(BigInt(request.streamIndex));
-      const nonceBuf = Buffer.alloc(8);
-      nonceBuf.writeBigUInt64LE(BigInt(payoutNonce));
-      const expiryBuf = Buffer.alloc(8);
-      expiryBuf.writeBigInt64LE(BigInt(0)); // no expiry for auto-claim
+        const streamIndexBuf = Buffer.alloc(8);
+        streamIndexBuf.writeBigUInt64LE(BigInt(request.streamIndex));
+        const nonceBuf = Buffer.alloc(8);
+        nonceBuf.writeBigUInt64LE(BigInt(payoutNonce));
+        const expiryBuf = Buffer.alloc(8);
+        expiryBuf.writeBigInt64LE(BigInt(0)); // no expiry for auto-claim
 
-      const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
+        const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
 
-      const claimIx = new TransactionInstruction({
-        keys: [
-          { pubkey: payer.publicKey, isSigner: true, isWritable: true },       // keeper
-          { pubkey: request.business, isSigner: false, isWritable: false },     // business
-          { pubkey: streamConfigPda, isSigner: false, isWritable: false },      // stream_config_v2
-          { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true },     // shielded_payout
-          { pubkey: payoutTokenKeypair.publicKey, isSigner: false, isWritable: true }, // payout_token_account
-          { pubkey: employeeParsed.employeeTokenAccount, isSigner: false, isWritable: true }, // destination
-          { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-          { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        programId: PROGRAM_ID,
-        data: Buffer.concat([
-          KEEPER_CLAIM_ON_BEHALF_V2_DISC,
-          streamIndexBuf,
-          nonceBuf,
-          expiryBuf,
-        ]),
-      });
+        const claimIx = new TransactionInstruction({
+          keys: [
+            { pubkey: payer.publicKey, isSigner: true, isWritable: true },       // keeper
+            { pubkey: request.business, isSigner: false, isWritable: false },     // business
+            { pubkey: streamConfigPda, isSigner: false, isWritable: false },      // stream_config_v2
+            { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true },     // shielded_payout
+            { pubkey: payoutTokenKeypair.publicKey, isSigner: false, isWritable: true }, // payout_token_account
+            { pubkey: employeeParsed.employeeTokenAccount, isSigner: false, isWritable: true }, // destination
+            { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+            { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          programId: PROGRAM_ID,
+          data: Buffer.concat([
+            KEEPER_CLAIM_ON_BEHALF_V2_DISC,
+            streamIndexBuf,
+            nonceBuf,
+            expiryBuf,
+          ]),
+        });
 
-      await retry(`keeper_claim_auto stream=${request.streamIndex} nonce=${payoutNonce}`, () =>
-        sendInstruction('keeper_claim_on_behalf_v2', claimIx, readConnection)
-      );
-      log(`✅ Auto-claim completed stream=${request.streamIndex} nonce=${payoutNonce} → ${employeeParsed.employeeTokenAccount.toBase58()}`);
-    } catch (claimErr: any) {
-      // Non-fatal: the worker can still manually claim later
-      log(`[auto-claim] Failed stream=${request.streamIndex} nonce=${payoutNonce}: ${claimErr?.message || 'unknown'}`);
+        await retry(`keeper_claim_auto stream=${request.streamIndex} nonce=${payoutNonce}`, () =>
+          sendInstruction('keeper_claim_on_behalf_v2', claimIx, readConnection)
+        );
+        log(`✅ Auto-claim completed stream=${request.streamIndex} nonce=${payoutNonce} → ${employeeParsed.employeeTokenAccount.toBase58()}`);
+      } catch (claimErr: any) {
+        // Non-fatal: the worker can still manually claim later
+        log(`[auto-claim] Failed stream=${request.streamIndex} nonce=${payoutNonce}: ${claimErr?.message || 'unknown'}`);
+      }
+    } else {
+      log(`Buffered payout awaiting worker claim stream=${request.streamIndex} nonce=${payoutNonce}`);
     }
   } catch (e: any) {
     if (isSettleTooSoonError(e)) {
@@ -1576,70 +1720,52 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
       log(`Skipping withdraw_request=${request.address.toBase58()} reason=stream_still_delegated`);
       return;
     }
-    // Self-healing: if the on-chain PDA has a stale requester (e.g. Keeper pubkey
-    // from before the Ghost Mode fix), look up the correct worker pubkey from
-    // MongoDB and re-call keeper_request_withdraw_v2 to overwrite the PDA.
+    // Self-healing: refresh legacy withdraw request state into auth-hash format.
     if (String(e?.message || '').includes('0x1784') || String(e?.message || '').includes('InvalidWithdrawRequester')) {
       log(`[auto-heal] InvalidWithdrawRequester detected stream=${request.streamIndex} — refreshing PDA`);
       try {
-        // Inline MongoDB lookup to avoid ts-node caching issues with new exports
-        const { MongoClient } = await import('mongodb');
-        const mongoUri = process.env.MONGODB_URI || '';
-        const dbName = process.env.MONGODB_DB_NAME || 'expensee';
-        const client = new MongoClient(mongoUri);
-        await client.connect();
-        const doc = await client.db(dbName).collection('withdraws_queue')
-          .findOne({ streamIndex: request.streamIndex }, { sort: { receivedAt: -1 } });
-        await client.close();
-        const workerPubkeyStr = doc?.workerPubkey as string | undefined;
-        if (workerPubkeyStr) {
-          const workerPubkey = new PublicKey(workerPubkeyStr);
-          const [businessPda] = PublicKey.findProgramAddressSync(
-            [Buffer.from('business'), business.owner.toBuffer()],
-            PROGRAM_ID,
-          );
-          const streamConfigPda = deriveStreamConfigPda(businessPda);
-          const streamPda = deriveEmployeeStreamPda(businessPda, request.streamIndex);
-          const [withdrawRequestPda] = PublicKey.findProgramAddressSync(
-            [
-              Buffer.from('withdraw_request_v2'),
-              businessPda.toBuffer(),
-              new Uint8Array(new BigUint64Array([BigInt(request.streamIndex)]).buffer),
-            ],
-            PROGRAM_ID
-          );
+        const [businessPda] = PublicKey.findProgramAddressSync(
+          [Buffer.from('business'), business.owner.toBuffer()],
+          PROGRAM_ID,
+        );
+        const streamConfigPda = deriveStreamConfigPda(businessPda);
+        const streamPda = deriveEmployeeStreamPda(businessPda, request.streamIndex);
+        const [withdrawRequestPda] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from('withdraw_request_v2'),
+            businessPda.toBuffer(),
+            new Uint8Array(new BigUint64Array([BigInt(request.streamIndex)]).buffer),
+          ],
+          PROGRAM_ID
+        );
 
-          const streamIndexBuf = Buffer.alloc(8);
-          streamIndexBuf.writeBigUInt64LE(BigInt(request.streamIndex));
+        const streamIndexBuf = Buffer.alloc(8);
+        streamIndexBuf.writeBigUInt64LE(BigInt(request.streamIndex));
 
-          const ix = new TransactionInstruction({
-            keys: [
-              { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-              { pubkey: businessPda, isSigner: false, isWritable: false },
-              { pubkey: streamConfigPda, isSigner: false, isWritable: false },
-              { pubkey: streamPda, isSigner: false, isWritable: false },
-              { pubkey: withdrawRequestPda, isSigner: false, isWritable: true },
-              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            ],
-            programId: PROGRAM_ID,
-            data: Buffer.concat([
-              KEEPER_REQUEST_WITHDRAW_V2_DISC,
-              streamIndexBuf,
-              workerPubkey.toBuffer(),
-            ]),
-          });
+        const ix = new TransactionInstruction({
+          keys: [
+            { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+            { pubkey: businessPda, isSigner: false, isWritable: false },
+            { pubkey: streamConfigPda, isSigner: false, isWritable: false },
+            { pubkey: streamPda, isSigner: false, isWritable: false },
+            { pubkey: withdrawRequestPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          programId: PROGRAM_ID,
+          data: Buffer.concat([
+            KEEPER_REQUEST_WITHDRAW_V2_DISC,
+            streamIndexBuf,
+          ]),
+        });
 
-          const tx = new Transaction().add(ix);
-          tx.feePayer = payer.publicKey;
-          tx.recentBlockhash = (await readConnection.getLatestBlockhash()).blockhash;
-          tx.sign(payer);
-          const sig = await readConnection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-          await readConnection.confirmTransaction(sig, 'confirmed');
-          log(`[auto-heal] ✅ PDA refreshed with correct worker pubkey stream=${request.streamIndex} tx=${sig}`);
-          return; // next tick will pick up the fixed PDA and succeed
-        } else {
-          log(`[auto-heal] No worker pubkey found in DB for stream=${request.streamIndex}`);
-        }
+        const tx = new Transaction().add(ix);
+        tx.feePayer = payer.publicKey;
+        tx.recentBlockhash = (await readConnection.getLatestBlockhash()).blockhash;
+        tx.sign(payer);
+        const sig = await readConnection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+        await readConnection.confirmTransaction(sig, 'confirmed');
+        log(`[auto-heal] ✅ PDA refreshed with auth-hash format stream=${request.streamIndex} tx=${sig}`);
+        return; // next tick will pick up the fixed PDA and succeed
       } catch (healErr: any) {
         log(`[auto-heal] Failed to refresh PDA stream=${request.streamIndex}: ${healErr?.message}`);
       }
@@ -1665,68 +1791,14 @@ async function processWithdrawRequest(request: WithdrawRequestV2Record): Promise
   log(`Processed withdraw_request=${request.address.toBase58()} stream=${employeePda.toBase58()}`);
 }
 
-async function grantKeeperViewAccess(stream: EmployeeStreamV2Record): Promise<void> {
-  const streamInfo = await txConnection.getAccountInfo(stream.address, 'confirmed');
-  if (!streamInfo) throw new Error("Stream not found after accrue");
-
-  const salaryHandleBytes = streamInfo.data.slice(72, 88);
-
-  const [salaryAllowanceAccount] = PublicKey.findProgramAddressSync(
-    [salaryHandleBytes, payer.publicKey.toBuffer()],
-    INCO_LIGHTNING_ID
-  );
-
-  const [streamConfigPda] = PublicKey.findProgramAddressSync(
-    [STREAM_CONFIG_V2_SEED, stream.business.toBuffer()],
-    PROGRAM_ID
-  );
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(stream.streamIndex));
-
-  const ix = new TransactionInstruction({
-    programId: PROGRAM_ID,
-    keys: [
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: stream.business, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPda, isSigner: false, isWritable: false },
-      { pubkey: stream.address, isSigner: false, isWritable: false },
-      { pubkey: payer.publicKey, isSigner: false, isWritable: false },
-      { pubkey: salaryAllowanceAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.concat([
-      GRANT_KEEPER_VIEW_ACCESS_V2_DISC,
-      streamIndexBuf,
-    ]),
-  });
-
-  const recentBlockhash = await txConnection.getLatestBlockhash();
-  const messageObj = new TransactionMessage({
-    payerKey: payer.publicKey,
-    recentBlockhash: recentBlockhash.blockhash,
-    instructions: [ix]
-  }).compileToV0Message();
-  const tx = new VersionedTransaction(messageObj);
-  tx.sign([payer]);
-
-  const sig = await txConnection.sendTransaction(tx, { maxRetries: 3 });
-  await txConnection.confirmTransaction({
-    signature: sig,
-    ...recentBlockhash
-  });
-  log(`Keeper auto-granted view access stream=${stream.streamIndex} tx=${sig}`);
-}
-
 const revokedStreams = new Set<string>();
 
 async function revokeViewAccess(stream: EmployeeStreamV2Record, targetWallet: PublicKey): Promise<void> {
   const streamInfo = await txConnection.getAccountInfo(stream.address, 'confirmed');
   if (!streamInfo) throw new Error("Stream not found for revoke");
 
-  const salaryHandleBytes = streamInfo.data.slice(72, 88);
-  const accruedHandleBytes = streamInfo.data.slice(88, 104);
+  const salaryHandleBytes = streamInfo.data.slice(112, 128);
+  const accruedHandleBytes = streamInfo.data.slice(144, 160);
 
   const [salaryAllowanceAccount] = PublicKey.findProgramAddressSync(
     [salaryHandleBytes, targetWallet.toBuffer()],
@@ -1796,7 +1868,12 @@ async function processRevocations(): Promise<void> {
       try {
         let targets: string[] = [];
         try {
-          targets = await getViewAccessTargets(stream.streamIndex);
+          const business = await getBusiness(stream.business);
+          if (!business) {
+            log(`[revoke] business missing for stream=${stream.streamIndex}, skipping`);
+            continue;
+          }
+          targets = await getViewAccessTargets(stream.streamIndex, business.owner.toBase58());
         } catch (_importErr) {
           // Fallback: skip revocation if the function is unavailable due to CJS interop
           log(`[revoke] getViewAccessTargets unavailable for stream=${stream.streamIndex}, skipping`);
@@ -1882,10 +1959,16 @@ async function processStream(inputStream: EmployeeStreamV2Record): Promise<void>
     return;
   }
 
+  if (!stream.hasFixedDestination) {
+    // Privacy mode streams settle through explicit withdraw-request flow only.
+    // Skip periodic settle loop to avoid unnecessary undelegate/redelegate churn.
+    idempotency.add(idempotencyKey);
+    return;
+  }
+
   // NOTE: Stream-based compliance gating was tied to a stream->wallet mapping file.
-  // Expensee pivot uses withdraw requests instead, where the employee requester wallet
-  // is available on-chain (WithdrawRequestV2). Compliance checks (if enabled) should be
-  // applied to withdraw requests, not here.
+  // Expensee pivot uses withdraw requests with auth-hash commitments (no raw worker pubkey)
+  // on-chain. Compliance checks (if enabled) are applied during withdraw request processing.
 
   const vaultPda = business.vault.equals(PublicKey.default)
     ? deriveVaultPda(stream.business)
@@ -1983,11 +2066,6 @@ async function processStream(inputStream: EmployeeStreamV2Record): Promise<void>
   if (!delegatedOnChain) {
     await retry(`accrue_v2 stream=${stream.streamIndex}`, async () => {
       await sendInstruction('accrue_v2', accrueIx(stream.business, stream.streamIndex), readConnection);
-      try {
-        await grantKeeperViewAccess(stream);
-      } catch (err: any) {
-        log(`Failed to auto-grant keeper view access stream=${stream.streamIndex}: ${err.message}`);
-      }
     });
   } else {
     log(`Skipping accrue_v2 for delegated stream=${stream.address.toBase58()}`);
@@ -2068,21 +2146,32 @@ async function processClaimRelays(): Promise<void> {
     try {
       const businessOwner = new PublicKey(auth.businessOwner);
       const workerPubkey = new PublicKey(auth.workerPubkey);
+      const destinationTokenAccount = new PublicKey(auth.destinationTokenAccount);
 
       // 1. Cryptographic Authentication
-      // The wallet signed: "claim:<streamIndex>:<nonce>:<expiry>"
-      const messageStr = `claim:${auth.streamIndex}:${auth.nonce}:${auth.expiry}`;
-      const message = new TextEncoder().encode(messageStr);
+      // Preferred signed format binds business + destination:
+      //   claim:<businessOwner>:<streamIndex>:<nonce>:<expiry>:<destinationTokenAccount>
+      // Legacy fallback:
+      //   claim:<streamIndex>:<nonce>:<expiry>
+      const messagePreferred = new TextEncoder().encode(
+        `claim:${auth.businessOwner}:${auth.streamIndex}:${auth.nonce}:${auth.expiry}:${destinationTokenAccount.toBase58()}`
+      );
+      const messageLegacy = new TextEncoder().encode(
+        `claim:${auth.streamIndex}:${auth.nonce}:${auth.expiry}`
+      );
       try {
-        const isValid = ed25519.verify(new Uint8Array(auth.signature), message, workerPubkey.toBytes());
+        const signature = new Uint8Array(auth.signature);
+        const isValid =
+          ed25519.verify(signature, messagePreferred, workerPubkey.toBytes()) ||
+          ed25519.verify(signature, messageLegacy, workerPubkey.toBytes());
         if (!isValid) {
           log(`Claim relay skip: invalid Ed25519 signature stream=${auth.streamIndex} nonce=${auth.nonce}`);
-          await markClaimFailed(auth.streamIndex, auth.nonce, "invalid_signature");
+          await markClaimFailed(auth.businessOwner, auth.streamIndex, auth.nonce, "invalid_signature");
           continue;
         }
       } catch (err: any) {
         log(`Claim relay skip: signature verification error stream=${auth.streamIndex} nonce=${auth.nonce}`);
-        await markClaimFailed(auth.streamIndex, auth.nonce, "signature_error");
+        await markClaimFailed(auth.businessOwner, auth.streamIndex, auth.nonce, "signature_error");
         continue;
       }
 
@@ -2100,37 +2189,23 @@ async function processClaimRelays(): Promise<void> {
         continue;
       }
 
-      // ShieldedPayoutV2 layout: disc(8) + business(32) + streamIndex(8) + nonce(8) + employee_auth_hash(32) + encrypted_amount(handle:16+ct:64=80) + bump(1) + claimed(1) + cancelled(1) + expires_at(8) + payout_token_account(32)
+      // ShieldedPayoutV2 layout:
+      // disc(8) + business(32) + streamIndex(8) + nonce(8) + employee_auth_hash(32)
+      // + encrypted_amount(32) + claimed(1) + cancelled(1) + created_at(8)
+      // + expires_at(8) + payout_token_account(32) + bump(1)
       const payoutData = payoutInfo.data;
-      const claimed = payoutData[8 + 32 + 8 + 8 + 32 + 80 + 1] !== 0;
+      const claimed = payoutData[120] !== 0;
       if (claimed) {
         log(`Claim relay skip: already claimed on-chain stream=${auth.streamIndex} nonce=${auth.nonce}`);
-        await markClaimCompleted(auth.streamIndex, auth.nonce, "already_claimed");
+        await markClaimCompleted(auth.businessOwner, auth.streamIndex, auth.nonce, "already_claimed");
         continue;
       }
-
-      // Read payout_token_account from the shielded payout PDA state.
-      // It's stored by the employee stream — we need the employee's token account.
-      // For the destination, we use the employee_token_account from the stream.
-      const streamPda = deriveEmployeeStreamPda(businessPda, auth.streamIndex);
-      const streamInfo = await getAccountInfoRead(streamPda);
-      if (!streamInfo) {
-        log(`Claim relay skip: stream not found stream=${auth.streamIndex}`);
+      const payoutEmployeeAuthHash = Buffer.from(payoutData.subarray(56, 88));
+      if (!authHashMatchesWorker(payoutEmployeeAuthHash, workerPubkey)) {
+        log(`Claim relay skip: worker auth hash mismatch stream=${auth.streamIndex} nonce=${auth.nonce}`);
+        await markClaimFailed(auth.businessOwner, auth.streamIndex, auth.nonce, "worker_auth_hash_mismatch");
         continue;
       }
-      // EmployeeStreamV2 layout: disc(8) + business(32) + stream_index(8) + employee_auth_hash(32) + employee_token_account(32) + ...
-      const employeeTokenAccount = new PublicKey(streamInfo.data.subarray(8 + 32 + 8 + 32, 8 + 32 + 8 + 32 + 32));
-
-      // Read payout token account from vault config (it was created during process_withdraw)
-      // The payout_token_account is stored in ShieldedPayoutV2 at the end of the account
-      // Actually: We need to scan for the Inco token account owned by the shielded payout PDA.
-      // For simplicity, derive it the same way processWithdrawRequest does.
-      // The account lookup: check accounts owned by the payout PDA via getTokenAccountsByOwner isn't available for Inco.
-      // We'll use the token account stored in the withdraw request or look it up from hints.
-
-      // Simplest approach: the payout token account was created during processWithdrawRequest
-      // and is stored as an associated lookup. We'll query getAccountInfo on a known lookup.
-      // For now, pass the employee_token_account as destination (keeper sends to worker's Inco token account).
 
       // Build keeper_claim_on_behalf_v2 instruction
       const streamIndexBuf = Buffer.alloc(8);
@@ -2139,27 +2214,7 @@ async function processClaimRelays(): Promise<void> {
       nonceBuf.writeBigUInt64LE(BigInt(auth.nonce));
       const expiryBuf = Buffer.alloc(8);
       expiryBuf.writeBigInt64LE(BigInt(auth.expiry));
-
-      // We need to find the payout_token_account.
-      // It's stored in the ShieldedPayoutV2's associated Inco token account.
-      // During processWithdrawRequest, the keeper created a keypair for it.
-      // The shielded payout PDA is the owner. We scan for token accounts owned by the PDA.
-      // Since Inco token accounts don't use ATA, we need to read it from the process_withdraw tx.
-      // Workaround: store it in the shielded payout state — but it's not stored there.
-
-      // The actual payout_token_account needs to be recovered.
-      // Best approach: scan for Inco token accounts owned by shieldedPayoutPda.
-      const ownedAccounts = await readConnection.getProgramAccounts(INCO_TOKEN_PROGRAM_ID, {
-        filters: [
-          { memcmp: { offset: 40, bytes: shieldedPayoutPda.toBase58() } }, // owner at offset 40 (disc:8 + mint:32)
-        ],
-      });
-
-      if (ownedAccounts.length === 0) {
-        log(`Claim relay skip: no Inco token account found for payout PDA stream=${auth.streamIndex} nonce=${auth.nonce}`);
-        continue;
-      }
-      const payoutTokenAccount = ownedAccounts[0].pubkey;
+      const payoutTokenAccount = new PublicKey(payoutData.subarray(138, 170));
 
       const ED25519_PROGRAM_ID = new PublicKey('Ed25519SigVerify111111111111111111111111111');
 
@@ -2170,7 +2225,7 @@ async function processClaimRelays(): Promise<void> {
           { pubkey: streamConfigPda, isSigner: false, isWritable: false },  // stream_config_v2
           { pubkey: shieldedPayoutPda, isSigner: false, isWritable: true }, // shielded_payout
           { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },// payout_token_account
-          { pubkey: employeeTokenAccount, isSigner: false, isWritable: true }, // destination_token_account
+          { pubkey: destinationTokenAccount, isSigner: false, isWritable: true }, // destination_token_account
           { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
           { pubkey: ED25519_PROGRAM_ID, isSigner: false, isWritable: false },
@@ -2193,11 +2248,11 @@ async function processClaimRelays(): Promise<void> {
       const sig = await readConnection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
       await readConnection.confirmTransaction(sig, 'confirmed');
 
-      await markClaimCompleted(auth.streamIndex, auth.nonce, sig);
-      log(`✅ Claim relayed stream=${auth.streamIndex} nonce=${auth.nonce} worker=${auth.workerPubkey.slice(0, 8)}... tx=${sig}`);
+      await markClaimCompleted(auth.businessOwner, auth.streamIndex, auth.nonce, sig);
+      log(`✅ Claim relayed stream=${auth.streamIndex} nonce=${auth.nonce} tx=${sig}`);
     } catch (e: any) {
       const reason = e?.message || 'unknown';
-      await markClaimFailed(auth.streamIndex, auth.nonce, reason);
+      await markClaimFailed(auth.businessOwner, auth.streamIndex, auth.nonce, reason);
       log(`Claim relay failed stream=${auth.streamIndex} nonce=${auth.nonce} reason=${reason}`);
     }
   }
@@ -2215,19 +2270,29 @@ async function processWithdrawRelays(): Promise<void> {
       const workerPubkey = new PublicKey(auth.workerPubkey);
 
       // 1. Cryptographic Authentication
-      // The wallet signed: "withdraw:<streamIndex>:<timestamp>"
-      const messageStr = `withdraw:${auth.streamIndex}:${auth.timestamp}`;
-      const message = new TextEncoder().encode(messageStr);
+      // Preferred signed format binds to business owner:
+      //   withdraw:<businessOwner>:<streamIndex>:<timestamp>
+      // Legacy fallback kept for old queued auths:
+      //   withdraw:<streamIndex>:<timestamp>
+      const messagePreferred = new TextEncoder().encode(
+        `withdraw:${auth.businessOwner}:${auth.streamIndex}:${auth.timestamp}`
+      );
+      const messageLegacy = new TextEncoder().encode(
+        `withdraw:${auth.streamIndex}:${auth.timestamp}`
+      );
       try {
-        const isValid = ed25519.verify(new Uint8Array(auth.signature), message, workerPubkey.toBytes());
+        const signature = new Uint8Array(auth.signature);
+        const isValid =
+          ed25519.verify(signature, messagePreferred, workerPubkey.toBytes()) ||
+          ed25519.verify(signature, messageLegacy, workerPubkey.toBytes());
         if (!isValid) {
           log(`Withdraw relay skip: invalid Ed25519 signature stream=${auth.streamIndex} ts=${auth.timestamp}`);
-          await markWithdrawFailed(auth.streamIndex, auth.timestamp, "invalid_signature");
+          await markWithdrawFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, "invalid_signature");
           continue;
         }
       } catch (err: any) {
         log(`Withdraw relay skip: signature verification error stream=${auth.streamIndex} ts=${auth.timestamp}`);
-        await markWithdrawFailed(auth.streamIndex, auth.timestamp, "signature_error");
+        await markWithdrawFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, "signature_error");
         continue;
       }
 
@@ -2264,7 +2329,6 @@ async function processWithdrawRelays(): Promise<void> {
         data: Buffer.concat([
           KEEPER_REQUEST_WITHDRAW_V2_DISC,
           streamIndexBuf,
-          workerPubkey.toBuffer(),  // worker_pubkey: Pubkey (32 bytes) — stored as requester
         ]),
       });
 
@@ -2276,17 +2340,18 @@ async function processWithdrawRelays(): Promise<void> {
       const sig = await readConnection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
       await readConnection.confirmTransaction(sig, 'confirmed');
 
-      await markWithdrawCompleted(auth.streamIndex, auth.timestamp, sig);
-      log(`✅ Withdraw request relayed stream=${auth.streamIndex} ts=${auth.timestamp} worker=${auth.workerPubkey.slice(0, 8)}... tx=${sig}`);
+      await markWithdrawCompleted(auth.businessOwner, auth.streamIndex, auth.timestamp, sig);
+      log(`✅ Withdraw request relayed stream=${auth.streamIndex} ts=${auth.timestamp} tx=${sig}`);
     } catch (e: any) {
       const reason = e?.message || 'unknown';
-      await markWithdrawFailed(auth.streamIndex, auth.timestamp, reason);
+      await markWithdrawFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, reason);
       log(`Withdraw relay failed stream=${auth.streamIndex} ts=${auth.timestamp} reason=${reason}`);
     }
   }
 }
 
 async function processViewRelays(): Promise<void> {
+  if (!ENABLE_VIEW_RELAY) return;
   const batch = await getPendingViewAuths(10);
   if (batch.length === 0) return;
 
@@ -2303,12 +2368,12 @@ async function processViewRelays(): Promise<void> {
         const isValid = ed25519.verify(new Uint8Array(auth.signature), message, workerPubkey.toBytes());
         if (!isValid) {
           log(`View relay skip: invalid Ed25519 signature stream=${auth.streamIndex} ts=${auth.timestamp}`);
-          await markViewFailed(auth.streamIndex, auth.timestamp, "invalid_signature");
+          await markViewFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, "invalid_signature");
           continue;
         }
       } catch (err: any) {
         log(`View relay skip: signature verification error stream=${auth.streamIndex} ts=${auth.timestamp}`);
-        await markViewFailed(auth.streamIndex, auth.timestamp, "signature_error");
+        await markViewFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, "signature_error");
         continue;
       }
 
@@ -2322,12 +2387,12 @@ async function processViewRelays(): Promise<void> {
       // Load stream to get handles for allowance PDA derivation
       const streamInfo = await txConnection.getAccountInfo(streamPda);
       if (!streamInfo) {
-        await markViewFailed(auth.streamIndex, auth.timestamp, "stream_not_found");
+        await markViewFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, "stream_not_found");
         continue;
       }
 
-      const salaryHandleBytes = streamInfo.data.slice(72, 88);
-      const accruedHandleBytes = streamInfo.data.slice(88, 104);
+      const salaryHandleBytes = streamInfo.data.slice(112, 128);
+      const accruedHandleBytes = streamInfo.data.slice(144, 160);
 
       const [salaryAllowanceAccount] = PublicKey.findProgramAddressSync(
         [salaryHandleBytes, workerPubkey.toBuffer()],
@@ -2376,12 +2441,12 @@ async function processViewRelays(): Promise<void> {
         ...recentBlockhash
       });
 
-      log(`✅ View relay completed stream=${auth.streamIndex} worker=${auth.workerPubkey.slice(0, 8)} tx=${sig}`);
-      await markViewCompleted(auth.streamIndex, auth.timestamp, sig);
+      log(`✅ View relay completed stream=${auth.streamIndex} tx=${sig}`);
+      await markViewCompleted(auth.businessOwner, auth.streamIndex, auth.timestamp, sig);
     } catch (e: any) {
       const reason = e?.message || 'unknown transaction error';
       log(`View relay failed stream=${auth.streamIndex} reason=${reason}`);
-      await markViewFailed(auth.streamIndex, auth.timestamp, reason);
+      await markViewFailed(auth.businessOwner, auth.streamIndex, auth.timestamp, reason);
     }
   }
 }
@@ -2453,11 +2518,13 @@ async function processTick(): Promise<void> {
       log(`Withdraw relay processing failed: ${e?.message || 'unknown'}`);
     }
 
-    // Phase 4: Process any pending view authorizations (Auto-regrant off-chain intent)
-    try {
-      await processViewRelays();
-    } catch (e: any) {
-      log(`View relay processing failed: ${e?.message || 'unknown'}`);
+    // Phase 4: Process any pending view authorizations (disabled by default in strict privacy mode)
+    if (ENABLE_VIEW_RELAY) {
+      try {
+        await processViewRelays();
+      } catch (e: any) {
+        log(`View relay processing failed: ${e?.message || 'unknown'}`);
+      }
     }
 
     // Phase 5: Sweepers
@@ -2467,11 +2534,13 @@ async function processTick(): Promise<void> {
       log(`Revocation sweeper failed: ${e?.message || 'unknown'}`);
     }
 
-    // Phase 6: Auto-claim unclaimed shielded payouts
-    try {
-      await autoClaimUnclaimedPayouts();
-    } catch (e: any) {
-      log(`Auto-claim sweep failed: ${e?.message || 'unknown'}`);
+    // Phase 6: Auto-claim sweep (disabled by default for privacy-first 2-hop flow)
+    if (AUTO_CLAIM_SWEEP_ENABLED) {
+      try {
+        await autoClaimUnclaimedPayouts();
+      } catch (e: any) {
+        log(`Auto-claim sweep failed: ${e?.message || 'unknown'}`);
+      }
     }
 
   } catch (e: any) {
@@ -2530,8 +2599,16 @@ async function autoClaimUnclaimedPayouts(): Promise<void> {
       continue;
     }
 
-    // EmployeeStreamV2 layout: disc(8) + business(32) + stream_index(8) + employee_auth_hash(32) + employee_token_account(32)
-    const employeeTokenAccount = new PublicKey(streamInfo.data.subarray(8 + 32 + 8 + 32, 8 + 32 + 8 + 32 + 32));
+    // EmployeeStreamV2 layout: disc(8) + business(32) + stream_index(8) + employee_auth_hash(32) + destination_route_commitment(32)
+    const destinationRouteCommitment = Buffer.from(
+      streamInfo.data.subarray(8 + 32 + 8 + 32, 8 + 32 + 8 + 32 + 32)
+    );
+    if (isAllZero32(destinationRouteCommitment)) {
+      log(`[auto-claim-sweep] Skip: no fixed destination route stream=${streamIndex} nonce=${nonce}`);
+      autoClaimIdempotency.add(idempotencyKey);
+      continue;
+    }
+    const employeeTokenAccount = new PublicKey(destinationRouteCommitment);
 
     const streamConfigPda = deriveStreamConfigPda(business);
     const shieldedPayoutPda = pubkey;
@@ -2617,7 +2694,7 @@ async function deadLetterWithdrawRequest(
     request: request.address.toBase58(),
     business: request.business.toBase58(),
     streamIndex: request.streamIndex,
-    requester: request.requester.toBase58(),
+    requesterAuthHash: authHashHex(request.requesterAuthHash),
     requestedAt: request.requestedAt,
     reason,
   };
@@ -2665,7 +2742,7 @@ async function sendAlertWithdrawRequest(
         request: request.address.toBase58(),
         business: request.business.toBase58(),
         streamIndex: request.streamIndex,
-        requester: request.requester.toBase58(),
+        requesterAuthHash: authHashHex(request.requesterAuthHash),
         requestedAt: request.requestedAt,
         reason,
       }),
@@ -2698,6 +2775,7 @@ async function main(): Promise<void> {
   log(`Tick interval: ${DEFAULT_TICK_SECS}s`);
   log(`Compliance checks: ${COMPLIANCE_ENABLED ? 'enabled' : 'disabled'}`);
   log(`Redelegate after withdraw: ${REDELEGATE_AFTER_WITHDRAW ? 'enabled' : 'disabled'}`);
+  log(`View relay: ${ENABLE_VIEW_RELAY ? 'enabled' : 'disabled (strict privacy default)'}`);
   magicCommitSupported = await detectMagicCommitSupport();
   log(`Magic commit support on read RPC: ${magicCommitSupported ? 'available' : 'unavailable'}`);
   try {
