@@ -95,9 +95,9 @@ export default function PageShell({ icon = '◈', title, subtitle, navItems = []
 
       <footer className="max-w-[1400px] mx-auto px-6 py-12 border-t border-slate-200/40 flex flex-col md:flex-row items-center justify-between gap-6">
         <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-          <span>OnyxFii</span>
+          <span>Expensee</span>
           <span className="w-1 h-1 rounded-full bg-slate-200"></span>
-          <span>Autonomous Payroll Intelligence</span>
+          <span>Private Realtime Payroll</span>
         </div>
         <div className="flex items-center gap-6">
           <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">© 2026 Devnet Proof-of-Concept</span>

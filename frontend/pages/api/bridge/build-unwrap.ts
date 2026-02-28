@@ -140,7 +140,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return;
     }
 
-    const { userPublicKey, userPublicUsdcAta, userConfidentialTokenAccount, amountUi, publicUsdcMint } = req.body || {};
+    const {
+      userPublicKey,
+      userPublicUsdcAta,
+      userConfidentialTokenAccount,
+      amountUi,
+      publicUsdcMint,
+      cashoutWallet,
+    } = req.body || {};
 
     const user = new PublicKey(String(userPublicKey || ''));
     const userConfidential = new PublicKey(String(userConfidentialTokenAccount || ''));
@@ -177,16 +184,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       'https://api.devnet.solana.com';
     const connection = new Connection(rpc, 'confirmed');
 
-    const derivedUserAta = getAssociatedTokenAddress(user, mint);
+    // Guardrail: the connected wallet must own the private payroll account used as source.
+    const userConfidentialInfo = await connection.getAccountInfo(userConfidential, 'confirmed');
+    if (!userConfidentialInfo) {
+      throw new Error('Private payroll account not found');
+    }
+    if (!userConfidentialInfo.owner.equals(incoTokenProgramId)) {
+      throw new Error('Private payroll account is not an Inco token account');
+    }
+    if (userConfidentialInfo.data.length < 72) {
+      throw new Error('Private payroll account data is invalid');
+    }
+    const confidentialOwner = new PublicKey(userConfidentialInfo.data.subarray(40, 72));
+    if (!confidentialOwner.equals(user)) {
+      throw new Error(
+        `This private payroll account is owned by ${confidentialOwner.toBase58()}. Connect that wallet to unwrap.`
+      );
+    }
+
+    const cashoutOwner =
+      typeof cashoutWallet === 'string' && cashoutWallet.trim().length > 0
+        ? new PublicKey(cashoutWallet.trim())
+        : user;
+
+    const derivedUserAta = getAssociatedTokenAddress(cashoutOwner, mint);
     const userAta = userPublicUsdcAta ? new PublicKey(String(userPublicUsdcAta)) : derivedUserAta;
     const escrowAta = getAssociatedTokenAddress(escrow.publicKey, mint);
 
     const ixs: TransactionInstruction[] = [];
 
-    // Create user ATA if missing (payer = escrow so user doesn't need SOL to cash out).
+    // Create destination ATA if missing (payer = escrow so worker doesn't need SOL to cash out).
     const userAtaInfo = await connection.getAccountInfo(userAta, 'confirmed');
     if (!userAtaInfo) {
-      ixs.push(createAssociatedTokenAccountIx({ payer: escrow.publicKey, ata: userAta, owner: user, mint }));
+      ixs.push(createAssociatedTokenAccountIx({ payer: escrow.publicKey, ata: userAta, owner: cashoutOwner, mint }));
     }
 
     // Create escrow ATA if missing (payer = escrow).

@@ -9,7 +9,7 @@ export default function HomePage() {
     <PageShell
       icon="◈"
       title="Expensee"
-      subtitle="Live private payroll for modern teams"
+      subtitle="Realtime private payroll for modern teams"
       navItems={[
         { href: '/', label: COPY.nav.home },
         { href: '/employer', label: COPY.nav.company },
@@ -18,10 +18,10 @@ export default function HomePage() {
       ]}
     >
       <Head>
-        <title>Expensee | Private Live Payroll</title>
+        <title>Expensee | Realtime Private Payroll</title>
         <meta
           name="description"
-          content="Employer-first private payroll with live earnings and on-demand payouts."
+          content="Realtime private payroll with encrypted salary amounts and privacy-preserving payout routing."
         />
       </Head>
 
@@ -35,14 +35,14 @@ export default function HomePage() {
             Start Company Setup
           </Link>
           <Link href="/employee" className="premium-btn premium-btn-secondary">
-            Open Worker Portal
+            Open Employee Portal
           </Link>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
           <StatusPill tone="success">Live earnings updates</StatusPill>
           <StatusPill tone="info">On-demand payout</StatusPill>
-          <StatusPill tone="warning">High-speed mode optional</StatusPill>
+          <StatusPill tone="warning">Encrypted salary data</StatusPill>
         </div>
       </section>
 
@@ -53,7 +53,7 @@ export default function HomePage() {
           <ul className="mt-3 space-y-2 text-sm text-slate-700">
             <li>1. Create payroll wallet</li>
             <li>2. Add payroll funds</li>
-            <li>3. Add workers and pay plans</li>
+            <li>3. Add employees and pay plans</li>
             <li>4. Turn on high-speed mode (optional)</li>
           </ul>
           <Link href="/employer" className="mt-4 inline-flex premium-btn premium-btn-primary">
@@ -71,15 +71,23 @@ export default function HomePage() {
             <li>4. Share verified earnings statement</li>
           </ul>
           <Link href="/employee" className="mt-4 inline-flex premium-btn premium-btn-secondary">
-            Go to Worker Portal
+            Go to Employee Portal
           </Link>
         </article>
       </section>
 
       <section className="panel-card">
-        <h3 className="text-lg font-bold">Demo Notes</h3>
+        <h3 className="text-lg font-bold">Why Expensee</h3>
         <p className="mt-2 text-sm text-slate-600">
-          Advanced tools like bridge and raw diagnostics are still available for judges, but hidden from the default flow.
+          Expensee combines encrypted payroll amounts with private payout routing to reduce who-paid-whom exposure on-chain.
+        </p>
+        <ul className="mt-3 space-y-2 text-sm text-slate-700">
+          <li>1. Amount privacy: salaries, accruals, and payouts stay encrypted.</li>
+          <li>2. Realtime experience: earnings update continuously with on-demand payout requests.</li>
+          <li>3. Linkability reduction: shielded routing breaks direct employer-to-employee payout traces.</li>
+        </ul>
+        <p className="mt-3 text-sm text-slate-600">
+          Advanced tools are available for judges and operator review.
         </p>
         <div className="mt-3">
           <Link href="/bridge" className="text-sm underline">

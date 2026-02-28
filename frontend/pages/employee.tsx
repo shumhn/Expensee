@@ -10,11 +10,12 @@ import {
   getBusinessPDA,
   getEmployeeStreamV2Account,
   getEmployeeStreamV2DecryptHandles,
-  getIncoAllowancePda,
+  getLatestPayoutReceiptForWorker,
   getRateHistoryV2Account,
   getWithdrawRequestV2Account,
   getPendingPayoutsForWorker,
   ShieldedPayoutV2Account,
+  WorkerPayoutReceipt,
   PAYUSD_MINT,
   signClaimAuthorization,
   signWithdrawAuthorization,
@@ -52,6 +53,14 @@ function explorerTxUrl(sig: string): string {
   return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
 }
 
+function toLocalDateTimeInput(date: Date): string {
+  const pad = (v: number) => String(v).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -65,6 +74,28 @@ async function fetchWithTimeout(
     window.clearTimeout(timer);
   }
 }
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  let timer: number | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = window.setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
+}
+
+type ClaimProof = {
+  nonce: number;
+  payoutPda: string;
+  bufferTx: string | null;
+  claimTx: string;
+  destinationTokenAccount: string | null;
+};
 
 export default function EmployeePage() {
   const { connection } = useConnection();
@@ -85,20 +116,15 @@ export default function EmployeePage() {
   const [payoutsScanning, setPayoutsScanning] = useState(false);
   const [claimingNonce, setClaimingNonce] = useState<number | null>(null);
   const [claimSuccessTx, setClaimSuccessTx] = useState<string | null>(null);
+  const [latestPayoutReceipt, setLatestPayoutReceipt] = useState<WorkerPayoutReceipt | null>(null);
   const [bufferProofTxByNonce, setBufferProofTxByNonce] = useState<Record<number, string>>({});
-  const [lastClaimProof, setLastClaimProof] = useState<{
-    nonce: number;
-    payoutPda: string;
-    bufferTx: string | null;
-    claimTx: string;
-  } | null>(null);
+  const [lastClaimProof, setLastClaimProof] = useState<ClaimProof | null>(null);
   const [payslipLoading, setPayslipLoading] = useState(false);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [claimDestinationTokenAccount, setClaimDestinationTokenAccount] = useState('');
   const [revealMessage, setRevealMessage] = useState('');
   const [serverRevealHint, setServerRevealHint] = useState<string | null>(null);
-  const [decryptAllowed, setDecryptAllowed] = useState<{ salary: boolean; accrued: boolean } | null>(null);
   const [delegationRoute, setDelegationRoute] = useState<{
     delegated: boolean | null;
     endpoint: string | null;
@@ -147,13 +173,46 @@ export default function EmployeePage() {
     requestTx: string;
     requestedAt: number; // unix seconds
     wasDelegated: boolean;
+    statementStartCandidate: number;
   } | null>(null);
+  const [statementPrefilledForRequestAt, setStatementPrefilledForRequestAt] = useState<number | null>(null);
   const [estimatedFrozenAt, setEstimatedFrozenAt] = useState<number | null>(null);
 
   const streamIndex = useMemo(() => {
     const n = Number(streamIndexInput);
     return Number.isFinite(n) && n >= 0 ? n : null;
   }, [streamIndexInput]);
+  const claimContextStorageKey = useMemo(() => {
+    const walletKey = wallet.publicKey?.toBase58() || 'wallet_unknown';
+    const employerKey = employerWallet.trim() || 'employer_unknown';
+    const streamKey = streamIndexInput.trim() || 'stream_unknown';
+    return `expensee_employee_claim_ctx_v1:${walletKey}:${employerKey}:${streamKey}`;
+  }, [wallet.publicKey, employerWallet, streamIndexInput]);
+  const workerLastClaimStorageKey = useMemo(() => {
+    const worker = wallet.publicKey?.toBase58() || 'wallet_unknown';
+    return `expensee_employee_last_claim_v1:${worker}`;
+  }, [wallet.publicKey]);
+  const lastKnownClaimDestination = useMemo(() => {
+    const candidate = (
+      lastClaimProof?.destinationTokenAccount ||
+      latestPayoutReceipt?.destinationTokenAccount ||
+      claimDestinationTokenAccount.trim()
+    ).trim();
+    if (!candidate) return null;
+    try {
+      return new PublicKey(candidate).toBase58();
+    } catch {
+      return null;
+    }
+  }, [
+    claimDestinationTokenAccount,
+    lastClaimProof?.destinationTokenAccount,
+    latestPayoutReceipt?.destinationTokenAccount,
+  ]);
+  const bridgePrefillHref = useMemo(() => {
+    if (!lastKnownClaimDestination) return '/bridge';
+    return `/bridge?confidentialTokenAccount=${encodeURIComponent(lastKnownClaimDestination)}`;
+  }, [lastKnownClaimDestination]);
 
   // Persist lookup inputs for convenience (avoids re-pasting every refresh).
   useEffect(() => {
@@ -181,6 +240,148 @@ export default function EmployeePage() {
       // ignore
     }
   }, [employerWallet, streamIndexInput]);
+
+  // Persist claim context so refresh does not hide destination/proof context.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(claimContextStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.claimDestinationTokenAccount === 'string') {
+        setClaimDestinationTokenAccount(parsed.claimDestinationTokenAccount);
+      }
+      if (typeof parsed?.claimSuccessTx === 'string') {
+        setClaimSuccessTx(parsed.claimSuccessTx);
+      }
+      if (parsed?.lastClaimProof && typeof parsed.lastClaimProof === 'object') {
+        const p = parsed.lastClaimProof;
+        if (
+          typeof p.nonce === 'number' &&
+          typeof p.payoutPda === 'string' &&
+          (typeof p.bufferTx === 'string' || p.bufferTx === null) &&
+          typeof p.claimTx === 'string'
+        ) {
+          setLastClaimProof({
+            nonce: p.nonce,
+            payoutPda: p.payoutPda,
+            bufferTx: p.bufferTx,
+            claimTx: p.claimTx,
+            destinationTokenAccount:
+              typeof p.destinationTokenAccount === 'string'
+                ? p.destinationTokenAccount
+                : null,
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [claimContextStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        claimContextStorageKey,
+        JSON.stringify({
+          claimDestinationTokenAccount,
+          claimSuccessTx,
+          lastClaimProof,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [claimContextStorageKey, claimDestinationTokenAccount, claimSuccessTx, lastClaimProof]);
+
+  // Wallet-scoped fallback so workers can recover destination details after refresh/session changes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(workerLastClaimStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+
+      if (!employerWallet && typeof parsed?.employerWallet === 'string') {
+        setEmployerWallet(parsed.employerWallet);
+      }
+      if (
+        (streamIndexInput === '' || streamIndexInput === '0') &&
+        typeof parsed?.streamIndexInput === 'string'
+      ) {
+        setStreamIndexInput(parsed.streamIndexInput);
+      }
+      if (
+        !claimDestinationTokenAccount.trim() &&
+        typeof parsed?.destinationTokenAccount === 'string'
+      ) {
+        setClaimDestinationTokenAccount(parsed.destinationTokenAccount);
+      }
+      if (!claimSuccessTx && typeof parsed?.claimTx === 'string') {
+        setClaimSuccessTx(parsed.claimTx);
+      }
+      if (!lastClaimProof && parsed?.lastClaimProof && typeof parsed.lastClaimProof === 'object') {
+        const p = parsed.lastClaimProof;
+        if (
+          typeof p.nonce === 'number' &&
+          typeof p.payoutPda === 'string' &&
+          (typeof p.bufferTx === 'string' || p.bufferTx === null) &&
+          typeof p.claimTx === 'string'
+        ) {
+          setLastClaimProof({
+            nonce: p.nonce,
+            payoutPda: p.payoutPda,
+            bufferTx: p.bufferTx,
+            claimTx: p.claimTx,
+            destinationTokenAccount:
+              typeof p.destinationTokenAccount === 'string'
+                ? p.destinationTokenAccount
+                : null,
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [
+    claimDestinationTokenAccount,
+    claimSuccessTx,
+    employerWallet,
+    lastClaimProof,
+    streamIndexInput,
+    workerLastClaimStorageKey,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !wallet.publicKey) return;
+    try {
+      window.localStorage.setItem(
+        workerLastClaimStorageKey,
+        JSON.stringify({
+          employerWallet,
+          streamIndexInput,
+          destinationTokenAccount: lastKnownClaimDestination,
+          claimTx:
+            claimSuccessTx ||
+            (lastClaimProof?.claimTx && lastClaimProof.claimTx !== 'relay_pending'
+              ? lastClaimProof.claimTx
+              : null),
+          lastClaimProof,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }, [
+    claimSuccessTx,
+    employerWallet,
+    lastClaimProof,
+    lastKnownClaimDestination,
+    streamIndexInput,
+    wallet.publicKey,
+    workerLastClaimStorageKey,
+  ]);
 
   // Auto-scan for payouts whenever employer or wallet changes
   const scanPayouts = useCallback(async () => {
@@ -302,6 +503,14 @@ export default function EmployeePage() {
       await loadDelegationRoute(stream.address.toBase58());
 
       const withdrawReq = await getWithdrawRequestV2Account(connection, business.address, streamIndex);
+      let receipt: WorkerPayoutReceipt | null = null;
+      if (wallet.publicKey) {
+        try {
+          receipt = await getLatestPayoutReceiptForWorker(connection, business.address, wallet.publicKey);
+        } catch {
+          receipt = null;
+        }
+      }
       const handles = getEmployeeStreamV2DecryptHandles(stream);
       const owner = stream.owner.toBase58();
       const isDelegated = owner === DELEGATION_PROGRAM_ID;
@@ -340,15 +549,32 @@ export default function EmployeePage() {
         rawAmount: destinationBalanceRaw,
         error: destinationBalanceError,
       });
+      setLatestPayoutReceipt(receipt);
+      if (receipt?.destinationTokenAccount) {
+        setClaimDestinationTokenAccount((prev) =>
+          prev && prev.trim().length > 0 ? prev : receipt!.destinationTokenAccount || ''
+        );
+      }
+      if (receipt?.claimTx) {
+        setClaimSuccessTx(receipt.claimTx);
+        setLastClaimProof({
+          nonce: receipt.nonce,
+          payoutPda: receipt.payoutPda,
+          bufferTx: receipt.bufferTx || null,
+          claimTx: receipt.claimTx || 'relay_pending',
+          destinationTokenAccount: receipt.destinationTokenAccount || null,
+        });
+      }
     } catch (e: any) {
       setStatus(null);
       setDestinationBalance(null);
+      setLatestPayoutReceipt(null);
       setDelegationRoute(null);
       setError(e?.message || 'Failed to load stream status');
     } finally {
       setStatusLoading(false);
     }
-  }, [connection, employerWallet, loadDelegationRoute, revealed, streamIndex]);
+  }, [connection, employerWallet, loadDelegationRoute, revealed, streamIndex, wallet.publicKey]);
 
   const revealViaKeeperRelay = useCallback(
     async (streamIndexValue: number) => {
@@ -362,7 +588,11 @@ export default function EmployeePage() {
       const msg = new TextEncoder().encode(
         `reveal:${employerWallet}:${streamIndexValue}:${timestamp}`
       );
-      const signature = await wallet.signMessage(msg);
+      const signature = await withTimeout(
+        wallet.signMessage(msg),
+        20_000,
+        'Wallet signature timed out. Open Phantom and approve the pending request.'
+      );
       const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
       const resp = await fetchWithTimeout(`${keeperUrl}/api/reveal-live`, {
         method: 'POST',
@@ -398,6 +628,49 @@ export default function EmployeePage() {
     [employerWallet, wallet.publicKey, wallet.signMessage]
   );
 
+  const revealHandlesViaKeeperRelay = useCallback(
+    async (streamIndexValue: number, handles: string[]): Promise<bigint[]> => {
+      if (!wallet.publicKey || !wallet.signMessage) {
+        throw new Error('Wallet signature is required for keeper relay reveal.');
+      }
+      if (!employerWallet) {
+        throw new Error('Enter company wallet first.');
+      }
+      if (!Array.isArray(handles) || handles.length === 0) {
+        throw new Error('No encrypted handles to reveal.');
+      }
+      const timestamp = Math.floor(Date.now() / 1000);
+      const msg = new TextEncoder().encode(
+        `reveal:${employerWallet}:${streamIndexValue}:${timestamp}`
+      );
+      const signature = await wallet.signMessage(msg);
+      const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
+      const resp = await fetchWithTimeout(`${keeperUrl}/api/reveal-handles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workerPubkey: wallet.publicKey.toBase58(),
+          businessOwner: employerWallet,
+          streamIndex: streamIndexValue,
+          timestamp,
+          handles,
+          signature: Array.from(signature),
+          message: Array.from(msg),
+        }),
+      });
+      const result = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) {
+        throw new Error(result?.error || 'Keeper relay handle reveal failed');
+      }
+      const plaintexts = Array.isArray(result?.plaintexts) ? result.plaintexts : [];
+      if (plaintexts.length !== handles.length) {
+        throw new Error('Keeper relay returned incomplete handle data');
+      }
+      return plaintexts.map((v: string) => BigInt(v || '0'));
+    },
+    [employerWallet, wallet.publicKey, wallet.signMessage]
+  );
+
   // Fallback destination for claims: use stream destination unless worker picks another account.
   useEffect(() => {
     if (!status?.hasFixedDestination || !status?.employeeTokenAccount) return;
@@ -405,6 +678,36 @@ export default function EmployeePage() {
       prev && prev.trim().length > 0 ? prev : status.employeeTokenAccount
     );
   }, [status?.employeeTokenAccount, status?.hasFixedDestination]);
+
+  // Resolve keeper-relayed claim tx from payout PDA after authorization (survives refresh).
+  useEffect(() => {
+    if (!lastClaimProof || lastClaimProof.claimTx !== 'relay_pending') return;
+    let cancelled = false;
+    const pollClaimTx = async () => {
+      try {
+        const payoutPda = new PublicKey(lastClaimProof.payoutPda);
+        const sigs = await connection.getSignaturesForAddress(payoutPda, { limit: 20 }, 'confirmed');
+        const claimSig =
+          sigs.find((s) => !s.err && s.signature !== lastClaimProof.bufferTx)?.signature || null;
+        if (claimSig && !cancelled) {
+          setClaimSuccessTx(claimSig);
+          setLastClaimProof((prev) =>
+            prev ? { ...prev, claimTx: claimSig } : prev
+          );
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void pollClaimTx();
+    const timer = window.setInterval(() => {
+      void pollClaimTx();
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connection, lastClaimProof]);
 
   // Polling for live updates when a payout is in flight
   useEffect(() => {
@@ -420,38 +723,6 @@ export default function EmployeePage() {
     return () => clearInterval(interval);
   }, [loadStatus, scanPayouts, status?.withdrawPending, pendingPayouts.length]);
 
-  // Best-effort proof: check if this wallet is allowed to decrypt the Inco handles (allowance PDAs exist).
-  useEffect(() => {
-    if (!wallet.publicKey || !status) {
-      setDecryptAllowed(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const salaryHandleValue = BigInt(status.salaryHandleValue || '0');
-      const accruedHandleValue = BigInt(status.accruedHandleValue || '0');
-      const salaryAllowance = getIncoAllowancePda(salaryHandleValue, wallet.publicKey!);
-      const accruedAllowance = getIncoAllowancePda(accruedHandleValue, wallet.publicKey!);
-      const [salaryInfo, accruedInfo] = await Promise.all([
-        connection.getAccountInfo(salaryAllowance),
-        connection.getAccountInfo(accruedAllowance),
-      ]);
-      if (cancelled) return;
-      setDecryptAllowed({ salary: Boolean(salaryInfo), accrued: Boolean(accruedInfo) });
-    })().catch(() => {
-      if (cancelled) return;
-      setDecryptAllowed(null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    connection,
-    wallet.publicKey?.toBase58(),
-    status?.salaryHandleValue,
-    status?.accruedHandleValue,
-  ]);
-
   useEffect(() => {
     if (!status) return;
     // Initialize payslip window defaults once per loaded stream.
@@ -459,12 +730,12 @@ export default function EmployeePage() {
       const base = status.lastSettleTime > 0 ? status.lastSettleTime : status.lastAccrualTime;
       if (base > 0) {
         const d = new Date(base * 1000);
-        setPayslipStart(d.toISOString().slice(0, 16));
+        setPayslipStart(toLocalDateTimeInput(d));
       }
     }
     if (!payslipEnd) {
       const d = new Date();
-      setPayslipEnd(d.toISOString().slice(0, 16));
+      setPayslipEnd(toLocalDateTimeInput(d));
     }
   }, [payslipEnd, payslipStart, status]);
 
@@ -482,6 +753,29 @@ export default function EmployeePage() {
     }, 2_000);
     return () => clearInterval(timer);
   }, [loadStatus, status?.lastSettleTime, status?.withdrawPending, withdrawFlow]);
+
+  // Auto-fill statement window only after settle success on-chain.
+  useEffect(() => {
+    if (!withdrawFlow || !status) return;
+    const settled =
+      !status.withdrawPending &&
+      status.lastSettleTime > 0 &&
+      status.lastSettleTime >= withdrawFlow.requestedAt;
+    if (!settled) return;
+    if (statementPrefilledForRequestAt === withdrawFlow.requestedAt) return;
+
+    const startSec =
+      withdrawFlow.statementStartCandidate > 0 &&
+      withdrawFlow.statementStartCandidate < status.lastSettleTime
+        ? withdrawFlow.statementStartCandidate
+        : Math.max(0, withdrawFlow.requestedAt - 60);
+    const endSec = status.lastSettleTime;
+
+    setPayslipStart(toLocalDateTimeInput(new Date(startSec * 1000)));
+    setPayslipEnd(toLocalDateTimeInput(new Date(endSec * 1000)));
+    setStatementPrefilledForRequestAt(withdrawFlow.requestedAt);
+    setActionMessage('Payout settled on-chain. Statement dates were auto-filled in your local time.');
+  }, [statementPrefilledForRequestAt, status, withdrawFlow]);
 
   const withdrawProgress = useMemo(() => {
     if (!withdrawFlow || !status) return null;
@@ -613,11 +907,11 @@ export default function EmployeePage() {
       ]}
     >
       <Head>
-        <title>Worker Portal | Expensee</title>
+        <title>Employee Portal | Expensee</title>
       </Head>
 
       <section className="hero-card">
-        <p className="hero-eyebrow">Worker view</p>
+        <p className="hero-eyebrow">Employee view</p>
         <h1 className="hero-title">{COPY.employee.title}</h1>
         <p className="hero-subtitle">
           Track earnings live, request payout when needed, and share a signed earnings statement.
@@ -700,6 +994,12 @@ export default function EmployeePage() {
                       {delegationRouteLoading ? 'Refreshing...' : 'Refresh Route'}
                     </button>
                   </div>
+                  {status.hasFixedDestination ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Legacy fixed-destination payroll record detected. For stronger privacy and lower linkability,
+                      ask the employer to create a new private shield-route record.
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               <button
@@ -707,11 +1007,16 @@ export default function EmployeePage() {
                   if (typeof window === 'undefined') return;
                   try {
                     window.localStorage.removeItem('expensee_employee_lookup_v1');
+                    window.localStorage.removeItem(claimContextStorageKey);
+                    window.localStorage.removeItem(workerLastClaimStorageKey);
                   } catch {
                     // ignore
                   }
                   setEmployerWallet('');
                   setStreamIndexInput('0');
+                  setClaimDestinationTokenAccount('');
+                  setClaimSuccessTx(null);
+                  setLastClaimProof(null);
                   setActionMessage('Cleared saved lookup fields.');
                 }}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm"
@@ -788,7 +1093,7 @@ export default function EmployeePage() {
             {/* ── Action Area ── */}
             <div className="space-y-4">
               {/* Step 1: Request Withdraw if nothing is in flight */}
-              {!(status?.withdrawPending) && !claimSuccessTx && (
+              {!(status?.withdrawPending) && pendingPayouts.length === 0 && (
                 <div>
                   <div className="mb-2 text-xs font-semibold text-gray-500 uppercase">Step 1: Request Payout</div>
                   <button
@@ -829,8 +1134,13 @@ export default function EmployeePage() {
                           requestTx: 'off_chain_signature',
                           requestedAt: timestamp,
                           wasDelegated: status?.isDelegated ?? false,
+                          statementStartCandidate: status?.lastSettleTime ?? 0,
                         });
-                        setActionMessage(`Off-chain request sent securely to Keeper!`);
+                        setStatementPrefilledForRequestAt(null);
+                        // Start a fresh cycle in UI; next settled payout will populate new receipt.
+                        setClaimSuccessTx(null);
+                        setLastClaimProof(null);
+                        setActionMessage('Payout request sent. Waiting for settlement confirmation.');
                         void loadStatus();
                       } catch (e: any) {
                         setError(e?.message || 'Withdraw request failed');
@@ -893,7 +1203,8 @@ export default function EmployeePage() {
                   pendingPayouts.length === 0 &&
                   !claimSuccessTx ? (
                     <div className="mt-3 rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-900">
-                      Settlement finished. If no claim card appears, connect the same Employee Auth wallet used during onboarding, then refresh status.
+                      Settlement finished. In private auto-route mode, payout may already be routed and claimed automatically, so Step 2 will not appear.
+                      Check &quot;Where payout was sent&quot; below and use &quot;Open Bridge with this address&quot; to access funds.
                     </div>
                   ) : null}
                 </div>
@@ -969,6 +1280,7 @@ export default function EmployeePage() {
                               setClaimingNonce(p.nonce);
                               try {
                                 const destination = new PublicKey(claimDestinationTokenAccount.trim());
+                                const destinationBase58 = destination.toBase58();
                                 const { signature, message } = await signClaimAuthorization(
                                   wallet,
                                   new PublicKey(employerWallet),
@@ -990,7 +1302,7 @@ export default function EmployeePage() {
                                     signature: Array.from(signature),
                                     message: Array.from(message),
                                     businessOwner: employerWallet,
-                                    destinationTokenAccount: destination.toBase58(),
+                                    destinationTokenAccount: destinationBase58,
                                     expiry: 0,
                                   }),
                                 });
@@ -1007,9 +1319,10 @@ export default function EmployeePage() {
                                   payoutPda: p.address.toBase58(),
                                   bufferTx: proof || null,
                                   claimTx: 'relay_pending',
+                                  destinationTokenAccount: destinationBase58,
                                 });
                                 setActionMessage(
-                                  'Claim authorization sent. Keeper will relay claim to your selected destination.',
+                                  `Claim authorization sent. Keeper will relay to destination ${destinationBase58}.`,
                                 );
                                 // Keeper relays asynchronously; poll status/payout list.
                                 await Promise.all([scanPayouts(), loadStatus()]);
@@ -1084,6 +1397,20 @@ export default function EmployeePage() {
                       <div className="mt-3 rounded-lg border border-emerald-200 bg-white/70 px-3 py-2 text-[11px] text-emerald-800">
                         No direct employer -&gt; worker transfer appears in a single payout transaction.
                       </div>
+                      {lastKnownClaimDestination ? (
+                        <div className="mt-3 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-[11px] text-emerald-900">
+                          Destination account:{' '}
+                          <span className="font-mono break-all">{lastKnownClaimDestination}</span>
+                          <div className="mt-2">
+                            <Link
+                              href={bridgePrefillHref}
+                              className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800"
+                            >
+                              Open Bridge with this account
+                            </Link>
+                          </div>
+                        </div>
+                      ) : null}
 
                       {/* ── What's Next? ── */}
                       <div className="mt-4 rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200/50 p-4">
@@ -1118,7 +1445,7 @@ export default function EmployeePage() {
                           onClick={() => setClaimSuccessTx(null)}
                           className="text-[10px] font-black text-emerald-600 hover:text-emerald-800 uppercase tracking-widest transition-colors"
                         >
-                          Clear Record
+                          Start Next Payout
                         </button>
                       </div>
                     </div>
@@ -1231,16 +1558,8 @@ export default function EmployeePage() {
                   Finalizing on-chain payout. Live estimate is frozen until settlement confirms.
                 </div>
               ) : null}
-              <div>
-                Worker wallet decrypt grant (legacy):{' '}
-                {decryptAllowed === null
-                  ? 'Unknown'
-                  : decryptAllowed.salary && decryptAllowed.accrued
-                    ? 'Granted'
-                    : 'Not granted'}
-              </div>
               <div className="text-xs text-gray-500">
-                Strict mode reveal uses keeper relay and does not require worker wallet decrypt grants.
+                Strict mode reveal uses keeper relay.
               </div>
               <div>Earning rate: {revealed ? `${formatTokenAmount(revealed.salaryLamportsPerSec)}/sec` : '-'}</div>
               <div>Starting balance: {revealed ? formatTokenAmount(revealed.accruedLamportsCheckpoint) : '-'}</div>
@@ -1333,14 +1652,43 @@ export default function EmployeePage() {
                     }
 
                     const uniqueHandles = Array.from(new Set(effectiveRates.map((r) => r.handle)));
-                    const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-                    const result = await decrypt(uniqueHandles, {
-                      address: wallet.publicKey,
-                      signMessage: wallet.signMessage,
-                    });
                     const plaintextByHandle = new Map<string, bigint>();
-                    for (let i = 0; i < uniqueHandles.length; i += 1) {
-                      plaintextByHandle.set(uniqueHandles[i]!, BigInt(result.plaintexts[i] || '0'));
+                    const keeperFallbackEnabled = process.env.NEXT_PUBLIC_KEEPER_SERVER_DECRYPT === 'true';
+                    let usedKeeperFallback = keeperFallbackEnabled;
+                    if (keeperFallbackEnabled) {
+                      const keeperPlaintexts = await revealHandlesViaKeeperRelay(streamIndex, uniqueHandles);
+                      for (let i = 0; i < uniqueHandles.length; i += 1) {
+                        plaintextByHandle.set(uniqueHandles[i]!, keeperPlaintexts[i] || 0n);
+                      }
+                    } else {
+                      try {
+                        const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+                        const result = await withTimeout(
+                          decrypt(uniqueHandles, {
+                            address: wallet.publicKey,
+                            signMessage: wallet.signMessage,
+                          }),
+                          20_000,
+                          'Decrypt timed out. If strict privacy is enabled, turn on keeper server decrypt and try again.'
+                        );
+                        for (let i = 0; i < uniqueHandles.length; i += 1) {
+                          plaintextByHandle.set(uniqueHandles[i]!, BigInt(result.plaintexts[i] || '0'));
+                        }
+                      } catch (decryptErr: any) {
+                        const reason = String(decryptErr?.message || '').toLowerCase();
+                        const noAccess =
+                          reason.includes('not allowed to decrypt') ||
+                          reason.includes('permission') ||
+                          reason.includes('view permission');
+                        if (!noAccess) {
+                          throw decryptErr;
+                        }
+                        const keeperPlaintexts = await revealHandlesViaKeeperRelay(streamIndex, uniqueHandles);
+                        for (let i = 0; i < uniqueHandles.length; i += 1) {
+                          plaintextByHandle.set(uniqueHandles[i]!, keeperPlaintexts[i] || 0n);
+                        }
+                        usedKeeperFallback = true;
+                      }
                     }
 
                     let total = 0n;
@@ -1369,11 +1717,19 @@ export default function EmployeePage() {
                     };
 
                     const messageBytes = new TextEncoder().encode(JSON.stringify(payload));
-                    const sigBytes = await wallet.signMessage(messageBytes);
+                    const sigBytes = await withTimeout(
+                      wallet.signMessage(messageBytes),
+                      20_000,
+                      'Wallet signature timed out. Open Phantom and approve the statement-sign request.'
+                    );
                     const { default: bs58 } = await import('bs58');
                     const signed = { ...payload, signer: wallet.publicKey.toBase58(), signature: bs58.encode(sigBytes) };
                     setPayslipJson(JSON.stringify(signed, null, 2));
-                    setActionMessage('Signed earnings statement generated.');
+                    setActionMessage(
+                      usedKeeperFallback
+                        ? 'Signed earnings statement generated via keeper confidential relay.'
+                        : 'Signed earnings statement generated.'
+                    );
                   } catch (e: any) {
                     setError(e?.message || 'Failed to generate statement');
                   } finally {
@@ -1395,8 +1751,78 @@ export default function EmployeePage() {
 
           <section className="panel-card">
             <h2 className="text-lg font-semibold text-[#2D2D2A]">Where payout was sent</h2>
+            {lastKnownClaimDestination ? (
+              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                Last payout destination:{' '}
+                <a
+                  href={`https://explorer.solana.com/address/${lastKnownClaimDestination}?cluster=devnet`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono underline"
+                >
+                  {lastKnownClaimDestination}
+                </a>
+                <div className="mt-2">
+                  <Link
+                    href={bridgePrefillHref}
+                    className="inline-flex items-center rounded-md border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-800"
+                  >
+                    Open Bridge with this address
+                  </Link>
+                </div>
+              </div>
+            ) : null}
+            {lastClaimProof?.claimTx && lastClaimProof.claimTx !== 'relay_pending' ? (
+              <div className="mt-2 text-xs text-gray-600">
+                Last claim proof:{' '}
+                <a
+                  href={explorerTxUrl(lastClaimProof.claimTx)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-[#005B96] underline"
+                >
+                  {lastClaimProof.claimTx}
+                </a>
+              </div>
+            ) : null}
             {status ? (
               <div className="mt-3 grid gap-2 text-sm text-gray-700">
+                {latestPayoutReceipt ? (
+                  <>
+                    <div>
+                      Latest payout status: {latestPayoutReceipt.claimed ? 'claimed' : latestPayoutReceipt.cancelled ? 'cancelled' : 'buffered'}
+                    </div>
+                    <div>
+                      Latest payout time: {new Date(latestPayoutReceipt.createdAt * 1000).toLocaleString()}
+                    </div>
+                    {latestPayoutReceipt.destinationTokenAccount ? (
+                      <div>
+                        Latest payout destination:{' '}
+                        <a
+                          href={`https://explorer.solana.com/address/${latestPayoutReceipt.destinationTokenAccount}?cluster=devnet`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-[#005B96] underline"
+                        >
+                          {latestPayoutReceipt.destinationTokenAccount}
+                        </a>
+                      </div>
+                    ) : null}
+                    {latestPayoutReceipt.claimTx ? (
+                      <div>
+                        Latest claim tx:{' '}
+                        <a
+                          href={explorerTxUrl(latestPayoutReceipt.claimTx)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-[#005B96] underline"
+                        >
+                          {latestPayoutReceipt.claimTx}
+                        </a>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
                 {status.hasFixedDestination ? (
                   <>
                     <div>
@@ -1420,10 +1846,10 @@ export default function EmployeePage() {
                 ) : (
                   <>
                     <div>
-                      Destination route: claim-time only (no fixed on-chain destination).
+                      For privacy, destination is chosen at claim time.
                     </div>
                     <div>
-                      Use "Claim Destination Token Account" above when authorizing keeper claim.
+                      Use the destination box above when approving payout claim.
                     </div>
                   </>
                 )}

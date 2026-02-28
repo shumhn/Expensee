@@ -17,10 +17,21 @@ const PUBLIC_USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_PUBLIC_USDC_MINT 
 const BRIDGE_LAST_RESULT_KEY = 'ghoststream_bridge_last_result_v1';
 
 function formatActionError(e: any): string {
+  const objectFallback =
+    e && typeof e === 'object'
+      ? (() => {
+          try {
+            return JSON.stringify(e);
+          } catch {
+            return '';
+          }
+        })()
+      : '';
   const primary =
     e?.message ||
     e?.error?.message ||
     (typeof e === 'string' ? e : '') ||
+    objectFallback ||
     'Unexpected error';
   if (Array.isArray(e?.logs) && e.logs.length > 0) {
     return `${primary} | logs: ${e.logs.join(' -> ')}`;
@@ -60,6 +71,7 @@ export default function BridgePage() {
   const [amountUi, setAmountUi] = useState('10');
   const [publicMint, setPublicMint] = useState(PUBLIC_USDC_MINT.toBase58());
   const [confidentialTokenAccount, setConfidentialTokenAccount] = useState('');
+  const [cashoutWallet, setCashoutWallet] = useState('');
 
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
@@ -84,6 +96,19 @@ export default function BridgePage() {
       return '';
     }
   }, [wallet.publicKey, publicMint]);
+  const unwrapDestinationAta = useMemo(() => {
+    try {
+      const mint = new PublicKey(publicMint);
+      const owner =
+        cashoutWallet.trim().length > 0
+          ? new PublicKey(cashoutWallet.trim())
+          : wallet.publicKey;
+      if (!owner) return '';
+      return getAssociatedTokenAddress(owner, mint).toBase58();
+    } catch {
+      return '';
+    }
+  }, [cashoutWallet, wallet.publicKey, publicMint]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -99,13 +124,17 @@ export default function BridgePage() {
     if (!router.isReady) return;
     const qToken = router.query.confidentialTokenAccount;
     const qAmount = router.query.amountUi;
+    const qCashout = router.query.cashoutWallet;
     if (typeof qToken === 'string' && qToken.trim().length > 0) {
       setConfidentialTokenAccount(qToken.trim());
     }
     if (typeof qAmount === 'string' && qAmount.trim().length > 0) {
       setAmountUi(qAmount.trim());
     }
-  }, [router.isReady, router.query.amountUi, router.query.confidentialTokenAccount]);
+    if (typeof qCashout === 'string' && qCashout.trim().length > 0) {
+      setCashoutWallet(qCashout.trim());
+    }
+  }, [router.isReady, router.query.amountUi, router.query.cashoutWallet, router.query.confidentialTokenAccount]);
 
   async function run(label: string, fn: () => Promise<void>) {
     const inProgressLabel = `${label}...`;
@@ -147,13 +176,13 @@ export default function BridgePage() {
   return (
     <div className="min-h-screen bg-[#F7F7F2]">
       <Head>
-        <title>Bridge: USDC In/Out</title>
+        <title>Move Money In/Out</title>
       </Head>
 
       <header className="bg-white shadow-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-[#2D2D2A]">Bridge (Public USDC ↔ Confidential Payroll Token)</h1>
+            <h1 className="text-xl font-bold text-[#2D2D2A]">Move Money In and Out</h1>
           </div>
           <WalletButton />
         </div>
@@ -182,15 +211,15 @@ export default function BridgePage() {
         <section className="mt-4 rounded-3xl bg-white p-8 shadow-sm">
           <h2 className="text-2xl font-semibold text-[#2D2D2A]">What This Does</h2>
           <p className="mt-3 text-sm text-gray-700">
-            This is the practical real-world model: public stablecoins are used for entry/exit, but payroll runs in a confidential token for the
-            private middle. On devnet, this bridge is custodial: the backend signs mint/escrow steps.
+            Use this page to move between normal wallet money and private payroll money.
+            Wrap = move into private mode. Unwrap = move back to normal wallet money.
           </p>
 
           <div className="mt-6 grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-gray-200 p-5">
               <h3 className="font-semibold text-[#2D2D2A]">Inputs</h3>
               <label className="mt-3 block text-xs text-gray-700">
-                Public USDC-like mint
+                Public token mint
                 <input
                   value={publicMint}
                   onChange={(e) => setPublicMint(e.target.value)}
@@ -206,11 +235,28 @@ export default function BridgePage() {
                 />
               </label>
               <label className="mt-3 block text-xs text-gray-700">
-                Your public token account (ATA)
+                Your public token account
                 <input value={userAta} readOnly className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm" />
               </label>
               <label className="mt-3 block text-xs text-gray-700">
-                Your confidential token account (Inco)
+                Wallet to receive money on unwrap (optional)
+                <input
+                  value={cashoutWallet}
+                  onChange={(e) => setCashoutWallet(e.target.value)}
+                  placeholder="Leave empty to use your connected wallet"
+                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="mt-3 block text-xs text-gray-700">
+                Receiver token account
+                <input
+                  value={unwrapDestinationAta}
+                  readOnly
+                  className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="mt-3 block text-xs text-gray-700">
+                Your private payroll account
                 <input
                   value={confidentialTokenAccount}
                   onChange={(e) => setConfidentialTokenAccount(e.target.value)}
@@ -245,7 +291,7 @@ export default function BridgePage() {
                 }
                 className="mt-4 w-full rounded-xl bg-[#1D3557] px-5 py-3 text-center text-sm font-medium text-white disabled:opacity-50"
               >
-                Create Public Token Account (ATA)
+                Create Public Token Account
               </button>
 
               <button
@@ -264,15 +310,15 @@ export default function BridgePage() {
                 }
                 className="mt-2 w-full rounded-xl border border-gray-300 px-5 py-3 text-center text-sm font-medium disabled:opacity-50"
               >
-                Create Confidential Token Account (Inco)
+                Create Private Payroll Account
               </button>
             </div>
 
             <div className="rounded-2xl border border-gray-200 p-5">
               <h3 className="font-semibold text-[#2D2D2A]">Actions</h3>
               <p className="mt-2 text-sm text-gray-600">
-                Wrap mints payUSD tokens after a public transfer into bridge escrow. Unwrap returns public tokens after a confidential
-                transfer back to escrow.
+                Wrap moves money from public wallet to private payroll.
+                Unwrap moves money from private payroll back to public wallet.
               </p>
 
               <button
@@ -306,7 +352,7 @@ export default function BridgePage() {
                 }
                 className="mt-4 w-full rounded-xl bg-[#2A9D8F] px-5 py-3 text-center text-sm font-medium text-white disabled:opacity-50"
               >
-                Wrap Public {'->'} Confidential
+                Wrap: Public to Private
               </button>
 
               <button
@@ -319,7 +365,8 @@ export default function BridgePage() {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
                         userPublicKey: wallet.publicKey.toBase58(),
-                        userPublicUsdcAta: userAta,
+                        userPublicUsdcAta: unwrapDestinationAta || userAta,
+                        cashoutWallet: cashoutWallet.trim() || null,
                         userConfidentialTokenAccount: confidentialTokenAccount,
                         amountUi,
                         publicUsdcMint: publicMint,
@@ -340,7 +387,7 @@ export default function BridgePage() {
                 }
                 className="mt-2 w-full rounded-xl border border-gray-300 px-5 py-3 text-center text-sm font-medium disabled:opacity-50"
               >
-                Unwrap Confidential {'->'} Public
+                Unwrap: Private to Public
               </button>
 
               {status && <p className="mt-4 rounded bg-green-50 px-3 py-2 text-sm text-green-700">{status}</p>}

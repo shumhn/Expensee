@@ -1358,7 +1358,7 @@ export default function EmployerPage() {
     const hasObtainedTokens = hasConfirmedDeposit || hasVaultFunds;
     steps.push({
       key: "mint-demo-tokens",
-      label: "Get 1,000 demo tokens",
+      label: "Get 1,000 test tokens",
       status: hasObtainedTokens ? "done" : "pending",
       required: true,
       risk: "safe",
@@ -2088,7 +2088,7 @@ export default function EmployerPage() {
           });
           const json = await resp.json();
           if (!resp.ok || !json?.ok) throw new Error(json?.error || 'Faucet failed');
-          result = { txid: json.tx, detail: "Minted 1,000 demo PAYUSD." };
+          result = { txid: json.tx, detail: "Minted 1,000 test PAYUSD." };
         } else if (nextStep.key === "configure-deposit-amount") {
           updateStep(nextStep.key, { status: "done", detail: "TRIGGER_DEPOSIT_PROMPT" });
           setAgentPhase("ask_funding");
@@ -2477,7 +2477,7 @@ export default function EmployerPage() {
   return (
     <PageShell
       icon="◈"
-      title="OnyxFii"
+      title="Expensee"
       subtitle={COPY.employer.subtitle}
       navItems={[
         { href: "/", label: COPY.nav.home },
@@ -2487,7 +2487,7 @@ export default function EmployerPage() {
       ]}
     >
       <Head>
-        <title>OnyxFii Agent | Real-time Agentic Private Payroll</title>
+        <title>Expensee Payroll Console | Realtime Private Payroll</title>
       </Head>
 
       <AgentChat
@@ -2533,8 +2533,8 @@ export default function EmployerPage() {
         onClick={() => setShowAdvancedMode((prev) => !prev)}
       >
         {showAdvancedMode
-          ? "▲ Hide Advanced Mode"
-          : "▼ Show Advanced Mode (Manual Controls)"}
+          ? "▲ Hide Expert Controls"
+          : "▼ Show Expert Controls"}
       </button>
 
       {showAdvancedMode && (
@@ -2549,7 +2549,7 @@ export default function EmployerPage() {
                   {COPY.employer.title}
                 </h1>
                 <p className="mt-4 text-slate-600 font-medium max-w-xl">
-                  Manual step-by-step payroll setup for power users who require absolute control over encrypted flows.
+                  Manual payroll controls for teams that want deeper setup and troubleshooting options.
                 </p>
               </div>
 
@@ -2598,7 +2598,7 @@ export default function EmployerPage() {
                       System Readiness Terminal
                     </h3>
                     <p className="text-indigo-100/70 text-[10px] font-bold tracking-tight mt-1">
-                      Advanced manual control interface · L3 Secured Session
+                      Expert controls session
                     </p>
                   </div>
                   <div className="px-3 py-1 bg-white/10 backdrop-blur-md rounded-lg border border-white/10">
@@ -2777,14 +2777,14 @@ export default function EmployerPage() {
                   setMessage(
                     DEFAULT_AUTOMATION_WALLET
                       ? "Automation service wallet reset to default keeper."
-                      : "Automation service wallet set to your current wallet for demo.",
+                      : "Automation service wallet set to your current wallet for local testing.",
                   );
                 }}
                 className="rounded-lg border border-gray-300 px-3 py-2 text-xs text-gray-700 disabled:opacity-50"
               >
                 {DEFAULT_AUTOMATION_WALLET
                   ? "Use default automation wallet"
-                  : "Use this wallet for automation (demo)"}
+                  : "Use this wallet for automation (local test)"}
               </button>
             </div>
 
@@ -3024,7 +3024,7 @@ export default function EmployerPage() {
                     <button
                       disabled={busy || !wallet.publicKey || !depositorTokenAccount}
                       onClick={() =>
-                        run("Get demo payroll tokens", async () => {
+                        run("Get test payroll tokens", async () => {
                           if (!wallet.publicKey) throw new Error("Wallet not connected");
                           if (!depositorTokenAccount) throw new Error("Create your company source account first");
                           const resp = await fetch('/api/faucet/mint-payusd', {
@@ -3039,7 +3039,7 @@ export default function EmployerPage() {
                       }
                       className="w-full premium-btn bg-indigo-50 text-indigo-700 border-indigo-100 hover:bg-indigo-100 disabled:opacity-50"
                     >
-                      Mint 1,000 Demo Tokens
+                      Mint 1,000 Test Tokens
                     </button>
                   </div>
 
@@ -3268,7 +3268,7 @@ export default function EmployerPage() {
                         }}
                         className="w-full premium-btn premium-btn-secondary py-[11px] disabled:opacity-50"
                       >
-                        Use Connected Wallet as Employee (Demo)
+                        Use Connected Wallet as Employee
                       </button>
                     </div>
                     <div className="md:col-span-2">
@@ -3489,19 +3489,19 @@ export default function EmployerPage() {
               >
                 <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
                   <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Pipeline</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Payroll status</span>
                     <StatusPill tone={v2Config?.isPaused ? "warning" : "success"}>
                       {v2Config?.isPaused ? "PAUSED" : "LIVE"}
                     </StatusPill>
                   </div>
                   <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Record</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Payroll record</span>
                     <StatusPill tone={streamStatus ? "success" : "neutral"}>
                       {streamStatus ? `#${streamStatus.streamIndex}` : "NONE"}
                     </StatusPill>
                   </div>
                   <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Engine</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Execution mode</span>
                     <StatusPill tone={highSpeedOn ? "success" : "warning"}>
                       {highSpeedOn ? "FAST" : "BASE"}
                     </StatusPill>
@@ -3520,7 +3520,7 @@ export default function EmployerPage() {
                     }
                     className="premium-btn bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 border border-transparent disabled:opacity-50"
                   >
-                    ⏹ Interrupt Flow
+                    ⏸ Pause Payroll
                   </button>
                   <button
                     disabled={busy || !v2ConfigExists}
@@ -3549,16 +3549,22 @@ export default function EmployerPage() {
                     }
                     className="premium-btn bg-teal-600 hover:bg-teal-700 text-white shadow-teal-500/20 shadow-lg disabled:opacity-50"
                   >
-                    ▶ Resume Execution
+                    ▶ Resume Payroll
                   </button>
                 </div>
 
-                <AdvancedDetails title="Advanced details and diagnostics">
+                <AdvancedDetails title="Technical details (optional)">
+                  {streamStatus?.hasFixedDestination ? (
+                    <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Legacy fixed-destination payroll record detected. For strongest privacy, create new records with
+                      private shield route only.
+                    </div>
+                  ) : null}
                   <div className="grid gap-2 text-sm text-gray-700">
                     {streamStatus ? (
                       <>
                         <div>
-                          Stream address:{" "}
+                          Payroll record address:{" "}
                           <a
                             href={explorerAddressUrl(streamStatus.address)}
                             target="_blank"
@@ -3569,43 +3575,43 @@ export default function EmployerPage() {
                           </a>
                         </div>
                         <div>
-                          Destination route:{" "}
+                          Payout route:{" "}
                           {streamStatus.hasFixedDestination
                             ? streamStatus.employeeTokenAccount
                             : "Claim-time destination only (no fixed on-chain route)"}
                         </div>
                         <div>
-                          Active: {streamStatus.isActive ? "yes" : "no"}
+                          Record active: {streamStatus.isActive ? "yes" : "no"}
                         </div>
                         <div>
-                          Delegated (base read):{" "}
+                          High-speed enabled (base read):{" "}
                           {streamStatus.isDelegated ? "yes" : "no"}
                         </div>
                         <div>
-                          Delegated (router):{" "}
+                          High-speed enabled (router):{" "}
                           {streamRoute?.delegated === null
                             ? "unknown"
                             : streamRoute?.delegated
                               ? "yes"
                               : "no"}
                         </div>
-                        <div>Account owner: {streamStatus.owner}</div>
+                        <div>Current account owner: {streamStatus.owner}</div>
                         <div>
-                          Expected delegation owner:{" "}
+                          Expected high-speed program owner:{" "}
                           {MAGICBLOCK_DELEGATION_PROGRAM.toBase58()}
                         </div>
                         <div>
-                          Last accrual time: {streamStatus.lastAccrualTime}
+                          Last earnings update (unix): {streamStatus.lastAccrualTime}
                         </div>
                         <div>
-                          Last settle time: {streamStatus.lastSettleTime}
+                          Last settle time (unix): {streamStatus.lastSettleTime}
                         </div>
                         <div>
-                          Encrypted accrued handle: {streamStatus.accruedHandle}
+                          Encrypted earnings reference: {streamStatus.accruedHandle}
                         </div>
                       </>
                     ) : (
-                      <p>No payroll record found for the selected number.</p>
+                      <p>No payroll record found for this reference.</p>
                     )}
                   </div>
 
@@ -3621,14 +3627,14 @@ export default function EmployerPage() {
                       }
                       className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm disabled:opacity-50"
                     >
-                      Grant Automation Decrypt Access
+                      Grant Keeper Decrypt Access
                     </button>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
                       <div className="text-xs font-medium text-gray-700">
-                        Private raise (advanced)
+                        Private raise (expert)
                       </div>
                       <input
                         value={raiseSalaryPerSecond}
@@ -3681,7 +3687,7 @@ export default function EmployerPage() {
 
                     <div className="space-y-2">
                       <div className="text-xs font-medium text-gray-700">
-                        Private bonus (advanced)
+                        Private bonus (expert)
                       </div>
                       <input
                         value={bonusAmount}
@@ -3748,7 +3754,7 @@ export default function EmployerPage() {
                       }
                       className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
                     >
-                      Initialize Rate History
+                      Prepare Rate History (Legacy Support)
                     </button>
                     <button
                       disabled={
@@ -3766,7 +3772,7 @@ export default function EmployerPage() {
                       }
                       className="w-full rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-900 disabled:opacity-50"
                     >
-                      Deactivate Stream
+                      Stop Payroll Record
                     </button>
                     <button
                       disabled={busy || !v2ConfigExists || !v2Config}
@@ -3796,19 +3802,19 @@ export default function EmployerPage() {
                       }
                       className="w-full rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm disabled:opacity-50"
                     >
-                      Backfill Automation Decrypt Access
+                      Repair Keeper Access for Older Records
                     </button>
 
                     {/* Phase 2: Auditor Access */}
                     <div className="mt-4 pt-4 border-t border-gray-200">
                       <div className="text-[10px] font-black text-violet-600 uppercase tracking-widest mb-2">
-                        🔒 Programmable Viewing Policies
+                        🔒 Viewer Permissions (Advanced)
                       </div>
 
                       <div className="flex gap-2 mt-2">
                         <input
                           type="text"
-                          placeholder="Auditor wallet address"
+                          placeholder="Viewer wallet address"
                           id="auditor-wallet-input"
                           className="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-mono"
                         />
@@ -3819,25 +3825,25 @@ export default function EmployerPage() {
                               if (!ownerPubkey || !streamStatus)
                                 throw new Error("Missing config");
                               const input = (document.getElementById("auditor-wallet-input") as HTMLInputElement)?.value?.trim();
-                              if (!input) throw new Error("Enter auditor wallet");
+                              if (!input) throw new Error("Enter viewer wallet");
                               const auditor = new PublicKey(input);
                               await grantAuditorViewAccessV2(
                                 connection, wallet, ownerPubkey,
                                 streamStatus.streamIndex, auditor
                               );
-                              return `Auditor access granted to ${input.slice(0, 8)}...`;
+                              return `View access granted to ${input.slice(0, 8)}...`;
                             })
                           }
                           className="rounded-lg bg-violet-500 px-4 py-2 text-xs font-bold text-white whitespace-nowrap disabled:opacity-50"
                         >
-                          Grant Auditor
+                          Grant Viewer
                         </button>
                       </div>
 
                       <div className="flex gap-2 mt-2">
                         <input
                           type="text"
-                          placeholder="Wallet to revoke access"
+                          placeholder="Viewer wallet to remove"
                           id="revoke-wallet-input"
                           className="flex-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-mono"
                         />
