@@ -2,7 +2,7 @@ export const COPY = {
   nav: {
     home: 'Home',
     company: 'Company Payroll',
-    worker: 'Worker Portal',
+    worker: 'Employee Portal',
     bridge: 'Bridge',
     ops: 'Operations',
   },
@@ -14,7 +14,7 @@ export const COPY = {
     companiesTitle: 'For Companies',
     companiesText:
       'Chat with the OnyxFii Agent to set up encrypted payroll streams. No forms, no spreadsheets — just tell the Agent your intent.',
-    workersTitle: 'For Workers',
+    workersTitle: 'For Employees',
     workersText:
       'Watch your earnings tick up in real-time. Cash out whenever you want. Your salary stays fully private on-chain.',
   },
@@ -30,12 +30,12 @@ export const COPY = {
       description: 'Move payroll funds into your company payroll wallet.',
     },
     step3: {
-      title: 'Add worker and pay plan',
-      description: 'Create a worker payroll record and set the earning plan.',
+      title: 'Set employee auth and pay plan',
+      description: 'Create a private payroll record and set the earning plan.',
     },
     step4: {
       title: 'Enable high-speed mode (optional)',
-      description: 'Use high-speed processing for faster delegated execution.',
+      description: 'Use MagicBlock delegation for faster execution while keeping Inco amounts encrypted.',
     },
     step5: {
       title: 'Go live and monitor',
@@ -43,7 +43,7 @@ export const COPY = {
     },
   },
   employee: {
-    title: 'Worker Portal',
+    title: 'Employee Portal',
     subtitle: 'View earnings and request payout',
     sectionA: 'Find my payroll stream',
     sectionB: 'Live earnings',

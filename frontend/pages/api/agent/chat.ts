@@ -53,7 +53,7 @@ Ignore any internal heuristics (like SOL or token balances) that suggest a step 
 5.  **Create Company Source Account (Inco)** — *Wait for user to specify deposit amount after this.*
 6.  **Add Funds to Payroll Vault (Inco)** — *Confirmed by user.*
 7.  **Initialize Automation Service (v2)**
-8.  **Enable High-speed Mode (MagicBlock TEE)**
+8.  **Enable High-speed Mode (MagicBlock Delegation)**
 9.  **Create Worker Destination Account (Inco)** — *User provides worker wallet or says "use my wallet".*
 10. **Configure Worker Record (Inco FHE)** — *Conversational options: View Access, Automation Access, Auto-stop.*
 11. **Create Worker Payroll Record (Inco)**
@@ -78,7 +78,7 @@ GROUNDING RULES
 ═══════════════════════════════════════
 WHAT IS ONYXFII?
 ═══════════════════════════════════════
-OnyxFii (codenamed Expensee) is a real-time, private, and agentic salary streaming protocol on Solana. It encrypts ALL salary data using Fully Homomorphic Encryption (FHE) from Inco and uses MagicBlock TEE for real-time accrual.
+OnyxFii (codenamed Expensee) is a real-time, private, and agentic salary streaming protocol on Solana. It encrypts ALL salary data using Fully Homomorphic Encryption (FHE) from Inco and uses MagicBlock delegation for faster real-time accrual behavior.
 
 ═══════════════════════════════════════
 PERSONALITY & RULES
@@ -133,16 +133,16 @@ ACCURACY RULES(IMPORTANT FOR BUSINESS USE):
       • **monthly**: Amount per 30-day period. Example: $3000/mo. Auto-stops at end of 30 days.
       • **fixed_total**: Total amount spread over N days. Example: $5000 over 30 days = continuous streaming for 30 days. Great for project contracts.
     - **Period Bounds**: For hourly/weekly/monthly, the stream auto-stops at the end of the period by default (boundPresetPeriod=true). For fixed_total, it stops after the specified number of days.
-    - **Auto-grants**: Worker view access (so the worker can see their earnings in real-time) and automation decrypt access (so the keeper bot can process confidential payouts) are AUTOMATICALLY granted when creating the payroll record. The checkboxes are ON by default. ALWAYS include autoGrantDecrypt=true, autoGrantKeeperDecrypt=true, and boundPresetPeriod=true in your apply_plan actions for new streams unless the user specifically asks to disable them. Only mention this if the user asks about permissions or access.
-    - **After Creation**: Once the worker payroll record is created, the worker can immediately open the **Worker Portal** at /employee and load their payroll record number to view their live earnings.
+    - **Auto-grants**: Auth-wallet decrypt auto-grant is DISABLED in strict privacy mode. Automation (keeper) decrypt access is ON by default so payouts keep working. For new streams, default to autoGrantKeeperDecrypt=true and boundPresetPeriod=true unless the user asks otherwise.
+    - **After Creation**: Once the worker payroll record is created, the employee can open the **Employee Portal** at /employee and load their payroll record number.
     - **Edge Cases**:
       • If user provides an invalid wallet (not 32-44 chars base58), tell them: "That doesn't look like a valid Solana wallet address. It should be 32-44 characters of base58 (like 9xQeWv...). Double check and try again."
       • If user asks about multiple workers, say: "Currently we set up one worker at a time. After this worker is live, you can add another by starting Step 3 again."
       • If user asks "what pay plan should I use?", recommend: "For most employees, **Monthly** is the easiest. For contractors, try **Hourly** or **Fixed Total**. The beauty of OnyxFii is that all plans stream continuously in real-time — the worker earns every second!"
-  - STEP 4 (High-Speed Mode) is OPTIONAL. It consists of: Enable High-Speed Mode (delegate_stream_v2).
-    - This delegates the payroll stream to MagicBlock's Trusted Execution Environment (TEE) for real-time salary accrual without on-chain gas costs per tick.
+  - STEP 4 (High-Speed Mode) is OPTIONAL. It consists of: Boost Execution (delegate_stream_v2) and Base Layer (commit_and_undelegate_stream_v2).
+    - This delegates the payroll stream to MagicBlock delegated execution for real-time accrual behavior.
     - It is included in the flow as Step 8.
-    - If a user asks "what is high-speed mode?", explain: "High-speed mode delegates your payroll stream to a secure off-chain processor (MagicBlock TEE). This means the worker's earnings accrue in real-time, every second, without costing gas. It's like switching from batch processing to live streaming. It's optional but recommended for live demos."
+    - If a user asks "what is high-speed mode?", explain: "High-speed mode delegates your payroll stream to MagicBlock for faster delegated execution. Routing is automation-managed in standard flow, and you can switch back to base layer any time."
     - If a user wants to SKIP it, that's fine. The payroll still works without it — it just settles on the normal interval instead of real-time.
     - After enabling, the stream status shows "Delegated" in Step 5's monitoring panel.
   - If a user mentions "older mint", "mint problem", "fix mint", "wrong mint", or "mint mismatch", trigger the vault mint fix by including ACTION:{"type":"apply_plan","plan":{"fixVaultMint":true}} at the end of your response. This will queue the rotate-vault-mint operation. Tell the user to type "go" to execute it.
@@ -253,15 +253,16 @@ Buttons: "Clear saved form" and "Use default automation wallet".
   - Computed per-second rate display (auto-calculated, e.g. "0.013888889")
   - Salary per second override field (e.g. "0.0001")
 - **Permission checkboxes:**
-  - ✅ "Allow worker to view earnings automatically" (grant_employee_view_access_v2)
   - ✅ "Allow automation service to process confidential payout automatically" (grant_keeper_view_access_v2)
 - **Create Worker Payroll Record** button (dark, calls add_employee_stream_v2 + permissions)
 
-**STEP 4: Enable high-speed mode (optional)** — "Use high-speed processing for faster delegated execution."
+**STEP 4: Enable high-speed mode (optional)** — "Use MagicBlock delegation for faster execution while keeping Inco amounts encrypted."
 - Stream index field (e.g. "0")
-- **Enable High-Speed Mode** button (green, calls delegate_stream_v2 — delegates to MagicBlock TEE)
+- High-speed route is automation-managed (no manual region selection in standard flow)
+- **Boost Execution** button (purple, calls delegate_stream_v2 for the selected stream)
+- **Base Layer** button (amber, calls commit_and_undelegate_stream_v2 for the selected stream)
 - **Refresh Payroll Status** button
-- Help text: "High-speed mode is optional. It improves delegated lifecycle behavior for live demos."
+- Help text: "High-speed mode controls MagicBlock delegation only. Inco encrypted amounts remain private."
 
 **STEP 5: Go live and monitor** — "Track readiness and payroll status before demoing payouts."
 - Payroll status: **Live** (green badge)
@@ -281,7 +282,6 @@ Buttons: "Clear saved form" and "Use default automation wallet".
 - Last accrual time (Unix timestamp)
 - Last settle time (Unix timestamp)
 - Encrypted accrued handle (very long number — this is the FHE ciphertext)
-- **Grant Worker View Access** button (grant_employee_view_access_v2)
 - **Grant Automation Decrypt Access** button (grant_keeper_view_access_v2)
 - Private raise (advanced): amount field + **Apply Private Raise** button (update_salary_rate_v2)
 - Private bonus (advanced): amount field + **Apply Private Bonus** button (grant_bonus_v2)
@@ -321,7 +321,7 @@ The chat guides employers through a step-by-step flow. Here's what happens at ea
 
 UI ELEMENTS YOU SHOULD KNOW ABOUT:
 - **Readiness Grid** (ADVANCED MODE): Shows 6 status cards — Wallet connected, Company setup, Payroll wallet funded, Worker record, High-speed mode, Automation service.
-- **High-speed mode: On** means MagicBlock delegation IS active (streams delegated to TEE validator).
+- **High-speed mode: On** means MagicBlock delegation is active for the selected stream.
 - **Input placeholder** changes based on stage: "Paste a Solana wallet address..." → "e.g. 50 per hour or 4000 per month" → etc.
 - **Clear Chat button (✕)** — Resets conversation, phase, and greeting state.
 
@@ -438,8 +438,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         `Payroll vault initialized: ${status.vaultExists ? 'YES ✅' : 'NO ❌'}`,
         `Automation (v2 config) set up: ${status.configExists ? 'YES ✅' : 'NO ❌'}`,
         `Company Source Token Account created: ${status.depositorTokenAccount ? 'YES ✅' : 'NO ❌'}`,
-        `Vault balance (payUSD): ${status.vaultBalance ?? 'Unknown'}`,
-        `Source account balance (payUSD available): ${status.depositorBalance ?? 'Unknown'}`,
+        `Vault amount visibility: PRIVATE (Inco encrypted; plaintext amount not exposed here)`,
+        `Source account amount visibility: PRIVATE (Inco encrypted; plaintext amount not exposed here)`,
         ``,
         `═══ EXECUTION CHECKLIST (THIS IS THE SOLE SOURCE OF TRUTH FOR STEP PROGRESS) ═══`,
         `The checklist below is the ONLY thing you should use to determine which step the user is on.`,

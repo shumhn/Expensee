@@ -135,7 +135,7 @@ function buildHeuristicPlan(input: PlannerInput): AgentPlan {
     confidence: 0.45,
     missing,
     boundPresetPeriod: true,
-    autoGrantDecrypt: true,
+    autoGrantDecrypt: false,
     autoGrantKeeperDecrypt: true,
   };
 
@@ -375,7 +375,7 @@ function normalizeLlmPlan(raw: unknown): AgentPlan | null {
   if (salaryPerSecond) normalized.salaryPerSecond = salaryPerSecond;
 
   normalized.boundPresetPeriod = typeof obj.boundPresetPeriod === 'boolean' ? obj.boundPresetPeriod : true;
-  normalized.autoGrantDecrypt = typeof obj.autoGrantDecrypt === 'boolean' ? obj.autoGrantDecrypt : true;
+  normalized.autoGrantDecrypt = typeof obj.autoGrantDecrypt === 'boolean' ? obj.autoGrantDecrypt : false;
   normalized.autoGrantKeeperDecrypt = typeof obj.autoGrantKeeperDecrypt === 'boolean' ? obj.autoGrantKeeperDecrypt : true;
 
   const depositAmount = toTrimmedString(obj.depositAmount);

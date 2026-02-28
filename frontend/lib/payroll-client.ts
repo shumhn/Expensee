@@ -69,6 +69,40 @@ export const MAGICBLOCK_TEE_VALIDATOR_IDENTITY = new PublicKey(
   process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_VALIDATOR || 'FnE6VJT5QNZdedZPnCoLsARgBwoE6DeJNjBs2H1gySXA'
 );
 
+export type MagicblockValidatorRegion = 'eu' | 'us' | 'asia';
+
+function optionalPublicKey(raw: string | undefined): PublicKey | null {
+  const value = (raw || '').trim();
+  if (!value) return null;
+  try {
+    return new PublicKey(value);
+  } catch {
+    return null;
+  }
+}
+
+const MAGICBLOCK_VALIDATOR_US =
+  optionalPublicKey(process.env.NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_US);
+const MAGICBLOCK_VALIDATOR_ASIA =
+  optionalPublicKey(process.env.NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_ASIA) ||
+  optionalPublicKey(process.env.NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_AS);
+
+export function isMagicblockValidatorRegionAvailable(
+  region: MagicblockValidatorRegion
+): boolean {
+  if (region === 'eu') return true;
+  if (region === 'us') return MAGICBLOCK_VALIDATOR_US !== null;
+  return MAGICBLOCK_VALIDATOR_ASIA !== null;
+}
+
+export function getMagicblockValidatorForRegion(
+  region: MagicblockValidatorRegion
+): PublicKey {
+  if (region === 'us') return MAGICBLOCK_VALIDATOR_US || TEE_VALIDATOR;
+  if (region === 'asia') return MAGICBLOCK_VALIDATOR_ASIA || TEE_VALIDATOR;
+  return TEE_VALIDATOR;
+}
+
 export function getIncoAllowancePda(handleValue: bigint, allowedAddress: PublicKey): PublicKey {
   // Inco Lightning allowance PDA seeds: [handle_u128_le_16, allowed_address]
   const handleBuf = Buffer.alloc(16);
@@ -219,8 +253,9 @@ const DISCRIMINATORS = {
   delegate_stream_v2: disc([149, 221, 59, 171, 243, 25, 232, 241]),
   accrue_v2: disc([109, 173, 74, 232, 133, 35, 206, 149]),
   auto_settle_stream_v2: disc([220, 231, 109, 26, 242, 148, 211, 2]),
+  commit_and_undelegate_stream_v2: disc([221, 72, 242, 203, 64, 158, 195, 242]),
   redelegate_stream_v2: disc([231, 62, 146, 164, 236, 234, 43, 88]),
-  deactivate_stream_v2: disc([204, 93, 120, 46, 4, 132, 68, 249]),
+  deactivate_stream_v2: disc([18, 228, 219, 116, 117, 114, 136, 3]),
   pause_stream_v2: disc([77, 162, 53, 254, 80, 88, 242, 76]),
   resume_stream_v2: disc([57, 120, 86, 179, 230, 106, 181, 161]),
   init_rate_history_v2: disc([199, 217, 121, 94, 112, 222, 26, 240]),
@@ -511,6 +546,8 @@ export interface EmployeeStreamV2Account {
   business: PublicKey;
   streamIndex: number;
   employeeAuthHash: Uint8Array;
+  destinationRouteCommitment: Uint8Array;
+  hasFixedDestination: boolean;
   employeeTokenAccount: PublicKey;
   encryptedSalaryRate: Uint8Array;
   encryptedAccrued: Uint8Array;
@@ -538,13 +575,19 @@ export async function getEmployeeStreamV2Account(
   const data = accountInfo.data;
   const isDelegatedFlag = data[193] === 1;
   const isDelegatedByOwner = accountInfo.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
+  const destinationRouteCommitment = data.slice(80, 112);
+  const hasFixedDestination = destinationRouteCommitment.some((b) => b !== 0);
   return {
     address: employeeStreamPDA,
     owner: accountInfo.owner,
     business: new PublicKey(data.slice(8, 40)),
     streamIndex: Number(data.readBigUInt64LE(40)),
     employeeAuthHash: data.slice(48, 80),
-    employeeTokenAccount: new PublicKey(data.slice(80, 112)),
+    destinationRouteCommitment,
+    hasFixedDestination,
+    employeeTokenAccount: hasFixedDestination
+      ? new PublicKey(destinationRouteCommitment)
+      : PublicKey.default,
     encryptedSalaryRate: data.slice(112, 144),
     encryptedAccrued: data.slice(144, 176),
     lastAccrualTime: Number(data.readBigInt64LE(176)),
@@ -565,7 +608,7 @@ export interface WithdrawRequestV2Account {
   address: PublicKey;
   business: PublicKey;
   streamIndex: number;
-  requester: PublicKey;
+  requesterAuthHash: Uint8Array;
   requestedAt: number;
   isPending: boolean;
   bump: number;
@@ -654,7 +697,7 @@ export async function getWithdrawRequestV2Account(
   // 0-8: discriminator
   // 8-40: business (32)
   // 40-48: stream_index (u64)
-  // 48-80: requester (32)
+  // 48-80: requester_auth_hash (32)
   // 80-88: requested_at (i64)
   // 88: is_pending (u8)
   // 89: bump (u8)
@@ -662,7 +705,7 @@ export async function getWithdrawRequestV2Account(
     address: withdrawRequestPDA,
     business: new PublicKey(data.slice(8, 40)),
     streamIndex: Number(data.readBigUInt64LE(40)),
-    requester: new PublicKey(data.slice(48, 80)),
+    requesterAuthHash: data.slice(48, 80),
     requestedAt: Number(data.readBigInt64LE(80)),
     isPending: data[88] === 1,
     bump: data[89],
@@ -1237,7 +1280,9 @@ export async function updateKeeperV2(
 }
 
 /**
- * Add a v2 employee stream with fixed payout destination.
+ * Add a v2 employee stream.
+ * Pass `PublicKey.default` as `employeeTokenAccount` for privacy mode
+ * (no fixed destination in stream state; destination is provided at claim-time).
  * Enforces fail-closed compliance checks before stream creation.
  */
 export async function addEmployeeStreamV2(
@@ -1253,6 +1298,9 @@ export async function addEmployeeStreamV2(
 ): Promise<{ txid: string; employeeStreamPDA: PublicKey; streamIndex: number; employeeAuthHash: Uint8Array }> {
   if (!wallet.publicKey) {
     throw new Error('Wallet not connected');
+  }
+  if (!employeeTokenAccount.equals(PublicKey.default)) {
+    throw new Error('Direct worker destination is disabled. Use private shield route.');
   }
 
   await requireRangeCompliance(wallet.publicKey.toBase58());
@@ -1574,6 +1622,9 @@ export async function autoSettleStreamV2(
   if (!stream) {
     throw new Error(`v2 employee stream ${params.streamIndex} not found`);
   }
+  if (!stream.hasFixedDestination) {
+    throw new Error('This payroll record uses claim-time destination privacy mode; auto-settle is disabled.');
+  }
 
   const streamIndexBuf = Buffer.alloc(8);
   streamIndexBuf.writeBigUInt64LE(BigInt(params.streamIndex));
@@ -1595,6 +1646,51 @@ export async function autoSettleStreamV2(
     ],
     programId: PAYROLL_PROGRAM_ID,
     data: Buffer.concat([DISCRIMINATORS.auto_settle_stream_v2, streamIndexBuf]),
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
+}
+
+/**
+ * Commit pending delegated state and undelegate stream back to base layer.
+ */
+export async function commitAndUndelegateStreamV2(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessOwner: PublicKey,
+  streamIndex: number,
+  magicContext: PublicKey = MAGICBLOCK_MAGIC_CONTEXT
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [businessPDA] = getBusinessPDA(businessOwner);
+  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
+  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
+
+  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
+  if (!stream) {
+    throw new Error(`v2 employee stream ${streamIndex} not found`);
+  }
+  if (!stream.isDelegated) {
+    throw new Error(`v2 employee stream ${streamIndex} is not delegated`);
+  }
+
+  const streamIndexBuf = Buffer.alloc(8);
+  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
+      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
+      { pubkey: MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: magicContext, isSigner: false, isWritable: true },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data: Buffer.concat([DISCRIMINATORS.commit_and_undelegate_stream_v2, streamIndexBuf]),
   });
 
   return sendAndConfirmTransaction(connection, wallet, instruction);
@@ -1757,7 +1853,8 @@ export async function grantKeeperViewAccessV2(
 }
 
 /**
- * Employee requests a v2 withdraw (withdraw-all). Keeper will process and pay to fixed destination.
+ * Employee requests a v2 withdraw (withdraw-all). Keeper buffers payout in a shielded PDA.
+ * Final destination is chosen at claim-time.
  */
 export async function requestWithdrawV2(
   connection: Connection,
@@ -2309,19 +2406,22 @@ export async function grantAuditorViewAccessV2(
  * Worker signs an off-chain claim authorization message.
  * Returns the signed message and signature for the keeper to submit on-chain.
  *
- * Message format: "claim:<streamIndex>:<nonce>:<expiry>"
+ * Message format (preferred):
+ * "claim:<businessOwner>:<streamIndex>:<nonce>:<expiry>:<destinationTokenAccount>"
  */
 export async function signClaimAuthorization(
   wallet: WalletContextState,
+  businessOwner: PublicKey,
   streamIndex: number,
   nonce: number,
+  destinationTokenAccount: PublicKey,
   expiry: number = 0
 ): Promise<{ message: Uint8Array; signature: Uint8Array; publicKey: PublicKey }> {
   if (!wallet.publicKey || !wallet.signMessage) {
     throw new Error('Wallet not connected or does not support signMessage');
   }
 
-  const messageStr = `claim:${streamIndex}:${nonce}:${expiry}`;
+  const messageStr = `claim:${businessOwner.toBase58()}:${streamIndex}:${nonce}:${expiry}:${destinationTokenAccount.toBase58()}`;
   const message = new TextEncoder().encode(messageStr);
   const signature = await wallet.signMessage(message);
 
@@ -2336,10 +2436,11 @@ export async function signClaimAuthorization(
  * Worker signs an off-chain withdrawal request authorization message (Ghost Mode).
  * Returns the signed message and signature for the keeper to submit on-chain.
  *
- * Message format: "withdraw:<streamIndex>:<timestamp>"
+ * Message format: "withdraw:<businessOwner>:<streamIndex>:<timestamp>"
  */
 export async function signWithdrawAuthorization(
   wallet: WalletContextState,
+  businessOwner: PublicKey,
   streamIndex: number,
   timestamp: number
 ): Promise<{ message: Uint8Array; signature: Uint8Array; publicKey: PublicKey }> {
@@ -2347,7 +2448,7 @@ export async function signWithdrawAuthorization(
     throw new Error('Wallet not connected or does not support signMessage');
   }
 
-  const messageStr = `withdraw:${streamIndex}:${timestamp}`;
+  const messageStr = `withdraw:${businessOwner.toBase58()}:${streamIndex}:${timestamp}`;
   const message = new TextEncoder().encode(messageStr);
   const signature = await wallet.signMessage(message);
 
