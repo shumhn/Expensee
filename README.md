@@ -79,22 +79,35 @@ By combining stablecoin rails with an **Agentic AI**, startups can automate mult
 
 ```mermaid
 flowchart TB
-    %% Nodes
+    %% External Entry
+    USDC_P[("Public USDC\n(Solana SPL)")]
+
+    %% 1. FRONTEND LAYER
     EMPLOYER(["Employer Dashboard\n(/employer)"])
     EMPLOYEE(["Employee Dashboard\n(/employee)"])
     BRIDGE_UI(["Token Bridge\n(/bridge)"])
     AGENT(["OnyxFii AI Agent\n(Conversational UI)"])
     WALLET["Wallet Adapter\n(Phantom / Solflare)"]
+
+    USDC_P -->|"Wrap"| BRIDGE_UI
+    
+    %% 3. API LAYER
     APIS["Next.js API Routes\n(Agent, Bridge, Faucet)"]
+    
+    %% 4. BACKEND AUTOMATION LAYER
     KEEPER["Keeper Service\n(OnyxFii Render)"]
+    
+    %% 5. STORAGE & ROUTING LAYER
     MONGO[("MongoDB\n(Queue & State)")]
     RELAY["Umbra Relay\n(Stealth Proxy)"]
-    PAYROLL{{"Payroll Program\n(Anchor 0.32)"}}
-    INCO_T["Inco Token\n(Confidential Transfers)"]
-    INCO_L["Inco Lightning\n(FHE Math Engine)"]
-    MAGIC["MagicBlock TEE\n(Ephemeral Rollups)"]
+    
+    subgraph SOLANA["Solana Base Layer"]
+        PAYROLL{{"Payroll Program\n(Anchor 0.32)"}}
+        INCO_T["Inco Token\n(Confidential Transfers)"]
+        INCO_L["Inco Lightning\n(FHE Math Engine)"]
+        MAGIC["MagicBlock TEE\n(Ephemeral Rollups)"]
+    end
 
-    %% Connections
     EMPLOYER --> AGENT
     EMPLOYER --> WALLET
     EMPLOYEE --> WALLET
@@ -114,10 +127,12 @@ flowchart TB
     PAYROLL --> MAGIC
 
     %% Styles
+    style SOLANA fill:#f0f0f0,stroke:#333,stroke-dasharray: 5 5
     style PAYROLL fill:#f96,stroke:#333,stroke-width:4px
     style INCO_L fill:#bbf,stroke:#333,stroke-width:2px
     style INCO_T fill:#bbf,stroke:#333,stroke-width:2px
     style MAGIC fill:#dfd,stroke:#333,stroke-width:2px
+    style USDC_P fill:#69f,stroke:#333,stroke-width:2px
     style KEEPER fill:#fdd,stroke:#333,stroke-width:2px
     style RELAY fill:#fdd,stroke:#333,stroke-width:2px
 ```
@@ -126,7 +141,7 @@ flowchart TB
 
 | Component | Technology | Lines | Role |
 |-----------|-----------|-------|------|
-| **Payroll Program** | Rust · Anchor 0.32 | ~2,100 | On-chain state machine: business/vault/stream PDAs, FHE operations, 2-hop payout lifecycle |
+| **Payroll Program** | **Solana** (Rust · Anchor 0.32) | ~2,100 | On-chain state machine on Solana: business/vault/stream PDAs, FHE operations |
 | **Keeper Service** | TypeScript · Node.js | ~3,200 | Off-chain orchestrator: withdraw queue processing, accrual, settlement, claim relay |
 | **Umbra Relay** | Node.js (CJS) | ~420 | Stealth destination provisioning: creates ephemeral token accounts per payout |
 | **OnyxFii AI Agent** | Next.js APIs + React | ~1,950 | Conversational payroll assistant: multi-step guided setup, LLM planner, execution state |
@@ -480,13 +495,13 @@ flowchart TB
 | **Employee** | Yes | Yes | No | Yes | `grant_employee_view_access_v2` |
 | **Keeper** | Yes | No | No | No | `grant_keeper_view_access_v2` |
 | **Auditor** | Yes | Yes | No | No | `grant_auditor_view_access_v2` |
-| **Public** | No | No | No | No | N/A — sees only opaque FHE handles |
+| **Public** | No | No | No | No | N/A — sees only opaque Solana FHE handles |
 
 > **Key Principle:** Access is **opt-in** and **revocable**. The business owner must explicitly grant decrypt permission via Inco Lightning's `allow()` CPI. Any grant can be revoked at any time via `revoke_view_access_v2`.
 
 ---
 
-## On-Chain Program
+## Solana On-Chain Program
 
 **Program ID:** `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn`
 **Framework:** Anchor 0.32.1 · Rust · ~2,100 lines
@@ -671,7 +686,7 @@ When enabled (`UMBRA_RELAY_PROVISION_ONE_TIME_DESTINATION=true`), the relay:
 | **Inco Token Program** | `4cyJHzecVWuU2xux6bCAPAhALKQT8woBh4Vx3AGEGe5N` |
 | **MagicBlock Del.** | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
 | **Confidential Mint** | `4FVrXQpUPFKMtR2bzfpu4idGJZSb9s7dqvfd2whZnRDJ` |
-| **Public USDC Mint** | `FVoBx16c9JtsV94oS27yzJDr6q9DJNSWxjX3beN5PpnA` |
+| **pUSDC (Public USDC)** | `FVoBx16c9JtsV94oS27yzJDr6q9DJNSWxjX3beN5PpnA` |
 
 
 
