@@ -79,52 +79,47 @@ By combining stablecoin rails with an **Agentic AI**, startups can automate mult
 
 ```mermaid
 flowchart TB
-    %% 1. FRONTEND LAYER
-    EMPLOYER["Employer Dashboard\n(/employer)"]
-    EMPLOYEE["Employee Dashboard\n(/employee)"]
-    BRIDGE_UI["Token Bridge\n(/bridge)"]
-    
-    %% 2. AGENT & WALLET LAYER
-    AGENT["OnyxFii AI Agent\n(Conversational UI)"]
+    %% Nodes
+    EMPLOYER(["Employer Dashboard\n(/employer)"])
+    EMPLOYEE(["Employee Dashboard\n(/employee)"])
+    BRIDGE_UI(["Token Bridge\n(/bridge)"])
+    AGENT(["OnyxFii AI Agent\n(Conversational UI)"])
     WALLET["Wallet Adapter\n(Phantom / Solflare)"]
-    
-    EMPLOYER --> AGENT
-    EMPLOYER --> WALLET
-    EMPLOYEE --> WALLET
-    BRIDGE_UI --> WALLET
-
-    %% 3. API LAYER
     APIS["Next.js API Routes\n(Agent, Bridge, Faucet)"]
-    AGENT --> APIS
-    BRIDGE_UI -->|"Wrap/Unwrap"| APIS
-    
-    %% 4. BACKEND AUTOMATION LAYER
     KEEPER["Keeper Service\n(OnyxFii Render)"]
-    EMPLOYEE -->|"Auth & Reveal"| KEEPER
-
-    %% 5. STORAGE & ROUTING LAYER
     MONGO[("MongoDB\n(Queue & State)")]
     RELAY["Umbra Relay\n(Stealth Proxy)"]
-    
-    APIS --> MONGO
-    KEEPER --> MONGO
-    KEEPER -->|"Private Route"| RELAY
-
-    %% 6. ON-CHAIN LAYER
-    PAYROLL["Payroll Program\n(Anchor 0.32)"]
-    WALLET -->|"User Signed Txns"| PAYROLL
-    KEEPER -->|"Settle & Claim"| PAYROLL
-
-    %% 7. PROTOCOL DEPENDENCIES
+    PAYROLL{{"Payroll Program\n(Anchor 0.32)"}}
     INCO_T["Inco Token\n(Confidential Transfers)"]
     INCO_L["Inco Lightning\n(FHE Math Engine)"]
     MAGIC["MagicBlock TEE\n(Ephemeral Rollups)"]
 
+    %% Connections
+    EMPLOYER --> AGENT
+    EMPLOYER --> WALLET
+    EMPLOYEE --> WALLET
+    BRIDGE_UI --> WALLET
+    AGENT --> APIS
+    BRIDGE_UI -->|"Wrap/Unwrap"| APIS
+    EMPLOYEE -->|"Auth & Reveal"| KEEPER
+    APIS --> MONGO
+    KEEPER --> MONGO
+    KEEPER -->|"Private Route"| RELAY
+    WALLET -->|"User Signed Txns"| PAYROLL
+    KEEPER -->|"Settle & Claim"| PAYROLL
     RELAY -->|"Init Account"| INCO_T
     APIS -->|"Mint/Burn"| INCO_T
     PAYROLL --> INCO_T
     PAYROLL --> INCO_L
     PAYROLL --> MAGIC
+
+    %% Styles
+    style PAYROLL fill:#f96,stroke:#333,stroke-width:4px
+    style INCO_L fill:#bbf,stroke:#333,stroke-width:2px
+    style INCO_T fill:#bbf,stroke:#333,stroke-width:2px
+    style MAGIC fill:#dfd,stroke:#333,stroke-width:2px
+    style KEEPER fill:#fdd,stroke:#333,stroke-width:2px
+    style RELAY fill:#fdd,stroke:#333,stroke-width:2px
 ```
 
 ### Component Summary
@@ -670,25 +665,13 @@ When enabled (`UMBRA_RELAY_PROVISION_ONE_TIME_DESTINATION=true`), the relay:
 ## Deployed Addresses (Devnet)
 
 | Contract | Address |
-|
-
----
-
--|
-
----
-
-|
-| Payroll Program | `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn` |
-| Inco Lightning | `5sjEbPiqgZrYwR31ahR6Uk9wf5awoX61YGg7jExQSwaj` |
-| Inco Token Program | `4cyJHzecVWuU2xux6bCAPAhALKQT8woBh4Vx3AGEGe5N` |
-| MagicBlock Delegation | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
-| Demo Confidential Mint | `4FVrXQpUPFKMtR2bzfpu4idGJZSb9s7dqvfd2whZnRDJ` |
-| Demo Public USDC Mint | `FVoBx16c9JtsV94oS27yzJDr6q9DJNSWxjX3beN5PpnA` |
-
-
-
----
+| :--- | :--- |
+| **Payroll Program** | `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn` |
+| **Inco Lightning** | `5sjEbPiqgZrYwR31ahR6Uk9wf5awoX61YGg7jExQSwaj` |
+| **Inco Token Program** | `4cyJHzecVWuU2xux6bCAPAhALKQT8woBh4Vx3AGEGe5N` |
+| **MagicBlock Del.** | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
+| **Confidential Mint** | `4FVrXQpUPFKMtR2bzfpu4idGJZSb9s7dqvfd2whZnRDJ` |
+| **Public USDC Mint** | `FVoBx16c9JtsV94oS27yzJDr6q9DJNSWxjX3beN5PpnA` |
 
 
 
@@ -727,23 +710,7 @@ cp services/umbra-relay/.env.example services/umbra-relay/.env
 **Critical configuration flags:**
 
 | File | Variable | Value | Purpose |
-|
-
----
-
-|
-
----
-
--|
-
----
-
--|
-
----
-
-|
+| :--- | :--- | :--- | :--- |
 | `frontend/.env.local` | `NEXT_PUBLIC_KEEPER_API_URL` | `https://onyxfii.onrender.com` | Production API endpoint |
 | `frontend/.env.local` | `NEXT_PUBLIC_KEEPER_SERVER_DECRYPT` | `true` | Enable employee reveals |
 | `backend/keeper/.env` | `KEEPER_PRIVACY_PAYOUT_ROUTE_MODE` | `enforced` | Mandate stealth routing |
