@@ -1,0 +1,11 @@
+{
+    "name": "umbra-relay",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "start": "node server.cjs"
+    },
+    "dependencies": {
+        "@solana/web3.js": "^1.98.4"
+    }
+}
