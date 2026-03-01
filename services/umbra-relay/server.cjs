@@ -9,7 +9,7 @@ const { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionI
 
 const fetchAny = globalThis.fetch;
 
-const port = Number(process.env.UMBRA_RELAY_PORT || '9191');
+const port = Number(process.env.PORT || process.env.UMBRA_RELAY_PORT || '9191');
 const relayApiKey = (process.env.UMBRA_RELAY_API_KEY || '').trim();
 const relayMode = (process.env.UMBRA_RELAY_MODE || 'destination').trim().toLowerCase();
 const destinationTokenAccount = (process.env.UMBRA_RELAY_DESTINATION_TOKEN_ACCOUNT || '').trim();
@@ -412,7 +412,7 @@ const server = http.createServer(async (req, res) => {
   return json(res, 404, { ok: false, error: 'not_found' });
 });
 
-server.listen(port, () => {
+server.listen(port, '0.0.0.0', () => {
   if (provisionOneTimeDestination) {
     try {
       ensureRelaySignerLoaded();
