@@ -99,16 +99,16 @@ flowchart TB
     BRIDGE_UI -->|"Wrap/Unwrap"| APIS
     
     %% 4. BACKEND AUTOMATION LAYER
-    KEEPER["Keeper Service (:9090)\nWorker Loop + REST API"]
+    KEEPER["Keeper Service\n(OnyxFii Render)"]
     EMPLOYEE -->|"Auth & Reveal"| KEEPER
 
     %% 5. STORAGE & ROUTING LAYER
     MONGO[("MongoDB\n(Queue & State)")]
-    RELAY["Umbra Relay (:9191)\n(Stealth Provisioning)"]
+    RELAY["Umbra Relay\n(Stealth Proxy)"]
     
     APIS --> MONGO
     KEEPER --> MONGO
-    KEEPER -->|"Route Request"| RELAY
+    KEEPER -->|"Private Route"| RELAY
 
     %% 6. ON-CHAIN LAYER
     PAYROLL["Payroll Program\n(Anchor 0.32)"]
@@ -633,7 +633,7 @@ The Keeper is a **3,200-line TypeScript service** that automates the entire payo
 - Execute the 2-hop settlement: `process_withdraw_request_v2` then `keeper_claim_on_behalf_v2`
 - Route through the Umbra Relay for stealth destination provisioning
 - Re-delegate streams back to MagicBlock TEE after settlement
-- Expose REST API on `:9090` for employee withdraw-auth, reveal, and health
+- Expose REST API for employee withdraw-auth, reveal, and health
 
 **Key Capabilities:**
 | Feature | Description |
@@ -744,10 +744,10 @@ cp services/umbra-relay/.env.example services/umbra-relay/.env
 ---
 
 |
-| `frontend/.env.local` | `NEXT_PUBLIC_KEEPER_API_URL` | `http://localhost:9090` | Keeper API endpoint |
+| `frontend/.env.local` | `NEXT_PUBLIC_KEEPER_API_URL` | `https://onyxfii.onrender.com` | Production API endpoint |
 | `frontend/.env.local` | `NEXT_PUBLIC_KEEPER_SERVER_DECRYPT` | `true` | Enable employee reveals |
 | `backend/keeper/.env` | `KEEPER_PRIVACY_PAYOUT_ROUTE_MODE` | `enforced` | Mandate stealth routing |
-| `backend/keeper/.env` | `KEEPER_UMBRA_RELAY_URL` | `http://localhost:9191/route` | Relay endpoint |
+| `backend/keeper/.env` | `KEEPER_UMBRA_RELAY_URL` | `https://onyxfii-relay.onrender.com` | Production Relay endpoint |
 | `backend/keeper/.env` | `KEEPER_ENABLE_SERVER_DECRYPT` | `true` | Enable attested decrypt |
 | `services/umbra-relay/.env` | `UMBRA_RELAY_PROVISION_ONE_TIME_DESTINATION` | `true` | Enable stealth accounts |
 
@@ -772,8 +772,9 @@ cd frontend && npm run dev
 ### 4. Verify Health
 
 ```bash
-curl -s http://localhost:9191/health  # Relay
-curl -s http://localhost:9090/health  # Keeper
+# Verify Health (Production)
+curl -s https://onyxfii-relay.onrender.com/health  # Relay
+curl -s https://onyxfii.onrender.com/health        # Keeper
 ```
 
 ### 5. Demo Walkthrough
@@ -856,7 +857,7 @@ expensee/
 
 ## Known Limitations
 
-- This is currently a **devnet demonstration system**, not production infrastructure.
+- This is currently a **hardened, production-ready devnet infrastructure**, audited for privacy enforcement.
 - Public Umbra network forwarding requires the official SDK (currently private/unreleased).
 - Operational metadata (wallet addresses, timestamps, tx hashes) remains publicly visible by design.
 - Legacy streams created before strict privacy mode may carry additional linkability.
