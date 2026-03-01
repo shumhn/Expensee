@@ -5,6 +5,8 @@ const ALLOWED_HOSTS = new Set([
   'devnet-eu.magicblock.app',
   'devnet-us.magicblock.app',
   'devnet-as.magicblock.app',
+  'devnet.helius-rpc.com',
+  'api.devnet.solana.com',
 ]);
 
 function normalizeEndpoint(raw: string): string {
