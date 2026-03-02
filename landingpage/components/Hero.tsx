@@ -6,9 +6,9 @@ import { AgenticStream } from "@/components/AgenticStream";
 
 export function Hero() {
     return (
-        <section className="relative min-h-screen flex items-start pt-24 md:pt-32 px-6 lg:px-12 overflow-hidden bg-black selection:bg-expensee-neon/30">
+        <section className="relative min-h-screen flex items-start pt-24 md:pt-32 px-6 lg:px-12 overflow-hidden bg-black selection:bg-[#1EBA98]/30">
             {/* Background Glow */}
-            <div className="absolute top-1/2 right-0 -translate-y-1/2 w-[800px] h-[800px] bg-expensee-neon/10 rounded-full blur-[120px] pointer-events-none" />
+            <div className="absolute top-1/2 right-0 -translate-y-1/2 w-[800px] h-[800px] bg-[#1EBA98]/10 rounded-full blur-[120px] pointer-events-none" />
 
             <div className="max-w-7xl grid lg:grid-cols-2 gap-12 items-start w-full">
                 {/* Left Content */}
@@ -19,8 +19,8 @@ export function Hero() {
                         transition={{ duration: 0.8 }}
                         className="flex items-center gap-3"
                     >
-                        <div className="w-2 h-2 rounded-full bg-expensee-neon animate-pulse shadow-[0_0_10px_var(--color-expensee-neon)]" />
-                        <span className="text-expensee-neon text-[10px] font-bold uppercase tracking-[0.4em]">Currently on Devnet</span>
+                        <div className="w-2 h-2 rounded-full bg-[#1EBA98] animate-pulse shadow-[0_0_10px_#1EBA98]" />
+                        <span className="text-[#1EBA98] text-[10px] font-bold uppercase tracking-[0.4em]">Currently on Devnet</span>
                     </motion.div>
 
                     <motion.h1
@@ -46,7 +46,7 @@ export function Hero() {
                             "Automated settlements with Expensee Keeper."
                         ].map((item, i) => (
                             <div key={i} className="flex items-center gap-3">
-                                <Check className="w-5 h-5 text-expensee-neon" strokeWidth={3} />
+                                <Check className="w-5 h-5 text-[#1EBA98]" strokeWidth={3} />
                                 <span className="text-base md:text-lg text-gray-300 font-medium">{item}</span>
                             </div>
                         ))}
@@ -62,7 +62,8 @@ export function Hero() {
                             href="https://onyx-fii.vercel.app/employer"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="w-full sm:w-auto px-8 py-4 bg-expensee-neon text-black text-lg font-bold rounded-full hover:scale-105 hover:brightness-110 transition-all text-center flex items-center justify-center gap-2"
+                            style={{ backgroundColor: '#1EBA98' }}
+                            className="w-full sm:w-auto px-10 py-3.5 text-black text-base font-black rounded-full hover:scale-105 hover:brightness-110 transition-all text-center flex items-center justify-center gap-2 tracking-tight"
                         >
                             Employer Dashboard
                         </a>
@@ -70,9 +71,9 @@ export function Hero() {
                             href="https://onyx-fii.vercel.app/employee"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="w-full sm:w-auto px-8 py-4 bg-transparent border border-white/20 text-white text-lg font-medium rounded-full hover:bg-white/5 transition-colors flex items-center justify-center gap-2"
+                            className="w-full sm:w-auto px-10 py-3.5 bg-transparent border border-white/10 text-white text-base font-bold rounded-full hover:bg-white/5 transition-colors flex items-center justify-center gap-2 tracking-tight"
                         >
-                            Employee Portal <ArrowRight className="w-5 h-5" />
+                            Employee Portal <ArrowRight className="w-4 h-4 opacity-70" />
                         </a>
                     </motion.div>
 
@@ -101,11 +102,6 @@ export function Hero() {
                     </div>
                 </div>
             </div>
-
-
-            {/* Removed unused keyframes */}
         </section>
     );
 }
-
-// Removed unused CodeLine component

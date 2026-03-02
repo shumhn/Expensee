@@ -117,11 +117,11 @@ function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.1 }}
-            className={`relative group h-[400px] overflow-hidden rounded-3xl border ${isPrimary ? 'border-expensee-primary/30 bg-expensee-primary/[0.02]' : isPurple ? 'border-purple-500/30 bg-purple-500/[0.02]' : 'border-white/10 bg-white/[0.01]'}`}
+            className={`relative group h-[400px] overflow-hidden rounded-3xl border ${isTeal ? 'border-expensee-neon/30 bg-expensee-neon/[0.02]' : isPurple ? 'border-purple-500/30 bg-purple-500/[0.02]' : 'border-white/10 bg-white/[0.01]'}`}
         >
             {/* Holographic background effects */}
             <div className={`absolute inset-0 bg-gradient-to-br transition-opacity duration-700 opacity-20 group-hover:opacity-40
-                ${isPrimary ? 'from-expensee-primary/20 via-transparent to-transparent' :
+                ${isTeal ? 'from-expensee-neon/20 via-transparent to-transparent' :
                     isPurple ? 'from-purple-500/20 via-transparent to-transparent' :
                         'from-zinc-500/10 via-transparent to-transparent'}`}
             />
