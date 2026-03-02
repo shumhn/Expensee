@@ -59,18 +59,20 @@ export function Hero() {
                         className="flex flex-wrap items-center gap-4 mt-4"
                     >
                         <a
-                            href="https://onyx-fii.vercel.app/"
+                            href="https://onyx-fii.vercel.app/employer"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="w-full sm:w-auto px-8 py-4 bg-expensee-neon text-black text-lg font-bold rounded-full hover:scale-105 hover:brightness-110 transition-all text-center flex items-center justify-center gap-2"
                         >
-                            Start Payroll
+                            Employer Dashboard
                         </a>
                         <a
-                            href="#"
+                            href="https://onyx-fii.vercel.app/employee"
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="w-full sm:w-auto px-8 py-4 bg-transparent border border-white/20 text-white text-lg font-medium rounded-full hover:bg-white/5 transition-colors flex items-center justify-center gap-2"
                         >
-                            Read Docs <ArrowRight className="w-5 h-5" />
+                            Employee Portal <ArrowRight className="w-5 h-5" />
                         </a>
                     </motion.div>
 

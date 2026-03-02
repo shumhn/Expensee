@@ -24,17 +24,27 @@ export function Navbar() {
 
                 {/* Desktop Navigation */}
                 <div className="hidden md:flex items-center gap-8 text-[13px] font-medium tracking-wide text-neutral-500">
-                    <span className="hover:text-white transition-colors duration-200 cursor-default">
-                        Features
-                    </span>
-                    <span className="hover:text-white transition-colors duration-200 cursor-default">
-                        Pricing
-                    </span>
+                    <Link
+                        href="https://onyx-fii.vercel.app/employer"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-white transition-colors duration-200"
+                    >
+                        For Employers
+                    </Link>
+                    <Link
+                        href="https://onyx-fii.vercel.app/employee"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-white transition-colors duration-200"
+                    >
+                        For Employees
+                    </Link>
                     <Link
                         href="#"
                         className="hover:text-white transition-colors duration-200"
                     >
-                        Documentation
+                        Docs
                     </Link>
                 </div>
 
@@ -45,7 +55,7 @@ export function Navbar() {
                         rel="noopener noreferrer"
                         className="hidden sm:flex items-center gap-2 px-5 py-2 rounded-full border border-white/20 bg-transparent text-sm font-medium text-white hover:bg-white/10 transition-all duration-300 group"
                     >
-                        Start Payroll
+                        Launch App
                         <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
                     </Link>
 
@@ -69,17 +79,27 @@ export function Navbar() {
                             className="absolute top-full left-0 right-0 bg-black border-b border-white/10 p-6 md:hidden flex flex-col gap-6 shadow-2xl"
                         >
                             <div className="flex flex-col gap-4 text-center">
-                                <span className="text-lg font-medium text-zinc-400 hover:text-white transition-colors py-2 cursor-default">
-                                    About
-                                </span>
-                                <span className="text-lg font-medium text-zinc-400 hover:text-white transition-colors py-2 cursor-default">
-                                    Agents
-                                </span>
+                                <Link
+                                    href="https://onyx-fii.vercel.app/employer"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-lg font-medium text-zinc-400 hover:text-white transition-colors py-2"
+                                >
+                                    For Employers
+                                </Link>
+                                <Link
+                                    href="https://onyx-fii.vercel.app/employee"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-lg font-medium text-zinc-400 hover:text-white transition-colors py-2"
+                                >
+                                    For Employees
+                                </Link>
                                 <Link
                                     href="#"
                                     className="text-lg font-medium text-zinc-400 hover:text-white transition-colors py-2"
                                 >
-                                    Documentation
+                                    Docs
                                 </Link>
                             </div>
 
