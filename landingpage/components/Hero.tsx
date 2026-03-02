@@ -62,7 +62,7 @@ export function Hero() {
                             href="https://onyx-fii.vercel.app/employer"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="w-full sm:w-auto px-8 py-4 bg-expensee-neon text-black text-lg font-bold rounded-full hover:scale-105 hover:brightness-110 transition-all text-center flex items-center justify-center gap-2"
+                            className="w-full sm:w-auto px-8 py-4 bg-expensee-primary text-white text-lg font-bold rounded-full hover:scale-105 hover:brightness-110 shadow-[0_4px_20px_rgba(79,70,229,0.3)] transition-all text-center flex items-center justify-center gap-2"
                         >
                             Employer Dashboard
                         </a>

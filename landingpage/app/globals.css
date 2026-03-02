@@ -4,9 +4,11 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-expensee-neon: #1EBA98;
+  --color-expensee-primary: #4F46E5;
+  --color-expensee-primary-strong: #3730A3;
+  --color-expensee-neon: #06B6D4;
   --color-expensee-purple: #8B5CF6;
-  --color-expensee-cyan: #22D3EE;
+  --color-expensee-cyan: #06B6D4;
   --color-expensee-black: #0A0A0A;
   --color-expensee-card: #141414;
   --color-expensee-border: #222222;

@@ -34,7 +34,7 @@ const plans = [
         description: "Growing Organizations",
         price: "$99",
         features: ["Unlimited Employees", "FHE Privacy", "Stealth Addresses"],
-        color: "teal"
+        color: "primary"
     },
     {
         name: "Enterprise",
@@ -91,7 +91,7 @@ export function CompareCards() {
                             ))}
                         </div>
 
-                        <button className="bg-white text-black px-8 py-3 rounded-full font-bold text-sm uppercase tracking-widest hover:bg-expensee-neon transition-colors duration-300">
+                        <button className="bg-expensee-primary text-white px-8 py-3 rounded-full font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all duration-300">
                             Get started for Free
                         </button>
                     </div>
@@ -109,7 +109,7 @@ export function CompareCards() {
 }
 
 function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
-    const isTeal = plan.color === "teal";
+    const isPrimary = plan.color === "primary";
     const isPurple = plan.color === "purple";
 
     return (
@@ -117,11 +117,11 @@ function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.1 }}
-            className={`relative group h-[400px] overflow-hidden rounded-3xl border ${isTeal ? 'border-expensee-neon/30 bg-expensee-neon/[0.02]' : isPurple ? 'border-purple-500/30 bg-purple-500/[0.02]' : 'border-white/10 bg-white/[0.01]'}`}
+            className={`relative group h-[400px] overflow-hidden rounded-3xl border ${isPrimary ? 'border-expensee-primary/30 bg-expensee-primary/[0.02]' : isPurple ? 'border-purple-500/30 bg-purple-500/[0.02]' : 'border-white/10 bg-white/[0.01]'}`}
         >
             {/* Holographic background effects */}
             <div className={`absolute inset-0 bg-gradient-to-br transition-opacity duration-700 opacity-20 group-hover:opacity-40
-                ${isTeal ? 'from-expensee-neon/20 via-transparent to-transparent' :
+                ${isPrimary ? 'from-expensee-primary/20 via-transparent to-transparent' :
                     isPurple ? 'from-purple-500/20 via-transparent to-transparent' :
                         'from-zinc-500/10 via-transparent to-transparent'}`}
             />
@@ -129,11 +129,11 @@ function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
             <div className="relative p-8 h-full flex flex-col justify-between z-10">
                 <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                        <div className={`p-2 rounded-lg border ${isTeal ? 'border-expensee-neon/50' : isPurple ? 'border-purple-500/50' : 'border-zinc-700'}`}>
-                            <Shield className={`w-5 h-5 ${isTeal ? 'text-expensee-neon' : isPurple ? 'text-purple-400' : 'text-zinc-500'}`} />
+                        <div className={`p-2 rounded-lg border ${isPrimary ? 'border-expensee-primary/50' : isPurple ? 'border-purple-500/50' : 'border-zinc-700'}`}>
+                            <Shield className={`w-5 h-5 ${isPrimary ? 'text-expensee-primary' : isPurple ? 'text-purple-400' : 'text-zinc-500'}`} />
                         </div>
                         <span className={`text-[10px] font-black uppercase tracking-[0.2em] px-2 py-1 rounded border
-                            ${isTeal ? 'border-expensee-neon/40 text-expensee-neon' : isPurple ? 'border-purple-500/40 text-purple-400' : 'border-zinc-800 text-zinc-500'}`}>
+                            ${isPrimary ? 'border-expensee-primary/40 text-expensee-primary' : isPurple ? 'border-purple-500/40 text-purple-400' : 'border-zinc-800 text-zinc-500'}`}>
                             {plan.price}
                         </span>
                     </div>
@@ -142,7 +142,7 @@ function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
                         <h3 className="text-2xl font-black italic uppercase tracking-tighter text-white">
                             {plan.name}
                         </h3>
-                        <p className={`text-xs font-bold uppercase tracking-widest ${isTeal ? 'text-expensee-neon/60' : isPurple ? 'text-purple-400/60' : 'text-zinc-600'}`}>
+                        <p className={`text-xs font-bold uppercase tracking-widest ${isPrimary ? 'text-expensee-primary/60' : isPurple ? 'text-purple-400/60' : 'text-zinc-600'}`}>
                             {plan.description}
                         </p>
                     </div>
@@ -153,7 +153,7 @@ function PlanCard({ plan, index }: { plan: typeof plans[0], index: number }) {
                     <ul className="space-y-3">
                         {plan.features.map((feature, i) => (
                             <li key={i} className="flex items-center gap-2">
-                                <Check className={`w-3 h-3 ${isTeal ? 'text-expensee-neon' : isPurple ? 'text-purple-400' : 'text-zinc-500'}`} />
+                                <Check className={`w-3 h-3 ${isPrimary ? 'text-expensee-primary' : isPurple ? 'text-purple-400' : 'text-zinc-500'}`} />
                                 <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
                                     {feature}
                                 </span>

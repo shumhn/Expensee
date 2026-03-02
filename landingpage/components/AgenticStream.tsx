@@ -17,21 +17,21 @@ export function AgenticStream() {
                 {/* SVG Connection Beams Layer (Z: 10) */}
                 <svg className="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-visible">
                     <defs>
-                        <linearGradient id="beam-green" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stopColor="rgba(30,186,152,0)" />
-                            <stop offset="100%" stopColor="rgba(30,186,152,0.8)" />
+                        <linearGradient id="beam-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="rgba(6,182,212,0)" />
+                            <stop offset="100%" stopColor="rgba(6,182,212,0.8)" />
                         </linearGradient>
-                        <linearGradient id="beam-blue" x1="0%" y1="100%" x2="100%" y2="0%">
-                            <stop offset="0%" stopColor="rgba(96,165,250,0)" />
-                            <stop offset="100%" stopColor="rgba(96,165,250,0.8)" />
+                        <linearGradient id="beam-indigo" x1="0%" y1="100%" x2="100%" y2="0%">
+                            <stop offset="0%" stopColor="rgba(79,70,229,0)" />
+                            <stop offset="100%" stopColor="rgba(79,70,229,0.8)" />
                         </linearGradient>
-                        <linearGradient id="beam-green-out" x1="0%" y1="50%" x2="100%" y2="50%">
+                        <linearGradient id="beam-cyan-out" x1="0%" y1="50%" x2="100%" y2="50%">
                             <stop offset="0%" stopColor="var(--color-expensee-neon)" />
-                            <stop offset="100%" stopColor="rgba(30,186,152,0)" />
+                            <stop offset="100%" stopColor="rgba(6,182,212,0)" />
                         </linearGradient>
-                        <linearGradient id="beam-blue-out" x1="0%" y1="50%" x2="100%" y2="50%">
-                            <stop offset="0%" stopColor="#60a5fa" />
-                            <stop offset="100%" stopColor="rgba(96,165,250,0)" />
+                        <linearGradient id="beam-indigo-out" x1="0%" y1="50%" x2="100%" y2="50%">
+                            <stop offset="0%" stopColor="var(--color-expensee-primary)" />
+                            <stop offset="100%" stopColor="rgba(79,70,229,0)" />
                         </linearGradient>
 
                         <filter id="glow">
@@ -54,7 +54,7 @@ export function AgenticStream() {
                     <motion.path
                         d="M 400 300 Q 480 170 520 170"
                         fill="none"
-                        stroke="url(#beam-blue-out)"
+                        stroke="url(#beam-indigo-out)"
                         strokeWidth="3"
                         filter="url(#glow)"
                         initial={{ pathLength: 0, opacity: 0 }}
@@ -67,7 +67,7 @@ export function AgenticStream() {
                     <motion.path
                         d="M 400 300 Q 480 430 520 430"
                         fill="none"
-                        stroke="url(#beam-green-out)"
+                        stroke="url(#beam-cyan-out)"
                         strokeWidth="3"
                         filter="url(#glow)"
                         initial={{ pathLength: 0, opacity: 0 }}
@@ -106,9 +106,9 @@ export function AgenticStream() {
                     icon={Bot}
                     title="AI Trigger"
                     status="Intercepting Intent"
-                    color="text-blue-400"
-                    glow="shadow-[0_0_20px_rgba(96,165,250,0.2)]"
-                    border="border-blue-400/30"
+                    color="text-expensee-primary"
+                    glow="shadow-[0_0_20px_rgba(79,70,229,0.2)]"
+                    border="border-expensee-primary/30"
                 />
 
                 {/* FHE Privacy Panel (Bottom Left) */}
@@ -119,7 +119,7 @@ export function AgenticStream() {
                     title="Inco FHE"
                     status="Encrypting State"
                     color="text-expensee-neon"
-                    glow="shadow-[0_0_20px_rgba(30,186,152,0.2)]"
+                    glow="shadow-[0_0_20px_rgba(6,182,212,0.2)]"
                     border="border-expensee-neon/30"
                 />
 
@@ -130,9 +130,9 @@ export function AgenticStream() {
                     icon={Activity}
                     title="Live Stream"
                     status="Agent Connected"
-                    color="text-blue-400"
-                    glow="shadow-[0_0_20px_rgba(96,165,250,0.2)]"
-                    border="border-blue-400/30"
+                    color="text-expensee-primary"
+                    glow="shadow-[0_0_20px_rgba(79,70,229,0.2)]"
+                    border="border-expensee-primary/30"
                 />
 
                 {/* Right Side Bottom: Incoming Salary */}
@@ -146,7 +146,7 @@ export function AgenticStream() {
                     <motion.div
                         animate={{ y: [-5, 5, -5] }}
                         transition={{ duration: 4.5, repeat: Infinity, ease: "easeInOut" }}
-                        className="w-56 h-[72px] p-4 rounded-xl bg-black/80 backdrop-blur-md border-dashed border border-expensee-neon/30 shadow-[0_0_20px_rgba(30,186,152,0.2)] flex items-center gap-4"
+                        className="w-56 h-[72px] p-4 rounded-xl bg-black/80 backdrop-blur-md border-dashed border border-expensee-neon/30 shadow-[0_0_20px_rgba(6,182,212,0.2)] flex items-center gap-4"
                     >
                         <div className="flex-shrink-0 p-2.5 rounded-lg bg-black/50 border border-dashed border-expensee-neon/30 text-expensee-neon">
                             <CircleDollarSign className="w-5 h-5" />
