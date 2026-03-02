@@ -1129,17 +1129,32 @@ a:hover {
    Solflare-Style Main Page
    ============================== */
 
+.solflare-page-wrapper {
+  background: #000;
+  min-height: 100vh;
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .solflare-page {
   display: flex;
-  min-height: 100vh;
+  width: 100%;
+  max-width: 1440px;
+  min-height: 85vh;
+  border-radius: 2.5rem;
   overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 50px 100px -20px rgba(0, 0, 0, 0.5);
+  position: relative;
 }
 
 .solflare-left {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 2.5rem 3rem;
+  padding: 3rem 4rem;
   background: #0a0a0a;
   position: relative;
   z-index: 2;
@@ -1255,10 +1270,15 @@ a:hover {
 
 /* Responsive */
 @media (max-width: 1024px) {
+  .solflare-page-wrapper {
+    padding: 1rem;
+  }
+
   .solflare-page {
     flex-direction: column;
     min-height: auto;
     overflow: visible;
+    border-radius: 2rem;
   }
 
   .solflare-left {
@@ -1284,7 +1304,7 @@ a:hover {
 
   .solflare-dashboard-card {
     transform: none !important;
-    width: calc(100vw - 1rem) !important;
+    width: calc(100vw - 3rem) !important;
     max-width: 640px !important;
   }
 
@@ -1303,6 +1323,14 @@ a:hover {
 }
 
 @media (max-width: 768px) {
+  .solflare-page-wrapper {
+    padding: 0.75rem;
+  }
+
+  .solflare-page {
+    border-radius: 1.5rem;
+  }
+
   .solflare-left {
     padding: 2rem 1.5rem 2.5rem;
   }
@@ -1316,12 +1344,20 @@ a:hover {
   }
 
   .solflare-dashboard-card {
-    width: calc(100vw - 0.75rem) !important;
+    width: calc(100vw - 2.5rem) !important;
     max-width: 600px !important;
   }
 }
 
 @media (max-width: 480px) {
+  .solflare-page-wrapper {
+    padding: 0.5rem;
+  }
+
+  .solflare-page {
+    border-radius: 1.25rem;
+  }
+
   .solflare-left {
     padding: 1.5rem 1.25rem 2rem;
   }
@@ -1341,7 +1377,7 @@ a:hover {
   }
 
   .solflare-dashboard-card {
-    width: calc(100vw - 0.5rem) !important;
+    width: calc(100vw - 1.5rem) !important;
     max-width: 560px !important;
     padding: 1.15rem;
   }
