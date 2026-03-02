@@ -8,8 +8,8 @@ export function AgenticStream() {
     return (
         <div className="relative w-full h-[600px] flex items-center justify-center overflow-visible">
             {/* Ambient Background Glows */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-expensee-neon/20 rounded-full blur-[100px] pointer-events-none" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200px] h-[200px] bg-white/10 rounded-full blur-[50px] pointer-events-none" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-expensee-primary/10 rounded-full blur-[100px] pointer-events-none" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200px] h-[200px] bg-expensee-neon/10 rounded-full blur-[50px] pointer-events-none" />
 
             {/* A fixed coordinate system wrapper (800x600) scaled to fit */}
             <div className="relative w-[800px] h-[600px] scale-[0.6] sm:scale-75 lg:scale-90 flex-shrink-0 origin-center">
@@ -44,10 +44,10 @@ export function AgenticStream() {
                     </defs>
 
                     {/* Agent -> Core (Path) */}
-                    <DataBeam path="M 280 170 Q 320 170 400 300" gradient="url(#beam-blue)" delay={0} />
+                    <DataBeam path="M 280 170 Q 320 170 400 300" gradient="url(#beam-indigo)" delay={0} />
 
                     {/* FHE -> Core (Path) */}
-                    <DataBeam path="M 280 430 Q 320 430 400 300" gradient="url(#beam-green)" delay={0.5} />
+                    <DataBeam path="M 280 430 Q 320 430 400 300" gradient="url(#beam-cyan)" delay={0.5} />
 
                     {/* Core -> Wallet (Straight Line Outgoing Stream) */}
                     <path d="M 400 300 Q 480 170 520 170" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
