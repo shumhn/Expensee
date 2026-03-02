@@ -1,100 +1,203 @@
 import Head from 'next/head';
 import Link from 'next/link';
-import PageShell from '../components/PageShell';
-import StatusPill from '../components/StatusPill';
-import { COPY } from '../lib/copy';
+import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+
+const WalletButton = dynamic(() => import('../components/WalletButton'), {
+  ssr: false,
+});
+
+import { Logo } from '../components/Logo';
+
+function StreamingBalance() {
+  const [balance, setBalance] = useState(16034.2);
+  useEffect(() => {
+    const timer = setInterval(() => setBalance((v) => v + 0.17), 50);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <span className="font-mono tabular-nums tracking-tight">
+      {balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+function LiveStreamRow({ label, amount, change, changeColor }: { label: string; amount: string; change: string; changeColor: string }) {
+  return (
+    <div className="flex items-center justify-between py-3 border-b border-white/[0.06] last:border-0">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-sm">
+          {label === 'PayUSD' ? '💵' : label === 'SOL' ? '◎' : '🔐'}
+        </div>
+        <div>
+          <div className="text-white text-sm font-bold">{label}</div>
+          <div className="text-[10px] text-zinc-500">{amount} <span className={changeColor}>{change}</span></div>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="text-white text-sm font-bold">{label === 'PayUSD' ? '$1,090.96' : label === 'SOL' ? '$3,967.57' : '$886.54'}</div>
+        <div className="text-[10px] text-zinc-500">{label === 'PayUSD' ? '1,090.96 USDC' : label === 'SOL' ? '15.86 SOL' : 'Encrypted'}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function HomePage() {
+  const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState('Streams');
+  useEffect(() => setMounted(true), []);
+
   return (
-    <PageShell
-      icon="◈"
-      title="Expensee"
-      subtitle="Realtime private payroll for modern teams"
-      navItems={[
-        { href: '/', label: COPY.nav.home },
-        { href: '/employer', label: COPY.nav.company },
-        { href: '/employee', label: COPY.nav.worker },
-        { href: '/bridge', label: COPY.nav.bridge, advanced: true },
-      ]}
-    >
+    <>
       <Head>
-        <title>Expensee | Realtime Private Payroll</title>
-        <meta
-          name="description"
-          content="Realtime private payroll with encrypted salary amounts and privacy-preserving payout routing."
-        />
+        <title>Expensee | Private Streaming Payroll</title>
+        <meta name="description" content="Private streaming payroll on Solana. FHE-encrypted salaries, stealth routing, keeper automation." />
       </Head>
 
-      <section className="hero-card">
-        <p className="hero-eyebrow">{COPY.home.eyebrow}</p>
-        <h1 className="hero-title">{COPY.home.title}</h1>
-        <p className="hero-subtitle">{COPY.home.subtitle}</p>
+      <div className={`solflare-page ${mounted ? 'opacity-100' : 'opacity-0'} transition-opacity duration-500`}>
+        {/* ─── LEFT PANEL ─── */}
+        <div className="solflare-left">
+          {/* Logo */}
+          <div className="flex items-center gap-3 mb-auto">
+            <Logo className="w-10 h-10" />
+            <span className="text-2xl font-black tracking-[-0.03em] text-white uppercase" style={{ fontFamily: 'var(--font-outfit), sans-serif' }}>
+              Expensee
+            </span>
+          </div>
 
-        <div className="hero-actions">
-          <Link href="/employer" className="premium-btn premium-btn-primary">
-            Start Company Setup
-          </Link>
-          <Link href="/employee" className="premium-btn premium-btn-secondary">
-            Open Employee Portal
-          </Link>
+          {/* Hero Content */}
+          <div className="flex flex-col items-start justify-center flex-1 max-w-lg">
+            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black tracking-[-0.04em] leading-[1.05] text-white mb-8" style={{ fontFamily: 'var(--font-outfit), sans-serif' }}>
+              Get the best
+              <br />
+              <span className="text-white">Payroll</span>
+              <br />
+              <span className="text-white">experience</span>
+            </h1>
+
+            <div className="flex flex-col gap-3 w-full max-w-sm">
+              <Link
+                href="/employer"
+                className="solflare-btn-primary"
+              >
+                Open Employer
+              </Link>
+              <Link
+                href="/employee"
+                className="solflare-btn-secondary"
+              >
+                Open Employee
+              </Link>
+            </div>
+          </div>
+
+          {/* Bottom Left Corner */}
+          <div className="mt-auto pt-8">
+            <div className="flex items-center gap-3">
+              <div className="w-6 h-6 rounded bg-white/10 flex items-center justify-center">
+                <svg className="w-3.5 h-3.5 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-[0.15em]">Powered by Solana</span>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <StatusPill tone="success">Live earnings updates</StatusPill>
-          <StatusPill tone="info">On-demand payout</StatusPill>
-          <StatusPill tone="warning">Encrypted salary data</StatusPill>
+        {/* ─── RIGHT PANEL ─── */}
+        <div className="solflare-right">
+          {/* Floating Dashboard Card */}
+          <div className="solflare-card-wrapper">
+            <div className="solflare-dashboard-card">
+              {/* Card Header */}
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-400 to-emerald-500 flex items-center justify-center text-xs font-bold text-black">E</div>
+                <span className="text-white text-sm font-bold">Main Vault</span>
+                <span className="text-zinc-500 text-[10px] ml-1">📋</span>
+              </div>
+
+              {/* Balance */}
+              <div className="mb-1">
+                <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold mb-1">BALANCE</div>
+                <div className="text-4xl font-black text-white tracking-tight leading-none">
+                  <StreamingBalance />
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-500">
+                  +$840.19 · <span className="text-emerald-400">+5.24%</span>
+                </div>
+              </div>
+
+              {/* Action Icons */}
+              <div className="flex items-center gap-4 my-5 py-4 border-y border-white/[0.06]">
+                {[
+                  { icon: '↓', label: 'Receive' },
+                  { icon: '🏦', label: 'Fund' },
+                  { icon: '↔', label: 'Swap' },
+                  { icon: '🔒', label: 'Encrypt' },
+                  { icon: '▶', label: 'Stream' },
+                ].map((action, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1.5 flex-1">
+                    <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-sm hover:bg-white/10 transition-colors cursor-default">
+                      {action.icon}
+                    </div>
+                    <span className="text-[9px] text-zinc-500 font-medium">{action.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Tabs */}
+              <div className="flex items-center gap-6 mb-4">
+                {['Streams', 'Payroll', 'History'].map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`text-sm font-bold transition-colors pb-1 ${activeTab === tab ? 'text-white border-b-2 border-cyan-400' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {/* Total Value */}
+              <div className="mb-3">
+                <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">TOTAL VALUE</div>
+                <div className="text-xl font-bold text-white tracking-tight">$8,367.32</div>
+              </div>
+
+              {/* Asset Rows */}
+              <div>
+                <LiveStreamRow label="SOL" amount="$250.32" change="+6.02%" changeColor="text-emerald-400" />
+                <LiveStreamRow label="PayUSD" amount="$1.00" change="+0.01%" changeColor="text-emerald-400" />
+                <LiveStreamRow label="FHE Vault" amount="Encrypted" change="" changeColor="" />
+              </div>
+
+              {/* Bottom Nav */}
+              <div className="flex items-center justify-around mt-5 pt-4 border-t border-white/[0.06]">
+                {['📋', '↔', '⏰', '⚙'].map((icon, i) => (
+                  <button key={i} className="text-lg text-zinc-500 hover:text-white transition-colors p-2">
+                    {icon}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Floating shield decoration */}
+            <div className="solflare-shield">
+              <svg viewBox="0 0 40 48" fill="none" className="w-12 h-14">
+                <path d="M20 0L40 10V28C40 38 30 46 20 48C10 46 0 38 0 28V10L20 0Z" fill="white" fillOpacity="0.9" />
+                <path d="M20 6L34 13V28C34 35 27 41 20 43C13 41 6 35 6 28V13L20 6Z" fill="rgba(34,211,238,0.15)" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Bottom right label */}
+          <div className="absolute bottom-8 right-8">
+            <div className="px-4 py-2 rounded-lg border border-black/20 text-[11px] font-bold text-black/60 uppercase tracking-[0.15em] cursor-default hover:bg-black/5 transition-colors">
+              EXTENSION
+            </div>
+          </div>
         </div>
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-2">
-        <article className="panel-card">
-          <h2 className="text-xl font-bold">{COPY.home.companiesTitle}</h2>
-          <p className="mt-2 text-sm text-slate-600">{COPY.home.companiesText}</p>
-          <ul className="mt-3 space-y-2 text-sm text-slate-700">
-            <li>1. Create payroll wallet</li>
-            <li>2. Add payroll funds</li>
-            <li>3. Add employees and pay plans</li>
-            <li>4. Turn on high-speed mode (optional)</li>
-          </ul>
-          <Link href="/employer" className="mt-4 inline-flex premium-btn premium-btn-primary">
-            Go to Company Payroll
-          </Link>
-        </article>
-
-        <article className="panel-card">
-          <h2 className="text-xl font-bold">{COPY.home.workersTitle}</h2>
-          <p className="mt-2 text-sm text-slate-600">{COPY.home.workersText}</p>
-          <ul className="mt-3 space-y-2 text-sm text-slate-700">
-            <li>1. Load payroll record</li>
-            <li>2. Reveal live earnings</li>
-            <li>3. Request payout</li>
-            <li>4. Share verified earnings statement</li>
-          </ul>
-          <Link href="/employee" className="mt-4 inline-flex premium-btn premium-btn-secondary">
-            Go to Employee Portal
-          </Link>
-        </article>
-      </section>
-
-      <section className="panel-card">
-        <h3 className="text-lg font-bold">Why Expensee</h3>
-        <p className="mt-2 text-sm text-slate-600">
-          Expensee combines encrypted payroll amounts with private payout routing to reduce who-paid-whom exposure on-chain.
-        </p>
-        <ul className="mt-3 space-y-2 text-sm text-slate-700">
-          <li>1. Amount privacy: salaries, accruals, and payouts stay encrypted.</li>
-          <li>2. Realtime experience: earnings update continuously with on-demand payout requests.</li>
-          <li>3. Linkability reduction: shielded routing breaks direct employer-to-employee payout traces.</li>
-        </ul>
-        <p className="mt-3 text-sm text-slate-600">
-          Advanced tools are available for judges and operator review.
-        </p>
-        <div className="mt-3">
-          <Link href="/bridge" className="text-sm underline">
-            Open Bridge (Advanced)
-          </Link>
-        </div>
-      </section>
-    </PageShell>
+      </div>
+    </>
   );
 }
