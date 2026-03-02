@@ -33,8 +33,8 @@ export function Benefits() {
                     {/* Card 1 */}
                     {/* Card 1: FHE */}
                     <BenefitCard
-                        title="Inco FHE Privacy"
-                        subtitle="Fully Homomorphic Encryption keeps salary amounts and balances private on-chain."
+                        title="Absolute Salary Privacy"
+                        subtitle="Fully Homomorphic Encryption ensures salary amounts and balances remain private, even from node operators."
                         index={0}
                     >
                         <div className="relative w-full h-full flex flex-col p-8 font-mono">
@@ -62,8 +62,8 @@ export function Benefits() {
 
                     {/* Card 2: TEE */}
                     <BenefitCard
-                        title="MagicBlock TEEs"
-                        subtitle="Real-time salary accrual every second in a secure off-chain enclave."
+                        title="Continuous Earnings"
+                        subtitle="Real-time salary accrual every second, powered by secure off-chain execution enclaves."
                         index={1}
                     >
                         <div className="relative w-full h-full flex flex-col items-center justify-center p-8">
@@ -102,8 +102,8 @@ export function Benefits() {
 
                     {/* Card 3: Keeper */}
                     <BenefitCard
-                        title="Expensee Keeper"
-                        subtitle="Failover-resistant automation for settlements and Ghost Mode withdrawals."
+                        title="Automated Settlements"
+                        subtitle="Smart automation for global settlements and high-security Ghost Mode withdrawals."
                         index={2}
                     >
                         <div className="relative w-full h-full flex flex-col p-8">

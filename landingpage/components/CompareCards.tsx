@@ -24,21 +24,21 @@ const features = [
 const plans = [
     {
         name: "Starter",
-        description: "For solo founders",
+        description: "Small Teams & Founders",
         price: "Free",
         features: ["5 Employees", "Real-time Accrual", "USDC Payouts"],
         color: "zinc"
     },
     {
         name: "Growth",
-        description: "For scaling teams",
+        description: "Growing Organizations",
         price: "$99",
         features: ["Unlimited Employees", "FHE Privacy", "Stealth Addresses"],
         color: "teal"
     },
     {
         name: "Enterprise",
-        description: "For organisations",
+        description: "Global Enterprises",
         price: "Custom",
         features: ["Dedicated Keeper", "Multi-sig Treasury", "Compliance Reports"],
         color: "purple"
