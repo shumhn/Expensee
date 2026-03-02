@@ -126,7 +126,7 @@ export function GlobalScale() {
                                     style={{
                                         width: `${300 + i * 150}px`,
                                         height: `${300 + i * 150}px`,
-                                        boxShadow: i === 0 ? '0 0 50px rgba(30, 186, 152, 0.05)' : 'none'
+                                        boxShadow: i === 0 ? '0 0 50px rgba(35, 209, 232, 0.05)' : 'none'
                                     }}
                                 >
                                     {[...Array(8)].map((_, j) => (
@@ -148,7 +148,7 @@ export function GlobalScale() {
                                 <motion.div
                                     animate={{ scale: [1, 1.1, 1] }}
                                     transition={{ duration: 4, repeat: Infinity }}
-                                    className="w-32 h-32 rounded-full bg-expensee-neon/10 border border-expensee-neon/30 flex items-center justify-center backdrop-blur-md shadow-[0_0_50px_rgba(30,186,152,0.2)]"
+                                    className="w-32 h-32 rounded-full bg-expensee-neon/10 border border-expensee-neon/30 flex items-center justify-center backdrop-blur-md shadow-[0_0_50px_rgba(35,209,232,0.2)]"
                                 >
                                     <Cpu className="w-10 h-10 text-expensee-neon" />
                                     {/* Rotating Ring */}

@@ -18,8 +18,8 @@ export function AgenticStream() {
                 <svg className="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-visible">
                     <defs>
                         <linearGradient id="beam-green" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stopColor="rgba(30,186,152,0)" />
-                            <stop offset="100%" stopColor="rgba(30,186,152,0.8)" />
+                            <stop offset="0%" stopColor="rgba(35,209,232,0)" />
+                            <stop offset="100%" stopColor="rgba(35,209,232,0.8)" />
                         </linearGradient>
                         <linearGradient id="beam-blue" x1="0%" y1="100%" x2="100%" y2="0%">
                             <stop offset="0%" stopColor="rgba(96,165,250,0)" />
@@ -27,7 +27,7 @@ export function AgenticStream() {
                         </linearGradient>
                         <linearGradient id="beam-green-out" x1="0%" y1="50%" x2="100%" y2="50%">
                             <stop offset="0%" stopColor="var(--color-expensee-neon)" />
-                            <stop offset="100%" stopColor="rgba(30,186,152,0)" />
+                            <stop offset="100%" stopColor="rgba(35,209,232,0)" />
                         </linearGradient>
                         <linearGradient id="beam-blue-out" x1="0%" y1="50%" x2="100%" y2="50%">
                             <stop offset="0%" stopColor="#60a5fa" />
@@ -119,7 +119,7 @@ export function AgenticStream() {
                     title="Inco FHE"
                     status="Encrypting State"
                     color="text-expensee-neon"
-                    glow="shadow-[0_0_20px_rgba(30,186,152,0.2)]"
+                    glow="shadow-[0_0_20px_rgba(35,209,232,0.2)]"
                     border="border-expensee-neon/30"
                 />
 
@@ -146,7 +146,7 @@ export function AgenticStream() {
                     <motion.div
                         animate={{ y: [-5, 5, -5] }}
                         transition={{ duration: 4.5, repeat: Infinity, ease: "easeInOut" }}
-                        className="w-56 h-[72px] p-4 rounded-xl bg-black/80 backdrop-blur-md border-dashed border border-expensee-neon/30 shadow-[0_0_20px_rgba(30,186,152,0.2)] flex items-center gap-4"
+                        className="w-56 h-[72px] p-4 rounded-xl bg-black/80 backdrop-blur-md border-dashed border border-expensee-neon/30 shadow-[0_0_20px_rgba(35,209,232,0.2)] flex items-center gap-4"
                     >
                         <div className="flex-shrink-0 p-2.5 rounded-lg bg-black/50 border border-dashed border-expensee-neon/30 text-expensee-neon">
                             <CircleDollarSign className="w-5 h-5" />

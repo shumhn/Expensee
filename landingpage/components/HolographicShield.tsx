@@ -19,7 +19,7 @@ export function HolographicShield() {
                 className="relative w-[320px] h-[400px]"
             >
                 {/* The Shield Container */}
-                <div className="absolute inset-0 drop-shadow-[0_0_50px_rgba(30,186,152,0.3)]">
+                <div className="absolute inset-0 drop-shadow-[0_0_50px_rgba(35,209,232,0.3)]">
                     {/* SVG Border Layer */}
                     <svg viewBox="0 0 320 400" className="absolute inset-0 w-full h-full pointer-events-none z-50 overflow-visible">
                         <defs>
@@ -54,7 +54,7 @@ export function HolographicShield() {
                         }}
                     >
                         {/* Background Grid */}
-                        <div className="absolute inset-0 bg-[linear-gradient(rgba(30,186,152,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(30,186,152,0.03)_1px,transparent_1px)] bg-[size:24px_24px]" />
+                        <div className="absolute inset-0 bg-[linear-gradient(rgba(35,209,232,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(35,209,232,0.03)_1px,transparent_1px)] bg-[size:24px_24px]" />
 
                         {/* Internal Glow */}
                         <div className="absolute top-0 inset-x-0 h-2/3 bg-gradient-to-b from-expensee-neon/10 to-transparent opacity-60" />
@@ -64,7 +64,7 @@ export function HolographicShield() {
 
                             {/* Icon - Moved Up */}
                             <div className="relative mb-4">
-                                <div className="w-16 h-16 rounded-full bg-expensee-neon/10 flex items-center justify-center border border-expensee-neon/50 shadow-[0_0_30px_rgba(30,186,152,0.3)] animate-pulse">
+                                <div className="w-16 h-16 rounded-full bg-expensee-neon/10 flex items-center justify-center border border-expensee-neon/50 shadow-[0_0_30px_rgba(35,209,232,0.3)] animate-pulse">
                                     <Activity className="w-8 h-8 text-expensee-neon" />
                                 </div>
                                 <div className="absolute -inset-2 border border-dashed border-expensee-neon/30 rounded-full animate-[spin_10s_linear_infinite]" />
