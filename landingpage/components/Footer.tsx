@@ -26,9 +26,9 @@ export function Footer() {
                     <FooterColumn
                         title="Platform"
                         links={[
-                            { label: "Employer Dashboard", href: "https://onyx-fii.vercel.app/employer" },
-                            { label: "Employee Portal", href: "https://onyx-fii.vercel.app/employee" },
-                            { label: "Onboarding", href: "https://onyx-fii.vercel.app/" }
+                            { label: "Sign Up", href: "https://onyx-fii.vercel.app/" },
+                            { label: "Contractor Onboarding", href: "https://onyx-fii.vercel.app/" },
+                            { label: "Accounting Sync", href: "https://onyx-fii.vercel.app/" }
                         ]}
                     />
                     <FooterColumn
