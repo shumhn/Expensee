@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { ReactNode } from 'react';
-import { ThemeToggle } from './ThemeToggle';
 import { Logo } from './Logo';
 
 const WalletButton = dynamic(() => import('./WalletButton'), {
@@ -63,7 +62,6 @@ export default function PageShell({ icon = '', title, subtitle, navItems = [], c
               </nav>
             )}
             <div className="flex items-center gap-3">
-              <ThemeToggle />
               <WalletButton />
             </div>
           </div>

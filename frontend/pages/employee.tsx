@@ -864,6 +864,25 @@ export default function EmployeePage() {
     return () => clearInterval(timer);
   }, [autoRefresh, employerWallet, loadStatus, streamIndex]);
 
+  // Auto-dismiss transient UI banners so they don't stay forever.
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setError(''), 7000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timer = window.setTimeout(() => setActionMessage(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [actionMessage]);
+
+  useEffect(() => {
+    if (!revealMessage) return;
+    const timer = window.setTimeout(() => setRevealMessage(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [revealMessage]);
+
   // Local 1s ticker for Zebec-like "earned so far" UX.
   useEffect(() => {
     if (earnedTimerRef.current) {
@@ -896,21 +915,19 @@ export default function EmployeePage() {
 
   return (
     <PageShell
-      icon="◉"
+      icon=""
       title="Expensee"
       subtitle={COPY.employee.subtitle}
       navItems={[
-        { href: '/', label: COPY.nav.home },
         { href: '/employer', label: COPY.nav.company },
-        { href: '/employee', label: COPY.nav.worker },
-        { href: '/bridge', label: COPY.nav.bridge, advanced: true },
+        { href: '/bridge', label: COPY.nav.bridge },
       ]}
     >
       <Head>
         <title>Employee Portal | Expensee</title>
       </Head>
-
-      <section className="hero-card">
+      <div className="employee-portal">
+      <section className="hero-card setup-hero">
         <p className="hero-eyebrow">Employee view</p>
         <h1 className="hero-title">{COPY.employee.title}</h1>
         <p className="hero-subtitle">
@@ -953,7 +970,7 @@ export default function EmployeePage() {
               <button
                 onClick={() => void loadStatus()}
                 disabled={statusLoading || !employerWallet || streamIndex === null}
-                className="w-full rounded-lg bg-[#1D3557] px-4 py-2 text-sm text-white disabled:opacity-50"
+                className="w-full premium-btn premium-btn-primary disabled:opacity-50"
               >
                 {statusLoading ? 'Loading...' : 'Load Payroll Status'}
               </button>
@@ -1019,7 +1036,7 @@ export default function EmployeePage() {
                   setLastClaimProof(null);
                   setActionMessage('Cleared saved lookup fields.');
                 }}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm"
+                className="w-full premium-btn premium-btn-secondary"
               >
                 Clear Saved Lookup
               </button>
@@ -1149,7 +1166,7 @@ export default function EmployeePage() {
                       }
                     }}
                     disabled={withdrawLoading || !status}
-                    className="w-full rounded-lg bg-[#2D2D2A] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-black/10 disabled:opacity-50"
+                    className="w-full premium-btn premium-btn-primary disabled:opacity-50"
                   >
                     {withdrawLoading ? 'Processing Request...' : 'Trigger Payout Request'}
                   </button>
@@ -1244,7 +1261,7 @@ export default function EmployeePage() {
                           }
                         }}
                         disabled={claimLoading || !wallet.publicKey}
-                        className="rounded-md border border-[#005B96]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#005B96] disabled:opacity-50"
+                        className="premium-btn premium-btn-secondary px-3 py-1.5 text-xs disabled:opacity-50"
                       >
                         Create Private Destination
                       </button>
@@ -1334,7 +1351,7 @@ export default function EmployeePage() {
                               }
                             }}
                             disabled={claimLoading || claimingNonce === p.nonce || !wallet.publicKey}
-                            className="rounded-lg border border-blue-300 bg-blue-50 px-4 py-2.5 text-xs font-semibold text-blue-700 disabled:opacity-50"
+                            className="premium-btn premium-btn-primary px-4 py-2.5 text-xs disabled:opacity-50"
                           >
                             {claimLoading && claimingNonce === p.nonce ? 'Authorizing...' : 'Authorize Keeper Claim'}
                           </button>
@@ -1510,7 +1527,7 @@ export default function EmployeePage() {
                   }
                 }}
                 disabled={revealLoading || !status}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
+                className="w-full premium-btn premium-btn-secondary disabled:opacity-50"
               >
                 {revealLoading ? 'Revealing via Keeper...' : 'Reveal Live Earnings (Keeper)'}
               </button>
@@ -1533,7 +1550,7 @@ export default function EmployeePage() {
                       }
                     }}
                     disabled={revealLoading || !status}
-                    className="mt-3 rounded-md bg-[#1D3557] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#15304d] disabled:opacity-50"
+                    className="mt-3 premium-btn premium-btn-primary disabled:opacity-50"
                   >
                     {revealLoading ? 'Revealing...' : 'Reveal via Keeper Relay'}
                   </button>
@@ -1737,7 +1754,7 @@ export default function EmployeePage() {
                   }
                 }}
                 disabled={payslipLoading || !status}
-                className="w-full rounded-lg bg-[#E85D04] px-4 py-2 text-sm text-white disabled:opacity-50"
+                className="w-full premium-btn premium-btn-primary disabled:opacity-50"
               >
                 {payslipLoading ? 'Generating...' : 'Generate Signed Earnings Statement'}
               </button>
@@ -1898,6 +1915,7 @@ export default function EmployeePage() {
           </section>
         </>
       )}
+      </div>
     </PageShell>
   );
 }

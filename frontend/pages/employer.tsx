@@ -2571,10 +2571,8 @@ export default function EmployerPage() {
       title="Expensee"
       subtitle={COPY.employer.subtitle}
       navItems={[
-        { href: "/", label: COPY.nav.home },
-        { href: "/employer", label: COPY.nav.company },
         { href: "/employee", label: COPY.nav.worker },
-        { href: "/bridge", label: COPY.nav.bridge, advanced: true },
+        { href: "/bridge", label: COPY.nav.bridge },
       ]}
     >
       <Head>
@@ -2681,7 +2679,7 @@ export default function EmployerPage() {
                 <p className="inline-block px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 text-[10px] font-bold uppercase tracking-widest mb-3">
                   Config Command Center
                 </p>
-                <h1 className="text-4xl font-black tracking-tighter text-[var(--app-ink)] leading-tight">
+                <h1 className="font-sans text-[clamp(2rem,3.2vw,3rem)] font-bold tracking-[-0.01em] text-[var(--app-ink)] leading-[1.08]">
                   {COPY.employer.title}
                 </h1>
                 <p className="mt-4 text-[var(--app-muted)] font-medium max-w-xl">

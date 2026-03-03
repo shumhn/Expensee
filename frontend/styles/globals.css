@@ -686,10 +686,10 @@ a:hover {
 
 .step-card-kicker {
   margin: 0;
-  font-family: var(--font-outfit), sans-serif;
+  font-family: var(--font-inter), sans-serif;
   font-size: 0.63rem;
-  font-weight: 800;
-  letter-spacing: 0.13em;
+  font-weight: 700;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--app-primary);
   opacity: 0.92;
@@ -697,12 +697,12 @@ a:hover {
 
 .step-card-title {
   margin: 0.18rem 0 0;
-  font-family: var(--font-outfit), sans-serif;
-  font-size: clamp(1.55rem, 2vw, 2.1rem);
-  line-height: 1.12;
-  letter-spacing: -0.015em;
+  font-family: var(--font-inter), sans-serif;
+  font-size: clamp(1.45rem, 1.9vw, 1.95rem);
+  line-height: 1.16;
+  letter-spacing: -0.01em;
   color: var(--app-ink);
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .step-card-description {
@@ -1686,4 +1686,124 @@ a:hover {
 .animate-fade-in {
   opacity: 0;
   animation: fade-in 0.8s ease-out forwards;
+}
+
+/* ==============================
+   Employee Portal – Brand Sync
+   ============================== */
+.employee-portal {
+  display: grid;
+  gap: 1rem;
+}
+
+.employee-portal .hero-title,
+.employee-portal h2 {
+  font-family: var(--font-inter), sans-serif;
+  letter-spacing: -0.01em;
+  color: var(--app-ink);
+}
+
+.employee-portal .hero-title {
+  font-size: clamp(2.15rem, 3.4vw, 3.1rem);
+  font-weight: 700;
+  line-height: 1.08;
+}
+
+.employee-portal .hero-eyebrow {
+  font-family: var(--font-inter), sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.employee-portal h2 {
+  font-weight: 700;
+}
+
+.employee-portal .panel-card {
+  background: color-mix(in srgb, var(--app-surface) 94%, #000 6%);
+  border-color: var(--app-border);
+}
+
+.employee-portal .text-gray-700,
+.employee-portal .text-gray-600,
+.employee-portal .text-gray-500,
+.employee-portal .text-gray-400 {
+  color: var(--app-muted) !important;
+}
+
+.employee-portal .text-\[\#2D2D2A\] {
+  color: var(--app-ink) !important;
+}
+
+.employee-portal input,
+.employee-portal select,
+.employee-portal textarea {
+  border-color: color-mix(in srgb, var(--app-border) 65%, var(--app-primary) 35%) !important;
+  background: color-mix(in srgb, var(--app-surface-alt) 90%, #000 10%) !important;
+  color: var(--app-ink) !important;
+}
+
+.employee-portal input::placeholder,
+.employee-portal textarea::placeholder {
+  color: color-mix(in srgb, var(--app-muted) 82%, #b2c4db 18%);
+}
+
+.employee-portal pre {
+  border: 1px solid var(--app-border);
+  background: color-mix(in srgb, var(--app-surface-alt) 88%, #000 12%) !important;
+}
+
+/* ==============================
+   Bridge Portal – Brand Sync
+   ============================== */
+.bridge-portal {
+  display: grid;
+  gap: 1rem;
+}
+
+.bridge-portal .hero-title,
+.bridge-portal h2,
+.bridge-portal h3 {
+  font-family: var(--font-inter), sans-serif;
+  color: var(--app-ink);
+}
+
+.bridge-portal .hero-title {
+  font-size: clamp(2.15rem, 3.4vw, 3.1rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+}
+
+.bridge-portal .hero-eyebrow {
+  font-family: var(--font-inter), sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.bridge-portal h2 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.bridge-portal h3 {
+  font-weight: 700;
+}
+
+.bridge-portal .panel-card {
+  background: color-mix(in srgb, var(--app-surface) 94%, #000 6%);
+  border-color: var(--app-border);
+}
+
+.bridge-portal input,
+.bridge-portal select,
+.bridge-portal textarea {
+  border-color: color-mix(in srgb, var(--app-border) 65%, var(--app-primary) 35%) !important;
+  background: color-mix(in srgb, var(--app-surface-alt) 90%, #000 10%) !important;
+  color: var(--app-ink) !important;
+}
+
+.bridge-portal input::placeholder,
+.bridge-portal textarea::placeholder {
+  color: color-mix(in srgb, var(--app-muted) 82%, #b2c4db 18%);
 }

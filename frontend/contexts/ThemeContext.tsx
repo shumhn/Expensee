@@ -14,35 +14,24 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const [theme, setThemeState] = useState<Theme>('dark');
 
     useEffect(() => {
-        // Check local storage or system preference
-        const savedTheme = localStorage.getItem('theme') as Theme | null;
-        if (savedTheme) {
-            setThemeState(savedTheme);
-        } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
-            setThemeState('light');
-        }
+        // Dark mode is enforced app-wide.
+        setThemeState('dark');
     }, []);
 
     useEffect(() => {
         // Apply theme to html element
         const root = window.document.documentElement;
-        root.setAttribute('data-theme', theme);
-        localStorage.setItem('theme', theme);
-
-        // Also apply a class for tailwind if needed, though we'll mostly use data-theme for now
-        if (theme === 'dark') {
-            root.classList.add('dark');
-        } else {
-            root.classList.remove('dark');
-        }
+        root.setAttribute('data-theme', 'dark');
+        root.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
     }, [theme]);
 
     const toggleTheme = () => {
-        setThemeState((prev) => (prev === 'light' ? 'dark' : 'light'));
+        setThemeState('dark');
     };
 
-    const setTheme = (newTheme: Theme) => {
-        setThemeState(newTheme);
+    const setTheme = (_newTheme: Theme) => {
+        setThemeState('dark');
     };
 
     return (

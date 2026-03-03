@@ -1,14 +1,14 @@
 import Head from 'next/head';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { Connection, PublicKey, Transaction } from '@solana/web3.js';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { useRouter } from 'next/router';
 
 import { createIncoTokenAccount } from '../lib/payroll-client';
-
-const WalletButton = dynamic(() => import('../components/WalletButton'), { ssr: false });
+import PageShell from '../components/PageShell';
+import ActionResult from '../components/ActionResult';
+import { COPY } from '../lib/copy';
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
@@ -136,6 +136,18 @@ export default function BridgePage() {
     }
   }, [router.isReady, router.query.amountUi, router.query.cashoutWallet, router.query.confidentialTokenAccount]);
 
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setTimeout(() => setError(''), 7000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
+    if (!status) return;
+    const timer = window.setTimeout(() => setStatus(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
   async function run(label: string, fn: () => Promise<void>) {
     const inProgressLabel = `${label}...`;
     setError('');
@@ -174,94 +186,100 @@ export default function BridgePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F7F2]">
+    <PageShell
+      icon=""
+      title="Expensee"
+      subtitle="Bridge public and private payroll balances"
+      navItems={[
+        { href: '/employer', label: COPY.nav.company },
+        { href: '/employee', label: COPY.nav.worker },
+      ]}
+    >
       <Head>
         <title>Move Money In/Out</title>
       </Head>
+      <div className="bridge-portal">
+        <section className="hero-card setup-hero">
+          <p className="hero-eyebrow">Bridge</p>
+          <h1 className="hero-title">Move Money In and Out</h1>
+          <p className="hero-subtitle">
+            Wrap moves public tokens into confidential payroll mode. Unwrap moves confidential balances back to normal wallet tokens.
+          </p>
+        </section>
 
-      <header className="bg-white shadow-sm">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-[#2D2D2A]">Move Money In and Out</h1>
-          </div>
-          <WalletButton />
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl px-4 py-10">
-        <div className="mb-4">
-          <Link href="/" className="text-sm text-[#1D3557] underline">
+        <div className="mb-2">
+          <Link href="/" className="text-sm text-[var(--app-primary)] underline">
             Back
           </Link>
         </div>
 
         {!enabled && (
-          <div className="rounded-2xl bg-amber-50 p-5 text-sm text-amber-900">
+          <div className="rounded-2xl border border-amber-300/30 bg-amber-500/10 p-5 text-sm text-amber-300">
             Bridge is disabled. Set <span className="font-mono">NEXT_PUBLIC_BRIDGE_ENABLED=true</span> in{' '}
             <span className="font-mono">app/.env.local</span>.
           </div>
         )}
         {enabled && !publicMintConfigured && (
-          <div className="mt-4 rounded-2xl bg-amber-50 p-5 text-sm text-amber-900">
+          <div className="rounded-2xl border border-amber-300/30 bg-amber-500/10 p-5 text-sm text-amber-300">
             Configure <span className="font-mono">NEXT_PUBLIC_PUBLIC_USDC_MINT</span> (a public SPL mint, 6 decimals recommended) in{' '}
             <span className="font-mono">app/.env.local</span>.
           </div>
         )}
 
-        <section className="mt-4 rounded-3xl bg-white p-8 shadow-sm">
-          <h2 className="text-2xl font-semibold text-[#2D2D2A]">What This Does</h2>
-          <p className="mt-3 text-sm text-gray-700">
+        <section className="panel-card">
+          <h2 className="text-2xl font-semibold text-[var(--app-ink)]">What This Does</h2>
+          <p className="mt-3 text-sm text-[var(--app-muted)]">
             Use this page to move between normal wallet money and private payroll money.
             Wrap = move into private mode. Unwrap = move back to normal wallet money.
           </p>
 
           <div className="mt-6 grid gap-3 md:grid-cols-2">
-            <div className="rounded-2xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-[#2D2D2A]">Inputs</h3>
-              <label className="mt-3 block text-xs text-gray-700">
+            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)]/40 p-5">
+              <h3 className="font-semibold text-[var(--app-ink)]">Inputs</h3>
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Public token mint
                 <input
                   value={publicMint}
                   onChange={(e) => setPublicMint(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm"
                 />
               </label>
-              <label className="mt-3 block text-xs text-gray-700">
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Amount (UI)
                 <input
                   value={amountUi}
                   onChange={(e) => setAmountUi(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm"
                 />
               </label>
-              <label className="mt-3 block text-xs text-gray-700">
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Your public token account
-                <input value={userAta} readOnly className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm" />
+                <input value={userAta} readOnly className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm" />
               </label>
-              <label className="mt-3 block text-xs text-gray-700">
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Wallet to receive money on unwrap (optional)
                 <input
                   value={cashoutWallet}
                   onChange={(e) => setCashoutWallet(e.target.value)}
                   placeholder="Leave empty to use your connected wallet"
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm"
                 />
               </label>
-              <label className="mt-3 block text-xs text-gray-700">
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Receiver token account
                 <input
                   value={unwrapDestinationAta}
                   readOnly
-                  className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm"
                 />
               </label>
-              <label className="mt-3 block text-xs text-gray-700">
+              <label className="mt-3 block text-xs text-[var(--app-muted)]">
                 Your private payroll account
                 <input
                   value={confidentialTokenAccount}
                   onChange={(e) => setConfidentialTokenAccount(e.target.value)}
                   placeholder="Paste / create your Inco token account for payroll token"
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-sm"
                 />
               </label>
 
@@ -277,7 +295,6 @@ export default function BridgePage() {
                       setStatus(`Public ATA already exists: ${ata.toBase58()}`);
                       return;
                     }
-                    // Create ATA with wallet as payer.
                     const ix = createAssociatedTokenAccountIx({
                       payer: wallet.publicKey,
                       ata,
@@ -289,7 +306,7 @@ export default function BridgePage() {
                     setStatus(`Create ATA tx: ${sig}`);
                   })
                 }
-                className="mt-4 w-full rounded-xl bg-[#1D3557] px-5 py-3 text-center text-sm font-medium text-white disabled:opacity-50"
+                className="mt-4 w-full premium-btn premium-btn-primary disabled:opacity-50"
               >
                 Create Public Token Account
               </button>
@@ -308,15 +325,15 @@ export default function BridgePage() {
                     setStatus(`Created confidential token account: ${tokenAccount.toBase58()} (tx=${txid})`);
                   })
                 }
-                className="mt-2 w-full rounded-xl border border-gray-300 px-5 py-3 text-center text-sm font-medium disabled:opacity-50"
+                className="mt-2 w-full premium-btn premium-btn-secondary disabled:opacity-50"
               >
                 Create Private Payroll Account
               </button>
             </div>
 
-            <div className="rounded-2xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-[#2D2D2A]">Actions</h3>
-              <p className="mt-2 text-sm text-gray-600">
+            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)]/40 p-5">
+              <h3 className="font-semibold text-[var(--app-ink)]">Actions</h3>
+              <p className="mt-2 text-sm text-[var(--app-muted)]">
                 Wrap moves money from public wallet to private payroll.
                 Unwrap moves money from private payroll back to public wallet.
               </p>
@@ -350,7 +367,7 @@ export default function BridgePage() {
                     setStatus(`Wrap tx sent: ${sig}`);
                   })
                 }
-                className="mt-4 w-full rounded-xl bg-[#2A9D8F] px-5 py-3 text-center text-sm font-medium text-white disabled:opacity-50"
+                className="mt-4 w-full premium-btn premium-btn-secondary disabled:opacity-50"
               >
                 Wrap: Public to Private
               </button>
@@ -385,20 +402,20 @@ export default function BridgePage() {
                     setStatus(`Unwrap tx sent: ${sig}`);
                   })
                 }
-                className="mt-2 w-full rounded-xl border border-gray-300 px-5 py-3 text-center text-sm font-medium disabled:opacity-50"
+                className="mt-2 w-full premium-btn premium-btn-primary disabled:opacity-50"
               >
                 Unwrap: Private to Public
               </button>
 
-              {status && <p className="mt-4 rounded bg-green-50 px-3 py-2 text-sm text-green-700">{status}</p>}
-              {error && <p className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+              {status ? <ActionResult kind="success">{status}</ActionResult> : null}
+              {error ? <ActionResult kind="error">{error}</ActionResult> : null}
               {!status && !error && lastResult ? (
-                <p className="mt-4 rounded bg-gray-50 px-3 py-2 text-sm text-gray-700">Last result: {lastResult}</p>
+                <ActionResult kind="info">Last result: {lastResult}</ActionResult>
               ) : null}
             </div>
           </div>
         </section>
-      </main>
-    </div>
+      </div>
+    </PageShell>
   );
 }
