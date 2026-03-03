@@ -2218,19 +2218,11 @@ export default function EmployerPage() {
           }
 
           if (step.key === "pause-stream") {
-            const index = Number(
-              agentDraft?.streamIndex ??
-              streamStatus?.streamIndex ??
-              streamIndexInput
-            );
-            if (!Number.isFinite(index) || index < 0) {
-              throw new Error("No valid payroll record number selected to pause.");
-            }
             const txid = await pauseStreamV2(
               connection,
               wallet,
               ownerPubkey,
-              index,
+              1,
             );
             updateStep(step.key, { status: "done", txid });
             continue;
@@ -2590,16 +2582,8 @@ export default function EmployerPage() {
           );
           result = { txid, detail: "High-speed mode enabled." };
         } else if (nextStep.key === "pause-stream") {
-          const index = Number(
-            agentDraft?.streamIndex ??
-            streamStatus?.streamIndex ??
-            streamIndexInput
-          );
-          if (!Number.isFinite(index) || index < 0) {
-            throw new Error("No valid payroll record number selected to pause.");
-          }
-          const txid = await pauseStreamV2(connection, wallet, ownerPubkey, index);
-          result = { txid, detail: "Payroll stream paused." };
+          const txid = await pauseStreamV2(connection, wallet, ownerPubkey, 1);
+          result = { txid, detail: "Payroll paused." };
         } else if (nextStep.key === "resume-stream") {
           const txid = await resumeStreamV2(connection, wallet);
           let detail = "Payroll stream resumed.";
