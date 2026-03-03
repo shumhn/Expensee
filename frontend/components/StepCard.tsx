@@ -21,20 +21,25 @@ const stateLabel: Record<StepState, { text: string; tone: 'success' | 'warning' 
 export default function StepCard({ number, title, description, state, children }: StepCardProps) {
   const label = stateLabel[state];
   return (
-    <section className={`step-card step-${state} glass transition-all duration-300 hover:shadow-2xl`}>
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4 mb-6">
+    <section className={`step-card step-${state} transition-all duration-300`}>
+      <div className="step-card-header">
         <div className="flex items-center gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-sm font-bold text-white shadow-lg">
+          <div className="step-card-index">
             {number}
           </div>
-          <div>
-            <h2 className="text-xl font-bold tracking-tight text-slate-900">{title}</h2>
-            <p className="text-sm font-medium text-slate-500">{description}</p>
+          <div className="step-card-title-wrap">
+            <p className="step-card-kicker">Step {number}</p>
+            <h2 className="step-card-title">{title}</h2>
+            <p className="step-card-description">{description}</p>
           </div>
         </div>
-        <StatusPill tone={label.tone}>{label.text}</StatusPill>
+        <div className="step-card-status">
+          <StatusPill tone={label.tone}>{label.text}</StatusPill>
+        </div>
       </div>
-      <div className="step-card-body px-1">{children}</div>
+      <div className="step-card-body">
+        <div className="step-card-flow">{children}</div>
+      </div>
     </section>
   );
 }

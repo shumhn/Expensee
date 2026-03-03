@@ -22,6 +22,8 @@ const inter = Inter({
   display: 'swap',
 });
 
+import { ThemeProvider } from '../contexts/ThemeContext';
+
 // Dynamically import WalletModalProvider to avoid SSR issues
 const WalletModalProvider = dynamic(
   async () => (await import('@solana/wallet-adapter-react-ui')).WalletModalProvider,
@@ -51,9 +53,11 @@ export default function App({ Component, pageProps }: AppProps) {
     <div className={`${outfit.variable} ${inter.variable}`}>
       <ConnectionProvider endpoint={endpoint}>
         <WalletProvider wallets={wallets} autoConnect={false} localStorageKey="private-payroll-wallet">
-          <WalletModalProvider>
-            <Component {...pageProps} />
-          </WalletModalProvider>
+          <ThemeProvider>
+            <WalletModalProvider>
+              <Component {...pageProps} />
+            </WalletModalProvider>
+          </ThemeProvider>
         </WalletProvider>
       </ConnectionProvider>
     </div>

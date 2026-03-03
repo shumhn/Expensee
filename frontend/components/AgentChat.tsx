@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Logo } from './Logo';
 
 type ChatMessage = {
     id: string;
@@ -76,11 +77,11 @@ const GO_COMMANDS = [
     '**"next"**',
     '**"proceed"**',
     '**"do it"**',
-    '**"let\'s go"** 🚀',
-    '**"run"** ⚡',
-    '**"execute"** 🔥',
-    '**"next"** →',
-    '**"go"** 💨',
+    '**"let\'s go"** ',
+    '**"run"** ',
+    '**"execute"** ',
+    '**"next"** ',
+    '**"go"** ',
 ];
 
 function randomGoCmd(): string {
@@ -128,7 +129,7 @@ export default function AgentChat({
     const [pendingPlan, setPendingPlan] = useState<ParsedPlan | null>(null);
     const [thinking, setThinking] = useState(false);
     const [optionStep, setOptionStep] = useState(0);
-    const bottomRef = useRef<HTMLDivElement>(null);
+    const messagesRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const hasGreeted = useRef(false);
     const isSending = useRef(false);
@@ -156,7 +157,12 @@ export default function AgentChat({
 
     // Auto-scroll to bottom
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        const container = messagesRef.current;
+        if (!container) return;
+        container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth',
+        });
     }, [messages, executionSteps, thinking]);
 
     // Route a message through Grok LLM for conversational responses
@@ -202,7 +208,7 @@ export default function AgentChat({
         // 🚨 EMERGENCY BAILOUT: If the wallet was closed and the promise hung, let the user force a reset
         if ((busy || phase === 'executing') && /\b(cancel|reset|stop|abort)\b/i.test(text)) {
             if (onCancelBusy) onCancelBusy();
-            addAgentMsg(`⏸️ I've forcefully cancelled the waiting operation. Type ${randomGoCmd()} when you are ready to try again.`);
+            addAgentMsg(`️ I've forcefully cancelled the waiting operation. Type ${randomGoCmd()} when you are ready to try again.`);
             setPhase('ask_setup');
             setInput('');
             isSending.current = false;
@@ -237,7 +243,7 @@ export default function AgentChat({
                 if (numMatch) {
                     const amount = numMatch[0];
                     setDepositAmount(amount);
-                    addAgentMsg(`✅ Got it! Moving **${amount} PayUSD** to your payroll vault.\n\n*Automatically proceeding to execute funding steps... Please approve the next transactions in your wallet.*`);
+                    addAgentMsg(` Got it! Moving **${amount} PayUSD** to your payroll vault.\n\n*Automatically proceeding to execute funding steps... Please approve the next transactions in your wallet.*`);
 
                     setPhase('executing');
                     setThinking(true);
@@ -274,12 +280,12 @@ export default function AgentChat({
                 const total = executionSteps.length;
 
                 if (total === 0) {
-                    addAgentMsg(`📋 **No execution steps yet.**\n\nType **"setup"** to start the onboarding flow, or paste a worker's wallet address.`);
+                    addAgentMsg(` **No execution steps yet.**\n\nType **"setup"** to start the onboarding flow, or paste a worker's wallet address.`);
                 } else if (!nextPending) {
-                    addAgentMsg(`✅ **All done!** Check the checklist below — everything is green. Paste a new worker wallet to add another, or ask me anything.`);
+                    addAgentMsg(` **All done!** Check the checklist below — everything is green. Paste a new worker wallet to add another, or ask me anything.`);
                 } else {
                     const nextIdx = executionSteps.findIndex(s => s.key === nextPending.key) + 1;
-                    addAgentMsg(`👇 **Check the checklist below.** You're on **Step ${nextIdx}: ${nextPending.label}**.\n\nType ${randomGoCmd()} to execute it!`);
+                    addAgentMsg(` **Check the checklist below.** You're on **Step ${nextIdx}: ${nextPending.label}**.\n\nType ${randomGoCmd()} to execute it!`);
                 }
                 return;
             }
@@ -288,7 +294,7 @@ export default function AgentChat({
             const isUseMyWallet = /\b(use\s+my\s+wallet|demo\s+mode|my\s+wallet|use\s+this\s+wallet)\b/i.test(text);
             if (isUseMyWallet && walletAddress) {
                 onApplyPlan({ employeeWallet: walletAddress, intent: 'create_stream' } as any);
-                addAgentMsg(`✅ **Using your wallet as the worker wallet!**\n\n\`${walletAddress}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
+                addAgentMsg(` **Using your wallet as the worker wallet!**\n\n\`${walletAddress}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
                 return;
             }
 
@@ -299,7 +305,7 @@ export default function AgentChat({
                 const isJustAddress = text.trim().length < 60;
                 if (isJustAddress) {
                     onApplyPlan({ employeeWallet: addr, intent: 'create_stream' } as any);
-                    addAgentMsg(`✅ **Worker wallet set!**\n\n\`${addr}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
+                    addAgentMsg(` **Worker wallet set!**\n\n\`${addr}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
                     return;
                 }
             }
@@ -319,9 +325,9 @@ export default function AgentChat({
                 const nextIdx = executionSteps.findIndex(s => s.key === nextStep?.key) + 1;
 
                 if (nextStep) {
-                    addAgentMsg(`🚀 **Executing Step ${nextIdx}/${stepCount}: ${nextStep.label}...**\n\n*Please approve the transaction in your wallet to proceed...*`);
+                    addAgentMsg(` **Executing Step ${nextIdx}/${stepCount}: ${nextStep.label}...**\n\n*Please approve the transaction in your wallet to proceed...*`);
                 } else {
-                    addAgentMsg(`🚀 **Checking for remaining steps...**\n\n*Please approve the transaction in your wallet to proceed...*`);
+                    addAgentMsg(` **Checking for remaining steps...**\n\n*Please approve the transaction in your wallet to proceed...*`);
                 }
 
                 try {
@@ -332,7 +338,7 @@ export default function AgentChat({
                     const nextStepExists = executionSteps.some(s => s.status === 'pending' && s.key !== 'refresh-state' && s.key !== step?.key);
 
                     if (!step && !nextStepExists) {
-                        addAgentMsg(`✅ **All steps completed successfully!** Your payroll setup is now live and fully operational.`);
+                        addAgentMsg(` **All steps completed successfully!** Your payroll setup is now live and fully operational.`);
                         setPhase('done');
                         return;
                     }
@@ -341,39 +347,39 @@ export default function AgentChat({
                         const proof = step.txid ? `\n\n**🔗 Transaction Proof:**\n[View on Solscan](https://solscan.io/tx/${step.txid}?cluster=devnet)` : '';
 
                         if (step.key === 'init-vault') {
-                            addAgentMsg(`🎊 **Step 4 (Vault Custody) is over!** Your company profile and payroll vault are fully initialized.${proof}\n\nType ${randomGoCmd()} to create your **Company Source Account (Step 5)**.`);
+                            addAgentMsg(` **Step 4 (Vault Custody) is over!** Your company profile and payroll vault are fully initialized.${proof}\n\nType ${randomGoCmd()} to create your **Company Source Account (Step 5)**.`);
                             setPhase('executing');
                         } else if (step.key === 'deposit-funds') {
-                            addAgentMsg(`🎉 **Step 6 (Funding) is complete!** Funds have been successfully deposited into the payroll vault.${proof}\n\nType ${randomGoCmd()} to move to **Step 7 (Initialize automation service)**.`);
+                            addAgentMsg(` **Step 6 (Funding) is complete!** Funds have been successfully deposited into the payroll vault.${proof}\n\nType ${randomGoCmd()} to move to **Step 7 (Initialize automation service)**.`);
                         } else if (step.key === 'create-worker-record') {
                             // Check if high-speed mode step exists and is pending
                             const hsStep = executionSteps.find(s => s.key === 'enable-high-speed');
                             if (hsStep && hsStep.status === 'pending') {
-                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\nType ${randomGoCmd()} to continue with **Enable High-speed Mode**, or you're all set!`);
+                                addAgentMsg(` **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\nType ${randomGoCmd()} to continue with **Enable High-speed Mode**, or you're all set!`);
                                 setPhase('confirm_plan');
                             } else {
-                                addAgentMsg(`🎉 **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\n🎉 **Setup is complete!** The employee can now open the **Employee Portal** at /employee.`);
+                                addAgentMsg(` **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee.`);
                                 setPhase('done');
                             }
                         } else if (step.key === 'enable-high-speed') {
-                            addAgentMsg(`⚡ **Step 8 (High-speed mode) enabled!** Your payroll stream is now delegated to MagicBlock for faster delegated execution.${proof}\n\n🎉 **Setup is complete!** The employee can now open the **Employee Portal** at /employee for earnings and withdrawals.`);
+                            addAgentMsg(` **Step 8 (High-speed mode) enabled!** Your payroll stream is now delegated to MagicBlock for faster delegated execution.${proof}\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee for earnings and withdrawals.`);
                             setPhase('done');
                         } else if (step.key === 'create-depositor-token') {
-                            addAgentMsg(`✅ **Step 5 (Company source account) created!** ${proof}\n\n**How much payroll funds** do you want to deposit into the vault for Step 6? (e.g. type "10" or "fund 100")`);
+                            addAgentMsg(` **Step 5 (Company source account) created!** ${proof}\n\n**How much payroll funds** do you want to deposit into the vault for Step 6? (e.g. type "10" or "fund 100")`);
                             setPhase('ask_funding');
                             return;
                         } else if (step.key === 'init-automation') {
-                            addAgentMsg(`✅ **Step 7: Automation service initialized!**${proof}\n\nNow let's add a worker. 👷 Please paste the **worker's Solana wallet address** or say **"use my wallet"** to test with your own wallet.`);
+                            addAgentMsg(` **Step 7: Automation service initialized!**${proof}\n\nNow let's add a worker.  Please paste the **worker's Solana wallet address** or say **"use my wallet"** to test with your own wallet.`);
                             setPhase('ask_wallet');
                         } else if (step.key === 'create-worker-token') {
-                            addAgentMsg(`✅ **Step 9: Worker destination account created!**${proof}\n\nNow let's set up the pay plan. Here are your options:\n\n💰 **Hourly** — e.g. "pay 25 per hour" (great for contractors)\n💰 **Weekly** — e.g. "pay 500 per week" (standard for part-time)\n💰 **Monthly (30d)** — e.g. "pay 3000 per month" (standard salary)\n💰 **Fixed Total** — e.g. "pay 5000 over 30 days" (project-based)\n💰 **Per-second** — e.g. "pay 0.0001 per second" (advanced)\n\nJust tell me how you'd like to pay!`);
+                            addAgentMsg(` **Step 9: Worker destination account created!**${proof}\n\nNow let's set up the pay plan. Here are your options:\n\n **Hourly** — e.g. "pay 25 per hour" (great for contractors)\n **Weekly** — e.g. "pay 500 per week" (standard for part-time)\n **Monthly (30d)** — e.g. "pay 3000 per month" (standard salary)\n **Fixed Total** — e.g. "pay 5000 over 30 days" (project-based)\n **Per-second** — e.g. "pay 0.0001 per second" (advanced)\n\nJust tell me how you'd like to pay!`);
                             setPhase('ask_pay');
                         } else if (step.key === 'configure-worker-options') {
-                            addAgentMsg(`✅ **Step 10: Pay plan configured!** Now let's set up your worker record preferences.\n\n👁️ **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
+                            addAgentMsg(` **Step 10: Pay plan configured!** Now let's set up your worker record preferences.\n\n **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
                             setOptionStep(0);
                             setPhase('ask_options');
                         } else {
-                            addAgentMsg(`✅ **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType ${randomGoCmd()} to move to the next step, or ask me any questions.`);
+                            addAgentMsg(` **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType ${randomGoCmd()} to move to the next step, or ask me any questions.`);
                         }
                         // Only keep 'executing' phase for steps that don't set their own phase
                         const stepsWithOwnPhase = ['init-automation', 'create-worker-token', 'configure-worker-options', 'create-depositor-token', 'create-worker-record', 'enable-high-speed'];
@@ -400,7 +406,7 @@ export default function AgentChat({
                     try {
                         const { reply } = await askGrok(text);
                         const questions = [
-                            `🤖 **Should the automation service be allowed to process confidential payouts automatically?** (yes/no)`,
+                            ` **Should the automation service be allowed to process confidential payouts automatically?** (yes/no)`,
                             `⏱️ **Should the payroll stop automatically at the end of this pay period?** (yes/no)`,
                         ];
                         addAgentMsg(reply + `\n\n` + questions[optionStep]);
@@ -414,12 +420,12 @@ export default function AgentChat({
 
                 if (optionStep === 0) {
                     setAutoGrantKeeperDecrypt?.(isYes);
-                    addAgentMsg(isYes ? `✅ **Automation enabled.**\n\n` : `⬜ **Manual settlement only.**\n\n`);
+                    addAgentMsg(isYes ? ` **Automation enabled.**\n\n` : `⬜ **Manual settlement only.**\n\n`);
                     addAgentMsg(`⏱️ **Stop payroll automatically at the end of period?** (yes/no)`);
                     setOptionStep(1);
                 } else if (optionStep === 1) {
                     setBoundPresetPeriod?.(isYes);
-                    addAgentMsg(isYes ? `✅ **Auto-stop active.**\n\n` : `⬜ **Continuous streaming.**\n\n`);
+                    addAgentMsg(isYes ? ` **Auto-stop active.**\n\n` : `⬜ **Continuous streaming.**\n\n`);
                     addAgentMsg(`🎯 **All options configured!** Type ${randomGoCmd()} to move to **Step 11: Create worker payroll record**.`);
                     setPhase('confirm_plan');
                 }
@@ -429,7 +435,7 @@ export default function AgentChat({
             // ---- EDIT / MODIFY PLAN HANDLER ----
             if (hasNumber || isEditKeyword || isOptionsKeyword) {
                 if (isOptionsKeyword) {
-                    addAgentMsg(`Sure! Let's re-configure options.\n\n🤖 **Allow automation service decrypt access?** (yes/no)`);
+                    addAgentMsg(`Sure! Let's re-configure options.\n\n **Allow automation service decrypt access?** (yes/no)`);
                     setOptionStep(0);
                     setPhase('ask_options');
                     return;
@@ -444,7 +450,7 @@ export default function AgentChat({
                         const details: string[] = [];
                         if (plan.payPreset) details.push(`Pay: **${plan.payPreset}**`);
                         if (plan.payAmount) details.push(`Amount: **${plan.payAmount}**`);
-                        addAgentMsg(`✅ **Pay plan updated!**\n\n${details.join('\n')}\n\nType ${randomGoCmd()} to proceed.`);
+                        addAgentMsg(` **Pay plan updated!**\n\n${details.join('\n')}\n\nType ${randomGoCmd()} to proceed.`);
                         setPhase('confirm_plan');
                     } else if (isEditKeyword) {
                         addAgentMsg(`Tell me the new plan, e.g. "500 per month".`);
@@ -494,20 +500,20 @@ export default function AgentChat({
     );
 
     return (
-        <section className="premium-agent-container glass overflow-hidden border border-slate-200/50 shadow-2xl rounded-3xl flex flex-col h-[500px] bg-slate-50/20 backdrop-blur-xl transition-all duration-500 hover:shadow-indigo-500/10 hover:border-indigo-500/30">
+        <section className="premium-agent-container glass overflow-hidden border border-[var(--app-border)] shadow-2xl rounded-3xl flex flex-col h-[620px] max-h-[78vh] bg-[var(--app-surface)] backdrop-blur-xl transition-all duration-500 hover:shadow-cyan-500/5 hover:border-cyan-400">
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-200/50 bg-white/40 backdrop-blur-md">
+            <div className="flex items-center justify-between p-5 border-b border-[var(--app-border)] bg-[var(--app-surface-alt)] backdrop-blur-md">
                 <div className="flex items-center gap-4">
                     <div className="relative">
-                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-2xl shadow-lg ring-4 ring-indigo-500/10">
-                            🤖
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#bff2ff] via-[#8fe8ff] to-[#6fdcff] flex items-center justify-center text-2xl shadow-lg ring-4 ring-cyan-300/20">
+                            <Logo className="w-7 h-7 text-[#05334a]" />
                         </div>
-                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${phase === 'executing' ? 'bg-amber-500' : !ready || !hydrated || thinking ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-500'
+                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-[var(--app-surface)] shadow-sm ${phase === 'executing' ? 'bg-amber-500' : !ready || !hydrated || thinking ? 'bg-cyan-400 animate-pulse' : 'bg-emerald-500'
                             }`} />
                     </div>
                     <div>
-                        <h2 className="text-sm font-bold text-slate-900 tracking-tight">OnyxFii Intelligence</h2>
-                        <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
+                        <h2 className="text-sm font-bold text-[var(--app-ink)] tracking-tight">OnyxFii Intelligence</h2>
+                        <p className="text-[11px] font-semibold text-[var(--app-muted)] uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
                             {phase === 'executing' ? 'Processor Active' : thinking ? 'Analyzing Engine' : 'Hybrid AI Online'}
                         </p>
@@ -517,7 +523,7 @@ export default function AgentChat({
                     {messages.length > 0 && (
                         <button
                             onClick={handleClearChat}
-                            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all"
+                            className="p-2 rounded-xl text-[var(--app-muted)] hover:text-[var(--app-ink)] hover:bg-[var(--app-surface-alt)] transition-all"
                             title="Reset Terminal"
                             disabled={busy || phase === 'executing'}
                         >
@@ -530,7 +536,7 @@ export default function AgentChat({
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
+            <div ref={messagesRef} className="chat-scrollbar flex-1 overflow-y-auto p-6 space-y-6">
                 {(!ready || !hydrated) && walletConnected && (
                     <div className="flex flex-col items-center justify-center py-12">
                         <div className="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
@@ -540,11 +546,11 @@ export default function AgentChat({
 
                 {!walletConnected && (
                     <div className="flex flex-col items-center justify-center py-12 text-center px-4">
-                        <div className="w-16 h-16 rounded-3xl bg-slate-100 flex items-center justify-center text-3xl mb-4 text-slate-400">
-                            🔌
+                        <div className="w-16 h-16 rounded-3xl bg-[var(--app-surface-alt)] flex items-center justify-center text-3xl mb-4 text-[var(--app-muted)]">
+
                         </div>
-                        <h3 className="text-sm font-bold text-slate-700 mb-1">Authorization Missing</h3>
-                        <p className="text-xs text-slate-400 max-w-[200px]">Connect your secure wallet to authorize AI command access.</p>
+                        <h3 className="text-sm font-bold text-[var(--app-ink)] mb-1">Authorization Missing</h3>
+                        <p className="text-xs text-[var(--app-muted)] max-w-[200px]">Connect your secure wallet to authorize AI command access.</p>
                     </div>
                 )}
 
@@ -554,16 +560,16 @@ export default function AgentChat({
                         className={`flex ${msg.role === 'agent' ? 'justify-start' : 'justify-end'}`}
                     >
                         <div className={`max-w-[85%] rounded-2xl px-5 py-4 text-sm shadow-sm transition-all duration-300 ${msg.role === 'agent'
-                            ? 'bg-white border border-slate-100 text-slate-700'
-                            : 'bg-slate-900 text-white font-medium shadow-xl shadow-slate-900/10'
+                            ? 'bg-[var(--app-surface-alt)] border border-[var(--app-border)] text-[var(--app-ink)]'
+                            : 'bg-cyan-600 text-white font-medium shadow-xl shadow-black/20'
                             }`}>
                             {msg.text.split('\n').map((line, i) => (
                                 <span key={i} className="block mb-1 last:mb-0">
                                     {line.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).map((part, j) =>
                                         part.startsWith('**') && part.endsWith('**') ? (
-                                            <strong key={j} className="text-indigo-600 font-extrabold">{part.slice(2, -2)}</strong>
+                                            <strong key={j} className="text-cyan-500 dark:text-cyan-400 font-extrabold">{part.slice(2, -2)}</strong>
                                         ) : part.startsWith('`') && part.endsWith('`') ? (
-                                            <code key={j} className="bg-slate-100 text-indigo-600 px-1.5 py-0.5 rounded-md text-[12px] font-mono mx-0.5 border border-slate-200">{part.slice(1, -1)}</code>
+                                            <code key={j} className="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 px-1.5 py-0.5 rounded-md text-[12px] font-mono mx-0.5 border border-[var(--app-border)]">{part.slice(1, -1)}</code>
                                         ) : part.startsWith('[') && part.includes('](') && part.endsWith(')') ? (
                                             <a key={j} href={part.match(/\]\(([^)]+)\)/)?.[1] || '#'} target="_blank" rel="noopener noreferrer" className="text-indigo-500 underline decoration-indigo-500/30 hover:decoration-indigo-500 transition-all font-bold">
                                                 {part.match(/\[([^\]]+)\]/)?.[1] || 'Link'}
@@ -580,43 +586,43 @@ export default function AgentChat({
 
                 {thinking && (
                     <div className="flex justify-start">
-                        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 flex gap-1.5 shadow-sm">
-                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '0ms' }} />
-                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '150ms' }} />
-                            <div className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        <div className="bg-[var(--app-surface-alt)] border border-[var(--app-border)] rounded-2xl px-5 py-4 flex gap-1.5 shadow-sm">
+                            <div className="w-1.5 h-1.5 rounded-full bg-[var(--app-muted)] animate-bounce" style={{ animationDelay: '0ms' }} />
+                            <div className="w-1.5 h-1.5 rounded-full bg-[var(--app-muted)] animate-bounce" style={{ animationDelay: '150ms' }} />
+                            <div className="w-1.5 h-1.5 rounded-full bg-[var(--app-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
                         </div>
                     </div>
                 )}
 
                 {executionSteps.length > 0 && (
-                    <div className="mt-8 border-t border-slate-100 pt-6">
+                    <div className="mt-8 border-t border-[var(--app-border)] pt-6">
                         <div className="flex items-center gap-2 mb-4 px-2">
                             <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest italic">Blockchain Real-time Execution Log</span>
+                            <span className="text-[10px] font-extrabold text-[var(--app-muted)] uppercase tracking-widest italic">Blockchain Real-time Execution Log</span>
                         </div>
                         <div className="space-y-3 px-2">
                             {executionSteps.map((step, idx) => (
                                 <div key={step.key} className="flex items-start gap-4 group">
                                     <div className="flex flex-col items-center">
                                         <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold border-2 transition-all ${step.status === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' :
-                                            step.status === 'running' ? 'bg-white border-indigo-500 text-indigo-500 animate-pulse ring-4 ring-indigo-500/10' :
+                                            step.status === 'running' ? 'bg-cyan-500/10 border-cyan-400 text-cyan-500 dark:text-cyan-400 animate-pulse ring-4 ring-indigo-500/10' :
                                                 step.status === 'failed' ? 'bg-red-500 border-red-500 text-white' :
-                                                    'bg-white border-slate-200 text-slate-400'
+                                                    'bg-[var(--app-surface-alt)] border-[var(--app-border)] text-[var(--app-muted)]'
                                             }`}>
                                             {step.status === 'done' ? '✓' : idx + 1}
                                         </div>
                                         {idx !== executionSteps.length - 1 && (
-                                            <div className="w-0.5 h-4 bg-slate-100 group-hover:bg-slate-200 transition-colors" />
+                                            <div className="w-0.5 h-4 bg-[var(--app-border)] group-hover:bg-[var(--app-muted)] transition-colors" />
                                         )}
                                     </div>
                                     <div className="flex-1 pt-0.5">
-                                        <div className={`text-xs font-bold transition-colors ${step.status === 'done' ? 'text-slate-900 line-through' :
-                                            step.status === 'running' ? 'text-indigo-600' : 'text-slate-400'
+                                        <div className={`text-xs font-bold transition-colors ${step.status === 'done' ? 'text-[var(--app-ink)] line-through' :
+                                            step.status === 'running' ? 'text-cyan-500 dark:text-cyan-400' : 'text-[var(--app-muted)]'
                                             }`}>
                                             {step.label}
                                         </div>
                                         {step.detail && (
-                                            <div className="text-[10px] text-slate-400 font-medium mt-0.5 italic">{step.detail}</div>
+                                            <div className="text-[10px] text-[var(--app-muted)] font-medium mt-0.5 italic">{step.detail}</div>
                                         )}
                                     </div>
                                 </div>
@@ -624,11 +630,11 @@ export default function AgentChat({
                         </div>
                     </div>
                 )}
-                <div ref={bottomRef} className="h-4" />
+                <div className="h-4" />
             </div>
 
             {/* Input Area */}
-            <div className="p-5 border-t border-slate-200/50 bg-white/40 backdrop-blur-md">
+            <div className="p-5 border-t border-[var(--app-border)] bg-[var(--app-surface-alt)] backdrop-blur-md">
                 <div className="relative group">
                     <input
                         ref={inputRef}
@@ -642,7 +648,7 @@ export default function AgentChat({
                                 thinking ? 'Synchronizing brain...' :
                                     'Type a command or ask me about setup...'
                         }
-                        className="w-full pl-5 pr-32 py-4 rounded-2xl border border-slate-200/60 bg-white/80 shadow-inner outline-none transition-all focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 font-medium text-sm text-slate-700"
+                        className="w-full pl-5 pr-32 py-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] shadow-sm outline-none transition-all focus:border-cyan-500 focus:ring-4 focus:ring-cyan-500/20 font-medium text-sm text-[var(--app-ink)]"
                     />
 
                     <div className="absolute right-2 top-2 bottom-2 flex gap-2">
@@ -659,7 +665,7 @@ export default function AgentChat({
                             id="agent-send-btn"
                             onClick={() => void handleSend()}
                             disabled={!walletConnected || !input.trim() || (thinking && phase !== 'executing') || !ready || !hydrated}
-                            className="w-12 h-full bg-slate-900 hover:bg-black text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-20 active:scale-90 shadow-xl"
+                            className="w-12 h-full bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl flex items-center justify-center transition-all disabled:opacity-20 active:scale-90 shadow-xl"
                         >
                             {(thinking && (busy || phase === 'executing')) ? '...' : (
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -672,12 +678,12 @@ export default function AgentChat({
                 <div className="mt-3 flex items-center justify-between px-2">
                     <div className="flex items-center gap-4">
                         <div className="flex items-center gap-1.5">
-                            <div className="w-1 h-1 rounded-full bg-slate-400"></div>
-                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">L3 Verified Node</span>
+                            <div className="w-1 h-1 rounded-full bg-[var(--app-border)]"></div>
+                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">L3 Verified Node</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                            <div className="w-1 h-1 rounded-full bg-slate-400"></div>
-                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">End-to-End Encrypted</span>
+                            <div className="w-1 h-1 rounded-full bg-[var(--app-border)]"></div>
+                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">End-to-End Encrypted</span>
                         </div>
                     </div>
                     {busy && (
