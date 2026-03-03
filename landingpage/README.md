@@ -14,7 +14,7 @@ Open [http://localhost:3000](http://localhost:3000) to view locally.
 ## Sections
 
 - **Hero** — Headline with holographic Agentic Stream visual
-- **Partner Logos** — Solana, USDC, Inco, Magicblock, Umbra
+- **Partner Logos** — Solana, USDC, Inco, Magicblock
 - **Benefits** — Core advantages (FHE privacy, real-time accrual, stealth addresses)
 - **Global Scale** — Live intelligence dashboard
 - **Social Proof** — Testimonials

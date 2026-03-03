@@ -7,7 +7,6 @@ const logos = [
     "USDC",
     "Inco",
     "Magicblock",
-    "Umbra",
 ];
 
 export function Logos() {

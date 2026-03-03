@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Twitter, Github, Linkedin, ArrowUpRight } from "lucide-react";
+import { Twitter, Linkedin, ArrowUpRight } from "lucide-react";
 import { Logo } from "@/components/Logo";
 
 export function Footer() {
@@ -34,8 +34,7 @@ export function Footer() {
                     <FooterColumn
                         title="Resources"
                         links={[
-                            { label: "Docs", href: "#" },
-                            { label: "GitHub", href: "https://github.com/shumhn/expensee" }
+                            { label: "Docs", href: "#" }
                         ]}
                     />
                 </div>

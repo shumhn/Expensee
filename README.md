@@ -19,57 +19,201 @@
 
 ## Overview
 
-Expensee is a **confidential streaming payroll protocol** built on Solana. It combines **Fully Homomorphic Encryption** (Inco Lightning), **Trusted Execution Environments** (MagicBlock), and **Agentic AI** to deliver a payroll system where:
+**Payroll is broken.** Workers wait weeks to get paid. Salaries are exposed on public blockchains. Cross-border payments eat 3–7% in fees. And compliance is a nightmare.
 
-- Salary rates and accrued balances are **never visible on-chain** — all arithmetic happens on encrypted handles.
-- Employer-to-employee payment links are **broken at the protocol level** using a 2-hop shielded architecture.
-- Employees can **withdraw on-demand** and receive funds through ephemeral stealth accounts.
-- An **OnyxFii AI Agent** acts as a compliance co-pilot, guiding employers through global payout setups.
-- An automated **Keeper service** orchestrates the entire settlement pipeline without human intervention.
+**Expensee fixes all of it.**
 
-> **Elevator Pitch:**
-> Expensee is an AI-assisted, private, real-time payroll stack for Web3 and remote startups.
-> It keeps salaries encrypted, automates setup via AI agents, and eliminates direct payer-receiver traceability through a 2-hop shielded payout model with stealth routing.
+Built on Solana, Expensee is a **confidential streaming payroll protocol** that pays workers every second with fully encrypted compensation. Salary rates, accrued balances, and payout amounts are **never exposed on-chain** — powered by Fully Homomorphic Encryption (Inco Lightning) and Trusted Execution Environments (MagicBlock).
+
+A 2-hop shielded architecture with stealth routing makes employer-to-employee payments **completely untraceable**. An AI co-pilot (OnyxFii Agent) automates the entire setup. An autonomous Keeper service runs settlement 24/7 — zero human intervention.
+
+### What Makes It Different
+
+| | |
+|---|---|
+| **Encrypted Compensation** | Salary rates and balances stay private via FHE (Inco Lightning) — zero on-chain visibility |
+| **Unlinkable Payments** | 2-hop shielded architecture + stealth accounts break all employer↔employee traceability |
+| **Real-Time Streaming** | Workers earn every second and withdraw on demand through ephemeral accounts |
+| **AI-Powered Setup** | OnyxFii Agent guides employers through payroll configuration conversationally |
+| **Autonomous Settlement** | Keeper service handles accrual, routing, and claims without human intervention |
+
+> *Expensee: AI-assisted, private, real-time payroll for the global workforce.*
 
 ---
 
-## Why Expensee? (The Market Thesis)
+## Why Expensee?
 
-For **Web3 startups, remote agencies, and gig platforms**, traditional 30-day fiat payroll cycles are fundamentally broken. Expensee replaces this analog friction with a comprehensive Web3 payroll stack designed for the "global-by-default" economy.
+A Web3 startup in Singapore hires a developer in Lagos and a designer in Lisbon. How do they pay them?
 
-### The Pain Points We Solve
-The current financial system penalizes global, digital-first teams:
-1. **The "Inflation-Liquidity" Trap:** Traditional bi-weekly pay forces digital-native workers into high-interest debt to cover daily expenses. 75% of Gen Z workers now prefer stablecoin options for instant liquidity.
-2. **The "Border Friction" Tax:** SWIFT transfers lose 3% to 7% in fees and take 3–5 business days to arrive, crippling remote startups operating across borders.
-3. **The "Surveillance" Vulnerability:** Purely public blockchains expose a worker’s exact salary and net worth to the world, creating extreme physical and digital risks.
-4. **The "Compliance Complexity" Ceiling:** Navigating fragmented tax/labor laws makes global hiring impossible for small startups without massive legal overhead.
+**Traditional payroll** means SWIFT transfers that eat 3–7% in fees and take 5 business days. **Crypto payroll** means every salary is public — anyone can see exactly what each worker earns. Neither option works.
 
-### Target Market & TAM (Web3 & Remote Ecosystems)
-We are not targeting traditional corporate payroll; we are targeting the rapidly expanding frontier of digital-native work.
-- **The B2B Stablecoin Market:** B2B stablecoin payments surged 733% year-over-year, reaching a **$226 Billion** annual run rate in 2025. This is our immediate addressable liquidity pool.
-- **Crypto-Native Adoption:** 25% of modern tech/remote companies worldwide already pay employees in cryptocurrency, with stablecoins (primarily USDC) accounting for over 90% of digital salaries.
-- **Target Customers:** Web3 Startups, DAO Contributors, International Freelance Marketplaces, and Remote-First Agencies.
+**Expensee was built for exactly this problem.**
 
-### The Strategic Solution
-Expensee shifts payroll from a slow administrative burden into a competitive advantage:
+### The Opportunity
 
-#### 1. Instant Global Liquidity (Earned Wage Access)
-Waiting weeks for a paycheck is obsolete. Stablecoin payouts settle across 190+ countries in under 2 minutes, 24/7. Companies offering this Earned Wage Access see a **44% reduction in employee churn**.
+The global payroll industry processes **$75+ billion annually**. Crypto adoption is accelerating, but existing on-chain payroll tools (Superfluid, Sablier, Zebec) only solve streaming — they leave salaries fully public, offer zero privacy, and provide no payment unlinkability. The market gap is massive:
 
-#### 2. Institutional-Grade Privacy
-Expensee utilizes Zero-Knowledge Proofs (ZKP) and Fully Homomorphic Encryption (FHE) to keep sensitive salary data off public ledgers. 
+- B2B stablecoin payments surged **733% YoY**, reaching a **$226 Billion** annual run rate in 2025 ([Fireblocks Report](https://www.fireblocks.com/blog/stablecoin-payments-report-2025))
+- **25%** of tech/remote companies already pay employees in crypto — stablecoins account for 90%+ of digital salaries ([Triple-A Crypto Ownership Data](https://triple-a.io/cryptocurrency-ownership-data/))
+- **75%** of Gen Z workers prefer instant stablecoin pay over traditional 30-day cycles ([Payactiv Workforce Survey](https://www.payactiv.com/blog/earned-wage-access/))
+- The remote workforce is projected to reach **93 million workers** in the US alone by 2028 ([Upwork Future Workforce Report](https://www.upwork.com/press/releases/upwork-study-finds-36-million-americans-freelancing))
+- Companies offering Earned Wage Access see a **44% reduction in employee turnover** ([Mercator Advisory Group](https://www.mercatoradvisorygroup.com/reports/))
 
-#### 3. Agentic AI Co-Pilot
-By combining stablecoin rails with an **Agentic AI**, startups can automate multi-jurisdictional compliance setups. This eliminates intermediary banking completely, reducing monthly processing costs by **30–40%** and administrative workloads by **50–70%**. 
+Expensee is the first protocol to combine **real-time streaming + salary encryption + payment unlinkability + AI-powered setup + autonomous settlement** in a single B2B payroll stack.
 
-### Core Benefits by Stakeholder Group
-| Stakeholder | Key Motivation | Transformative Impact |
-|-------------|----------------|-----------------------|
-| **Remote Startups**| Global Talent Access| Payouts to 190+ countries settle in minutes, avoiding 5% SWIFT fees. |
-| **Web3 & DAOs** | Privacy & Alignment | 70% reduction in global payment processing time; absolute on-chain privacy. |
-| **Freelancers & Gig** | Financial Autonomy | 95% interest in on-demand Earned Wage Access. |
-| **Agencies / B2B** | Operational Efficiency | 80–90% reduction in manual compliance errors via AI Agents. |
+### Problem 1: Salary Transparency Destroys Companies From the Inside
 
+On a public blockchain, every salary is visible. And inside any company, **salary visibility is the fastest path to chaos**.
+
+When employees discover compensation gaps — even justified ones based on experience, tenure, or performance — it breeds resentment, distrust, and attrition. Bonuses, raises, and equity top-ups become political events instead of private rewards.
+
+**What happens when salaries are public:**
+
+- 😠 **Internal resentment** — Employee A discovers Employee B earns 30% more for similar work. Morale collapses. HR scrambles.
+- 🏃 **Retention crisis** — Top performers leave when they learn junior hires negotiated higher packages.
+- 💰 **Bonus leaks** — A private performance bonus becomes public knowledge. Now everyone expects one — or feels slighted.
+- 🎯 **Raise politics** — Every salary adjustment is visible, turning compensation into office gossip instead of a private matter between employer and employee.
+
+**How Expensee prevents this:**
+
+Every salary rate, accrued balance, and bonus is encrypted using **Fully Homomorphic Encryption** (FHE). Not even the blockchain itself can see the numbers — they're stored as encrypted handles that only authorized parties can decrypt.
+
+- Employee A **cannot** see Employee B's salary — ever
+- A private bonus stays **completely invisible** to the rest of the team
+- Raises happen silently — no one knows except the employer and the recipient
+- The employer controls exactly who can see what, through **programmable view access** that can be granted or revoked at any time
+
+> **Result:** Compensation stays between employer and employee. No politics. No leaks. No chaos.
+
+### Problem 2: Outsiders Can Read Your Entire Payroll
+
+On a public blockchain, it's not just internal — **the entire world** can read your payroll:
+
+- 🕵️ **Competitors** see your exact burn rate, team size, and individual compensation → they poach your talent by outbidding their exact salary
+- 📊 **Investors and analysts** reverse-engineer your runway from payment flows
+- 🎯 **Bad actors** identify high-earners from wallet balances and target them — digitally or physically
+- 🔗 **Every payout** creates a permanent, public, on-chain link between employer wallet and employee wallet — your entire org chart is one block explorer away
+
+**How Expensee makes your payroll invisible:**
+
+| What Outsiders See Today | What They See With Expensee |
+|--------------------------|----------------------------|
+| Exact salary per employee | Encrypted blob — meaningless without decrypt keys |
+| Every employer → employee transaction | Two separate, unrelated transactions (2-hop shielded) |
+| Employee wallet receiving salary | A random one-time stealth account (fresh keypair each payout) |
+| How much the company is spending | Encrypted vault balance — total spend is hidden |
+| Who works for your company | No linkable data — Ghost Mode means employees never sign on-chain |
+
+> **Result:** Your competitors, attackers, and the public see nothing. Zero salary data. Zero org structure. Zero spending visibility.
+
+### Problem 3: Workers Earn Every Second But Get Paid Every 30 Days
+
+Traditional payroll forces a **30-day liquidity gap** on every worker. They generate value from minute one, but only access their earnings weeks later. This is a relic of the paper-check era — and it actively hurts both sides:
+
+- **Workers** take on high-interest debt to cover daily expenses between paychecks
+- **Freelancers** chase invoices for 30–90 days before seeing payment
+- **Cross-border teams** wait 3–5 business days for SWIFT settlements, losing 3–7% to intermediary fees
+- Companies offering Earned Wage Access see **44% less employee churn** — but traditional systems can't deliver it
+
+**How Expensee solves it — from the employee's perspective:**
+
+1. **You earn every second.** Your salary streams continuously in real time — not batch-processed once a month. Open the Employee Dashboard and watch your balance grow live.
+
+2. **Withdraw whenever you want.** Need cash now? Hit withdraw. There's no approval queue, no pay period, no waiting. Your money is your money.
+
+3. **The Keeper handles everything.** You don't have to submit transactions, pay gas, or interact with the blockchain at all. The autonomous Keeper service processes your withdrawal, routes it through a stealth account, and delivers your funds — typically in under 2 minutes.
+
+4. **Your identity stays hidden.** Ghost Mode means the Keeper submits the withdrawal on your behalf. Your wallet never signs on-chain. The Relay pays the gas. Your funds arrive in a **fresh, one-time stealth account** that can't be linked to you, your employer, or any previous payout.
+
+5. **Flexible pay plans.** Hourly, weekly, monthly, fixed-total contracts, or raw per-second streaming — employers choose the plan, and it all streams continuously.
+
+> **Result:** Workers get **real-time financial autonomy** — earn every second, withdraw anytime, with zero blockchain footprint.
+
+### Problem 4: Every Payment Leaves a Permanent Trail
+
+Even with encrypted amounts, traditional crypto payments still leave **metadata trails** — who paid whom, when, and how often. Over time, this metadata is enough to reconstruct your entire payroll graph.
+
+**How Expensee breaks the trail — completely:**
+
+- **2-Hop Shielded Routing** — Every payout splits into two separate transactions: Vault → Staging Account (Hop 1), then Staging → Stealth Destination (Hop 2). No single transaction connects employer to employee.
+- **Stealth Accounts** — The Umbra Relay generates a brand-new keypair for every single payout. Even if you withdraw 100 times, each payout goes to a different, unlinkable address.
+- **Ghost Mode** — Employees never sign an on-chain transaction. The Keeper submits on their behalf, so the employee wallet has zero on-chain presence.
+- **Gas Break** — The Relay pays all account initialization fees. The employee wallet never funds anything — there's no gas trail to follow.
+- **No shared accounts, no shared signers, no shared transactions, no amount matching (FHE encrypted), no gas link** — five layers of unlinkability in every payout.
+
+> **Result:** An observer sees encrypted values moving between random, unrelated accounts. No salaries. No amounts. No employer-employee connection. **Complete payment unlinkability.**
+
+### Problem 5: Payroll Shouldn't Need a Human in the Loop
+
+Setting up cross-border encrypted payroll is inherently complex — confidential token accounts, FHE handle registration, keeper authorization, TEE delegation, privacy access grants. Doing it manually is error-prone, slow, and doesn't scale.
+
+**How Expensee automates everything:**
+
+- **OnyxFii AI Agent** — A conversational co-pilot that walks employers through an 11-step setup process in plain English. Say "pay Alice $3000/month" and it handles everything.
+- **Autonomous Keeper** — Runs the entire settlement pipeline 24/7 without human intervention: accrue salaries → checkpoint to base layer → settle to shielded staging → route through stealth relay → claim on behalf of employee → re-delegate to TEE. Every ~4 seconds.
+- **Zero-touch operations** — Once a payroll stream is live, neither the employer nor the employee needs to do anything. The Keeper handles accrual, withdrawal processing, stealth routing, and re-delegation automatically.
+
+> **Result:** Admin overhead drops **50–70%**, processing costs drop **30–40%**. No intermediary banks. No manual compliance. No human in the loop.
+
+### Who It's For
+
+Expensee is a **B2B payroll infrastructure product**. We sell to companies that pay people — not to individuals.
+
+| B2B Customer | What They Get | How AI Helps |
+|-------------|--------------|-------------|
+| **Web3 Startups & DAOs** | Private payroll that aligns with crypto-native values — no salary leaks, no org chart exposure | OnyxFii AI Agent sets up encrypted payroll streams in plain English — *"pay Alice $3000/month"* |
+| **Remote-First Companies** | Instant global payouts to 190+ countries — no SWIFT, no 5-day waits, no 3–7% fees | AI agent handles multi-jurisdiction configurations and guides through every wallet approval step |
+| **Staffing Agencies & B2B** | Manage hundreds of contractor streams — 80–90% fewer manual errors, scales without headcount | Conversational chat interface replaces complex admin dashboards — zero training needed |
+| **Freelance Marketplaces** | Offer real-time Earned Wage Access as a platform feature — attract and retain top talent | AI-powered onboarding lets platform operators spin up private payroll streams in minutes |
+
+**For employees and contractors** (the end users), the experience is simple: earn every second, withdraw on demand, and your identity stays completely private. They never interact with the blockchain — the Keeper and AI Agent handle everything.
+
+### Why This Stack?
+
+Every technology choice in Expensee was made to solve a specific payroll problem. Here's why:
+
+| Technology | What It Is | Why We Chose It |
+|------------|-----------|----------------|
+| **Solana** | High-throughput L1 blockchain | Sub-second finality and ~$0.001 transaction costs make per-second salary streaming economically viable. You can't stream salaries on a chain where each accrual costs $5 in gas. |
+| **Inco Lightning** | Fully Homomorphic Encryption (FHE) engine on Solana | The only way to do **math on encrypted data** without decrypting it. Salary accrual (`rate × time`) must happen on-chain without revealing the rate or the result. ZK proofs can verify, but only FHE can *compute*. |
+| **MagicBlock** | Trusted Execution Environment (TEE) via Ephemeral Rollups | FHE operations on base-layer Solana have higher latency. MagicBlock delegates stream accounts to a TEE that accrues in real-time (~10ms ticks) inside an Intel TDX enclave — then commits state back to L1. This gives us real-time streaming without sacrificing privacy. |
+| **Umbra Relay** | Stealth address provisioning service | Encrypting amounts isn't enough — if the same wallet receives every payout, observers can still build a payment graph from metadata. Umbra generates a fresh one-time keypair per payout, breaking address linkability completely. |
+| **OnyxFii AI Agent** | LLM-powered conversational payroll assistant | Employers shouldn't need to understand PDAs, FHE handles, or keeper configs. The AI agent parses natural language (*"pay 0x... $5000/month"*), extracts structured plans via a 3-tier planner (heuristic → LLM → Solana Agent Kit), and walks users through each step with wallet approvals. Multi-provider fallback (OpenRouter → Gemini → Groq) ensures 24/7 availability. |
+| **MongoDB** | Document database for off-chain state | Withdraw queues, AI agent conversation state, and keeper operational data need fast reads/writes that don't belong on-chain. MongoDB handles the off-chain coordination layer. |
+| **Anchor 0.32** | Solana smart contract framework | Required for MagicBlock's `#[ephemeral]` macro and delegation SDK. Also provides type-safe PDA derivation and CPI builders for Inco Lightning integration. |
+
+
+
+
+---
+
+## OnyxFii AI Agent
+
+OnyxFii is the world's first **autonomous payroll co-pilot**. It eliminates the complexity of on-chain privacy by providing a chat-first interface that handles configuration, deployment, and real-time monitoring.
+
+### 11-Step Guided Setup
+The agent follows a rigorous compliance and technical checklist to ensure payroll is configured correctly. It cross-references natural language intents with live on-chain account data:
+
+1. **Verify Wallet** — Ensure employer wallet is connected and has sufficient SOL for gas.
+2. **Register Business** — Initialize the Business PDA on Solana.
+3. **Setup Token Mint** — Configure the payment token (e.g., payUSD or USDC).
+4. **Initialize Vault** — Create the encrypted BusinessVault PDA.
+5. **Deposit Funds** — Guide the user through the encrypted deposit process.
+6. **Set Stream Config** — Define keeper authorization and settlement intervals.
+7. **Add Employees** — Parse employee wallet/hash and define salary rates.
+8. **Grant Privacy Access** — Execute the Inco Lightning "allow" instruction for the employee and keeper.
+9. **Verify FHE Handles** — Confirm salary handles are properly initialized as ciphertexts.
+10. **Enable TEE Streaming** — Delegate streams to MagicBlock Private Ephemeral Rollups.
+11. **Authorize Keeper** — Activate the autonomous settlement loop.
+
+### Multi-Tier Planning Engine
+OnyxFii doesn't just "chat"; it builds structured execution plans. It uses a 3-tier analysis to extract payroll logic from human speech:
+- **Tier 1: Heuristic Filter** — Identifies addresses and decimal rates using regex and known schema patterns.
+- **Tier 2: LLM Extraction** — Uses deep reasoning to map complex sentences (*"pay Alice $50k/yr until December"*) into structured JSON objects.
+- **Tier 3: Solana Agent Kit** — Verifies liquidity, account math, and PDA feasibility before proposing a transaction.
+
+### Autonomous Coordination
+Once the payroll is live, the AI Agent stays in sync with the **Keeper Service**. It provides a real-time "Readiness Grid" in the UI, showing the status of FHE handles, TEE delegation, and settlement health. If a stream stalls or a vault runs low, the agent proactively notifies the employer in the chat.
 
 ---
 
@@ -141,12 +285,13 @@ flowchart TB
 
 | Component | Technology | Lines | Role |
 |-----------|-----------|-------|------|
-| **Payroll Program** | **Solana** (Rust · Anchor 0.32) | ~2,100 | On-chain state machine on Solana: business/vault/stream PDAs, FHE operations |
-| **Keeper Service** | TypeScript · Node.js | ~3,200 | Off-chain orchestrator: withdraw queue processing, accrual, settlement, claim relay |
-| **Umbra Relay** | Node.js (CJS) | ~420 | Stealth destination provisioning: creates ephemeral token accounts per payout |
-| **OnyxFii AI Agent** | Next.js APIs + React | ~1,950 | Conversational payroll assistant: multi-step guided setup, LLM planner, execution state |
+| **Payroll Program** | **Solana** (Rust · Anchor 0.32) | ~4,000 | On-chain state machine on Solana: business/vault/stream PDAs, FHE operations |
+| **Keeper Service** | TypeScript · Node.js | ~4,300 | Off-chain orchestrator: withdraw queue processing, accrual, settlement, claim relay |
+| **Umbra Relay** | Node.js (CJS) | ~430 | Stealth destination provisioning: creates ephemeral token accounts per payout |
+| **OnyxFii AI Agent** | Next.js APIs + React | ~2,500 | Conversational payroll assistant: multi-step guided setup, LLM planner, execution state |
 | **Token Bridge** | Next.js + Smart Contracts | ~400 | Wrap/unwrap interface converting standard SPL tokens to/from confidential Inco tokens |
-| **Frontend** | Next.js · React | ~260KB | Employer/Employee dashboards, AI agent chat, bridge UI |
+| **Frontend** | Next.js · React · Tailwind | ~11,300 | Employer/Employee dashboards, AI agent chat, bridge UI, theme system |
+| **Landing Page** | Next.js 16 · React Three Fiber · Framer Motion | ~2,500 | Marketing site with 3D globe, holographic cards, particle effects, FAQ, social proof |
 | **Inco Lightning** | Solana Program | — | Fully Homomorphic Encryption engine for encrypted arithmetic |
 | **Inco Token Program** | Solana Program | — | Confidential token transfers with encrypted balances |
 | **MagicBlock ER** | Solana TEE | — | Ephemeral Rollups for delegated real-time execution |
@@ -504,7 +649,7 @@ flowchart TB
 ## Solana On-Chain Program
 
 **Program ID:** `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn`
-**Framework:** Anchor 0.32.1 · Rust · ~2,100 lines
+**Framework:** Anchor 0.32.1 · Rust · ~4,000 lines
 
 ### Account Architecture
 
@@ -583,7 +728,7 @@ erDiagram
     }
 ```
 
-### Instruction Set (25 Instructions)
+### Instruction Set (28 Instructions)
 
 | Category | Instruction | Description |
 |----------|------------|-------------|
@@ -635,7 +780,7 @@ RateHistoryV2      -> ["rate_history_v2", business, stream_index]
 
 ### Keeper Service (`backend/keeper/`)
 
-The Keeper is a **3,200-line TypeScript service** that automates the entire payout lifecycle.
+The Keeper is a **4,300-line TypeScript service** that automates the entire payout lifecycle.
 
 **Core Responsibilities:**
 - Poll for pending `WithdrawRequestV2` accounts on-chain
@@ -781,38 +926,100 @@ curl -s https://onyxfii.onrender.com/health        # Keeper
 expensee/
 ├── programs/payroll/            # Anchor program (Rust)
 │   └── src/
-│       ├── lib.rs               # 25+ instructions (~2,100 lines)
+│       ├── lib.rs               # 28 instructions (~2,082 lines)
 │       ├── state/               # Account structs (Business, Employee, Vault, Payout, ...)
-│       ├── contexts.rs          # Anchor account contexts
+│       │   ├── business.rs      # Business + BusinessVault state
+│       │   ├── employee.rs      # EmployeeStreamV2 state
+│       │   ├── stream_config.rs # BusinessStreamConfigV2 state
+│       │   ├── shielded_payout.rs # ShieldedPayoutV2 state
+│       │   └── withdraw.rs      # WithdrawRequestV2 state
+│       ├── contexts.rs          # Anchor account contexts (~1,072 lines)
 │       ├── constants.rs         # PDA seeds, program IDs, limits
-│       ├── errors.rs            # 30 error codes
+│       ├── errors.rs            # 30+ error codes
 │       ├── events.rs            # On-chain event emissions
 │       └── helpers.rs           # Inco CPI builders, FHE utilities
 │
 ├── backend/keeper/              # Keeper automation service (TypeScript)
 │   └── src/
-│       ├── index.ts             # Main entry: worker loop + REST API (~3,200 lines)
-│       ├── claims-queue.ts      # MongoDB-backed withdraw queue
-│       └── healthcheck.ts       # Health + relay API server
+│       ├── index.ts             # Main entry: worker loop + REST API (~3,255 lines)
+│       ├── claims-queue.ts      # MongoDB-backed withdraw queue (~324 lines)
+│       └── healthcheck.ts       # Health + relay API server (~703 lines)
 │
 ├── services/umbra-relay/        # Stealth routing relay (Node.js)
-│   ├── server.cjs               # Relay server (424 lines)
+│   ├── server.cjs               # Relay server (~430 lines)
 │   ├── self-test.cjs            # Self-test suite
 │   └── .env.example             # Configuration reference
 │
 ├── frontend/                    # Next.js application
 │   ├── pages/
-│   │   ├── employer.tsx         # Employer dashboard (158KB)
-│   │   ├── employee.tsx         # Employee dashboard (85KB)
-│   │   ├── bridge.tsx           # Token wrap/unwrap bridge
-│   │   └── api/                 # Agent, bridge, faucet, MagicBlock APIs
-│   ├── components/              # Shared React components
-│   └── lib/                     # Client utilities, payroll client
+│   │   ├── employer.tsx         # Employer dashboard (~4,415 lines)
+│   │   ├── employee.tsx         # Employee dashboard (~1,911 lines)
+│   │   ├── bridge.tsx           # Token wrap/unwrap bridge (~421 lines)
+│   │   └── api/
+│   │       ├── agent/           # chat.ts, plan.ts, run-state.ts
+│   │       ├── bridge/          # build-wrap.ts, build-unwrap.ts, submit-unwrap.ts
+│   │       ├── faucet/          # mint-payusd.ts, mint-usdc.ts
+│   │       ├── inco/            # Inco integration endpoints
+│   │       └── magicblock/      # delegation-status.ts, account-info.ts
+│   ├── components/
+│   │   ├── AgentChat.tsx        # AI conversational assistant (~967 lines)
+│   │   ├── PageShell.tsx        # Shared layout shell
+│   │   ├── ThemeToggle.tsx      # Light/dark mode toggle
+│   │   ├── Logo.tsx             # Brand logo component
+│   │   ├── StepCard.tsx         # Setup step cards
+│   │   ├── StatusPill.tsx       # Status indicator badges
+│   │   └── ...                  # ActionResult, AdvancedDetails, InlineHelp, WalletButton
+│   ├── contexts/
+│   │   └── ThemeContext.tsx     # Light/dark theme provider
+│   └── lib/
+│       ├── payroll-client.ts    # Solana payroll SDK (~2,617 lines)
+│       ├── range.ts             # Range Protocol compliance (~485 lines)
+│       ├── magicblock.ts        # MagicBlock TEE helpers
+│       ├── copy.ts              # Clipboard utilities
+│       └── ui-state.ts          # UI state management
+│
+├── landingpage/                 # Marketing landing page (Next.js 16)
+│   ├── app/
+│   │   ├── page.tsx             # Main landing page
+│   │   ├── layout.tsx           # Root layout + metadata
+│   │   └── globals.css          # Global styles
+│   └── components/
+│       ├── Hero.tsx             # Hero section with phone mockup
+│       ├── Globe.tsx            # 3D globe (React Three Fiber)
+│       ├── AgenticStream.tsx    # Streaming visualization
+│       ├── HolographicCard.tsx  # Glassmorphism card effects
+│       ├── HolographicShield.tsx # Shield animation
+│       ├── ParticleMesh.tsx     # Particle background effects
+│       ├── SecurityInterface.tsx # Security features display
+│       ├── TextScramble.tsx     # Text scramble animation
+│       ├── Benefits.tsx         # Benefits section
+│       ├── CompareCards.tsx     # Comparison cards
+│       ├── GlobalScale.tsx      # Global scale metrics
+│       ├── SocialProof.tsx      # Social proof / testimonials
+│       ├── FAQ.tsx              # Frequently asked questions
+│       ├── Footer.tsx           # Site footer
+│       ├── Navbar.tsx           # Navigation bar
+│       ├── Logo.tsx             # Logo component
+│       └── Logos.tsx            # Partner/integration logos
 │
 ├── docs/                        # Runbooks and rollout documentation
+│   ├── HOW_IT_WORKS.md          # Detailed architecture guide
+│   ├── runbook-v2.md            # Operations runbook
+│   ├── demo-checklist-devnet.md # Devnet demo checklist
+│   ├── public-entry-exit-demo.md # Public entry/exit flow demo
+│   └── umbra-hybrid-rollout.md  # Umbra hybrid rollout plan
+│
 ├── tests/                       # Integration tests
+│   ├── payroll.ts               # Core payroll test suite
+│   └── shielded-payout.ts       # Shielded payout test suite
+│
+├── scripts/                     # Utility scripts
+│   └── create-new-mint.ts       # Mint creation helper
+│
 ├── keys/                        # Wallet keypairs (gitignored)
 ├── Anchor.toml                  # Anchor configuration
+├── Cargo.toml                   # Rust workspace config
+├── rust-toolchain.toml          # Rust toolchain pinning
 └── package.json                 # Root scripts and dependencies
 ```
 
@@ -826,10 +1033,14 @@ expensee/
 
 | Document | Path |
 |----------|------|
+| How It Works (Architecture) | `docs/HOW_IT_WORKS.md` |
 | Operations Runbook | `docs/runbook-v2.md` |
+| Devnet Demo Checklist | `docs/demo-checklist-devnet.md` |
+| Public Entry/Exit Demo | `docs/public-entry-exit-demo.md` |
 | Umbra Hybrid Rollout | `docs/umbra-hybrid-rollout.md` |
 | Keeper README | `backend/keeper/README.md` |
 | Frontend README | `frontend/README.md` |
+| Landing Page README | `landingpage/README.md` |
 
 
 
