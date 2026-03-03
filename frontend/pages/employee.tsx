@@ -820,7 +820,7 @@ export default function EmployeePage() {
       return {
         label: 'Unknown',
         detail: 'Load payroll status to detect Boost Execution route.',
-        badgeClass: 'bg-gray-100 text-gray-700',
+        badgeClass: 'border border-[#2A3348] bg-[#161B27] text-[#A7B7CF]',
       };
     }
     const routerDelegated = delegationRoute?.delegated;
@@ -829,20 +829,20 @@ export default function EmployeePage() {
       return {
         label: 'Boost Execution',
         detail: 'MagicBlock delegated route is active for this payroll stream.',
-        badgeClass: 'bg-emerald-100 text-emerald-800',
+        badgeClass: 'border border-[rgba(30,186,152,0.35)] bg-[rgba(30,186,152,0.16)] text-[#43E0BB]',
       };
     }
     if (routerDelegated === false && !status.isDelegated) {
       return {
         label: 'Base Layer',
         detail: 'No delegation detected; actions settle directly on Solana base layer.',
-        badgeClass: 'bg-slate-100 text-slate-700',
+        badgeClass: 'border border-[rgba(55,207,238,0.32)] bg-[rgba(55,207,238,0.12)] text-[#79E7FF]',
       };
     }
     return {
       label: 'Checking',
       detail: 'Router and base ownership are still syncing. Refresh route in a few seconds.',
-      badgeClass: 'bg-amber-100 text-amber-800',
+      badgeClass: 'border border-[rgba(55,207,238,0.32)] bg-[rgba(55,207,238,0.12)] text-[#79E7FF]',
     };
   }, [delegationRoute?.delegated, status]);
 
@@ -965,10 +965,10 @@ export default function EmployeePage() {
                 {statusLoading ? 'Loading...' : 'Load Payroll Status'}
               </button>
               {status ? (
-                <div className="rounded-lg border border-gray-200 bg-[#FAFBFF] p-3">
+                <div className="rounded-lg border border-[#17384A] bg-[rgba(8,10,16,0.94)] p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-[#8D9AB0]">
                         Execution mode
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -976,19 +976,19 @@ export default function EmployeePage() {
                           {executionMode.label}
                         </span>
                         {delegationRouteCheckedAt ? (
-                          <span className="text-[11px] text-gray-500">
+                          <span className="text-[11px] text-[#8D9AB0]">
                             Updated {new Date(delegationRouteCheckedAt).toLocaleTimeString()}
                           </span>
                         ) : null}
                       </div>
-                      <p className="mt-2 text-xs text-gray-600">{executionMode.detail}</p>
+                      <p className="mt-2 text-xs text-[#B7C4D9]">{executionMode.detail}</p>
                       {delegationRoute?.endpoint ? (
-                        <p className="mt-1 truncate text-[11px] text-gray-500">
+                        <p className="mt-1 truncate text-[11px] text-[#8D9AB0]">
                           Router: {delegationRoute.endpoint}
                         </p>
                       ) : null}
                       {delegationRoute?.error ? (
-                        <p className="mt-1 text-[11px] text-amber-700">
+                        <p className="mt-1 text-[11px] text-[#FF8A8A]">
                           Router status unavailable: {delegationRoute.error}
                         </p>
                       ) : null}
@@ -996,13 +996,13 @@ export default function EmployeePage() {
                     <button
                       onClick={() => void loadDelegationRoute(status.streamAddress)}
                       disabled={delegationRouteLoading}
-                      className="shrink-0 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs text-gray-700 disabled:opacity-50"
+                      className="shrink-0 rounded-md border border-[#1D607A] bg-[rgba(5,12,20,0.85)] px-2.5 py-1.5 text-xs font-semibold text-[#77DCF8] transition-colors hover:border-[#27BFEA] hover:text-[#CFF5FF] disabled:opacity-50"
                     >
                       {delegationRouteLoading ? 'Refreshing...' : 'Refresh Route'}
                     </button>
                   </div>
                   {status.hasFixedDestination ? (
-                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <div className="mt-3 rounded-md border border-[#2A6178] bg-[rgba(10,19,30,0.9)] px-3 py-2 text-xs text-[#A8DBEE]">
                       Legacy fixed-destination payroll record detected. For stronger privacy and lower linkability,
                       ask the employer to create a new private shield-route record.
                     </div>
@@ -1071,7 +1071,7 @@ export default function EmployeePage() {
                   {steps.map((s, i) => (
                     <div key={s.label} className="flex items-center">
                       <div className="flex flex-col items-center">
-                        <div className={`h-4 w-4 rounded-full border-2 transition-all ${s.active ? 'bg-[#005B96] border-[#005B96] shadow-[0_0_8px_rgba(0,91,150,0.4)]' : 'bg-white border-gray-300'
+                        <div className={`h-4 w-4 rounded-full border-2 transition-all ${s.active ? 'bg-[#005B96] border-[#005B96] shadow-[0_0_8px_rgba(0,91,150,0.4)]' : 'bg-[#0D111A] border-[#2A3347]'
                           }`} />
                         <span className={`mt-1 text-[10px] font-bold uppercase tracking-tighter ${s.active ? 'text-[#005B96]' : 'text-gray-400'
                           }`}>{s.label}</span>
@@ -1088,7 +1088,7 @@ export default function EmployeePage() {
                         )}
                       </div>
                       {i < steps.length - 1 && (
-                        <div className={`mx-2 h-0.5 w-10 mb-4 ${steps[i + 1].active ? 'bg-[#005B96]' : 'bg-gray-200'
+                        <div className={`mx-2 h-0.5 w-10 mb-4 ${steps[i + 1].active ? 'bg-[#005B96]' : 'bg-[#263143]'
                           }`} />
                       )}
                     </div>
@@ -1165,22 +1165,22 @@ export default function EmployeePage() {
 
               {/* Status Message for Pending Request */}
               {status?.withdrawPending && pendingPayouts.length === 0 && (
-                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                <div className="rounded-lg border border-[#1D4F63] bg-[rgba(8,15,24,0.92)] p-4">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-                    <span className="text-sm font-medium text-blue-800">Request Pending</span>
+                    <div className="h-2 w-2 animate-pulse rounded-full bg-[#37CFEE]" />
+                    <span className="text-sm font-medium text-[#8BE9FF]">Request Pending</span>
                   </div>
-                  <p className="mt-1 text-xs text-blue-600">
+                  <p className="mt-1 text-xs text-[#9FB8D2]">
                     The automation service is processing your payout. This usually takes 5-15 seconds.
                   </p>
                 </div>
               )}
               {withdrawProgress ? (
-                <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                <div className="rounded-lg border border-[#2A3A66] bg-[rgba(11,15,29,0.94)] p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-[#79C9FF]">
                     MagicBlock Processing
                   </div>
-                  <div className="mt-2 grid gap-1 text-xs text-indigo-900">
+                  <div className="mt-2 grid gap-1 text-xs text-[#C3D3EA]">
                     <div>
                       Route: {withdrawProgress.delegationUsed ? 'Boost Execution (MagicBlock)' : 'Base Layer'}
                     </div>
@@ -1209,7 +1209,7 @@ export default function EmployeePage() {
                   !status?.withdrawPending &&
                   pendingPayouts.length === 0 &&
                   !claimSuccessTx ? (
-                    <div className="mt-3 rounded-md border border-indigo-200 bg-white px-3 py-2 text-xs text-indigo-900">
+                    <div className="mt-3 rounded-md border border-[#2A4D74] bg-[rgba(9,16,27,0.95)] px-3 py-2 text-xs text-[#BFE8FF]">
                       Settlement finished. In private auto-route mode, payout may already be routed and claimed automatically, so Step 2 will not appear.
                       Check &quot;Where payout was sent&quot; below and use &quot;Open Bridge with this address&quot; to access funds.
                     </div>
@@ -1229,7 +1229,7 @@ export default function EmployeePage() {
                       value={claimDestinationTokenAccount}
                       onChange={(e) => setClaimDestinationTokenAccount(e.target.value)}
                       placeholder="Destination confidential token account..."
-                      className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                      className="mt-2 w-full rounded-lg border border-[#1D607A] bg-[rgba(7,11,19,0.92)] px-3 py-2 text-sm"
                     />
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
@@ -1266,9 +1266,9 @@ export default function EmployeePage() {
                       <div key={p.nonce} className="rounded-xl border-2 border-[#005B96] bg-[#005B96]/5 p-5">
                         <div className="flex items-center gap-3">
                           <div className="flex-1">
-                            <div className="text-sm font-bold text-[#2D2D2A] flex items-center gap-2">
+                            <div className="flex items-center gap-2 text-sm font-bold text-[#EAF4FF]">
                               <span>Funded &amp; Secure</span>
-                              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-tighter shadow-sm">Buffered</span>
+                              <span className="rounded border border-[rgba(30,186,152,0.35)] bg-[rgba(30,186,152,0.16)] px-1.5 py-0.5 text-[10px] font-black uppercase tracking-tighter text-[#4CE9C2] shadow-sm">Buffered</span>
                             </div>
                             <div className="mt-1 text-xs text-gray-600">
                               Settled on-chain {new Date(p.createdAt * 1000).toLocaleTimeString()}
@@ -1347,13 +1347,13 @@ export default function EmployeePage() {
                           </button>
                         </div>
                         <AdvancedDetails title="Audit Trail">
-                          <div className="mt-3 grid gap-2 text-[10px] text-gray-500">
-                            <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
-                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Nonce Record</span>
-                              <span className="font-mono text-gray-400">#{p.nonce}</span>
+                          <div className="mt-3 grid gap-2 text-[10px] text-[#8D9AB0]">
+                            <div className="flex items-center justify-between border-b border-[#243043] pb-1.5">
+                              <span className="text-[9px] font-bold uppercase tracking-widest text-[#7D8CA6]">Nonce Record</span>
+                              <span className="font-mono text-[#8D9AB0]">#{p.nonce}</span>
                             </div>
-                            <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
-                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Settlement Proof</span>
+                            <div className="flex items-center justify-between border-b border-[#243043] pb-1.5">
+                              <span className="text-[9px] font-bold uppercase tracking-widest text-[#7D8CA6]">Settlement Proof</span>
                               {proof ? (
                                 <a href={explorerTxUrl(proof)} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:underline font-bold">
                                   {proof.slice(0, 8)}...{proof.slice(-4)} 🔗
@@ -1363,8 +1363,8 @@ export default function EmployeePage() {
                               )}
                             </div>
                             <div className="flex flex-col gap-1">
-                              <span className="font-bold uppercase tracking-widest text-[#2D2D2A]/40 text-[9px]">Confidential Payout PDA</span>
-                              <span className="font-mono text-[9px] break-all bg-gray-50 p-2 rounded border border-gray-100">{p.address.toBase58()}</span>
+                              <span className="text-[9px] font-bold uppercase tracking-widest text-[#7D8CA6]">Confidential Payout PDA</span>
+                              <span className="font-mono text-[9px] break-all rounded border border-[#243043] bg-[rgba(7,12,20,0.9)] p-2 text-[#C5D2E6]">{p.address.toBase58()}</span>
                             </div>
                           </div>
                         </AdvancedDetails>
@@ -1376,42 +1376,42 @@ export default function EmployeePage() {
 
               {/* Success Card */}
               {claimSuccessTx && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 shadow-xl shadow-emerald-500/10">
+                <div className="rounded-xl border border-[rgba(30,186,152,0.35)] bg-[rgba(9,22,20,0.92)] p-6 shadow-xl shadow-emerald-950/30">
                   <div className="flex items-start gap-4">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 text-xl">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[rgba(30,186,152,0.2)] text-xl text-[#43E0BB] ring-8 ring-[rgba(30,186,152,0.15)]">
                       ✓
                     </div>
                     <div className="flex-1">
-                      <div className="text-sm font-black text-emerald-900 border-b border-emerald-200 pb-2 mb-3">Verified Settlement Receipt</div>
+                      <div className="mb-3 border-b border-[rgba(30,186,152,0.35)] pb-2 text-sm font-black text-[#A7F2DE]">Verified Settlement Receipt</div>
 
                       <div className="space-y-3">
                         {lastClaimProof?.bufferTx && (
                           <div className="flex items-center justify-between text-[10px]">
-                            <span className="font-bold text-emerald-700/60 uppercase">1. Buffer Proof</span>
-                            <a href={explorerTxUrl(lastClaimProof.bufferTx)} target="_blank" rel="noopener noreferrer" className="font-mono text-emerald-600 hover:underline">
+                            <span className="font-bold uppercase text-[#68DDBD]/80">1. Buffer Proof</span>
+                            <a href={explorerTxUrl(lastClaimProof.bufferTx)} target="_blank" rel="noopener noreferrer" className="font-mono text-[#55E3BC] hover:underline">
                               {lastClaimProof.bufferTx.slice(0, 12)}...
                             </a>
                           </div>
                         )}
                         <div className="flex items-center justify-between text-[10px]">
-                          <span className="font-bold text-emerald-700/60 uppercase">2. Claim Proof</span>
-                          <a href={explorerTxUrl(claimSuccessTx)} target="_blank" rel="noopener noreferrer" className="font-mono text-emerald-600 hover:underline font-bold">
+                          <span className="font-bold uppercase text-[#68DDBD]/80">2. Claim Proof</span>
+                          <a href={explorerTxUrl(claimSuccessTx)} target="_blank" rel="noopener noreferrer" className="font-mono font-bold text-[#55E3BC] hover:underline">
                             {claimSuccessTx.slice(0, 12)}...
                           </a>
                         </div>
                       </div>
 
-                      <div className="mt-3 rounded-lg border border-emerald-200 bg-white/70 px-3 py-2 text-[11px] text-emerald-800">
+                      <div className="mt-3 rounded-lg border border-[rgba(30,186,152,0.35)] bg-[rgba(8,17,17,0.92)] px-3 py-2 text-[11px] text-[#A7F2DE]">
                         No direct employer -&gt; worker transfer appears in a single payout transaction.
                       </div>
                       {lastKnownClaimDestination ? (
-                        <div className="mt-3 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-[11px] text-emerald-900">
+                        <div className="mt-3 rounded-lg border border-[rgba(30,186,152,0.35)] bg-[rgba(7,15,14,0.95)] px-3 py-2 text-[11px] text-[#CCF7EB]">
                           Destination account:{' '}
                           <span className="font-mono break-all">{lastKnownClaimDestination}</span>
                           <div className="mt-2">
                             <Link
                               href={bridgePrefillHref}
-                              className="inline-flex items-center rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800"
+                              className="inline-flex items-center rounded-md border border-[rgba(30,186,152,0.4)] bg-[rgba(30,186,152,0.14)] px-2.5 py-1.5 text-[11px] font-semibold text-[#73E6CA]"
                             >
                               Open Bridge with this account
                             </Link>
@@ -1420,37 +1420,37 @@ export default function EmployeePage() {
                       ) : null}
 
                       {/* ── What's Next? ── */}
-                      <div className="mt-4 rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200/50 p-4">
-                        <div className="text-[10px] font-black text-emerald-900 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                      <div className="mt-4 rounded-xl border border-[rgba(30,186,152,0.3)] bg-gradient-to-br from-[rgba(9,18,18,0.95)] to-[rgba(7,14,16,0.95)] p-4">
+                        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-[#9EEED9]">
                           <span>✨</span> What&apos;s Next?
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-start gap-2">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white text-[8px] font-black mt-0.5">1</span>
-                            <p className="text-[11px] text-emerald-800 leading-relaxed">
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#1EBA98] text-[8px] font-black text-[#021A18]">1</span>
+                            <p className="text-[11px] leading-relaxed text-[#B7ECDE]">
                               <span className="font-bold">Your tokens are safe</span> — they&apos;re now in your confidential wallet, fully encrypted on-chain.
                             </p>
                           </div>
                           <div className="flex items-start gap-2">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white text-[8px] font-black mt-0.5">2</span>
-                            <p className="text-[11px] text-emerald-800 leading-relaxed">
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#1EBA98] text-[8px] font-black text-[#021A18]">2</span>
+                            <p className="text-[11px] leading-relaxed text-[#B7ECDE]">
                               <span className="font-bold">To use your tokens</span> — unwrap them to regular SPL tokens via the bridge, then transfer or swap freely.
                             </p>
                           </div>
                           <div className="flex items-start gap-2">
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-400 text-white text-[8px] font-black mt-0.5">💡</span>
-                            <p className="text-[11px] text-teal-700 leading-relaxed">
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#37CFEE] text-[8px] font-black text-[#032233]">💡</span>
+                            <p className="text-[11px] leading-relaxed text-[#9FE6F7]">
                               <span className="font-bold">Or hold them</span> — your balance stays encrypted and private until you choose to move it.
                             </p>
                           </div>
                         </div>
                       </div>
 
-                      <div className="mt-4 pt-4 border-t border-emerald-200 flex items-center justify-between">
-                        <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-widest">Status: Claimed</span>
+                      <div className="mt-4 flex items-center justify-between border-t border-[rgba(30,186,152,0.3)] pt-4">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-[#9EEED9]">Status: Claimed</span>
                         <button
                           onClick={() => setClaimSuccessTx(null)}
-                          className="text-[10px] font-black text-emerald-600 hover:text-emerald-800 uppercase tracking-widest transition-colors"
+                          className="text-[10px] font-black uppercase tracking-widest text-[#73E6CA] transition-colors hover:text-[#BDF5E7]"
                         >
                           Start Next Payout
                         </button>
@@ -1522,7 +1522,7 @@ export default function EmployeePage() {
                 {revealLoading ? 'Revealing via Keeper...' : 'Reveal Live Earnings (Keeper)'}
               </button>
               {serverRevealHint ? (
-                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <div className="rounded border border-[#2A4D74] bg-[rgba(10,18,30,0.94)] px-3 py-2 text-sm text-[#A9DEEF]">
                   <div className="font-medium">View permission missing</div>
                   <div className="mt-1">{serverRevealHint}</div>
                   <button
@@ -1561,7 +1561,7 @@ export default function EmployeePage() {
                 <span className="text-sm text-gray-600">cUSDC-like (confidential)</span>
               </div>
               {estimatedFrozenAt ? (
-                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                <div className="rounded-md border border-[#24506A] bg-[rgba(8,16,28,0.93)] px-3 py-2 text-xs text-[#98DDF2]">
                   Finalizing on-chain payout. Live estimate is frozen until settlement confirms.
                 </div>
               ) : null}
@@ -1759,7 +1759,7 @@ export default function EmployeePage() {
           <section className="panel-card">
             <h2 className="text-lg font-semibold text-[#2D2D2A]">Where payout was sent</h2>
             {lastKnownClaimDestination ? (
-              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+              <div className="mt-3 rounded-lg border border-[rgba(30,186,152,0.35)] bg-[rgba(8,16,15,0.93)] px-3 py-2 text-sm text-[#C6F6E9]">
                 Last payout destination:{' '}
                 <a
                   href={`https://explorer.solana.com/address/${lastKnownClaimDestination}?cluster=devnet`}
@@ -1772,7 +1772,7 @@ export default function EmployeePage() {
                 <div className="mt-2">
                   <Link
                     href={bridgePrefillHref}
-                    className="inline-flex items-center rounded-md border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-800"
+                    className="inline-flex items-center rounded-md border border-[rgba(30,186,152,0.38)] bg-[rgba(30,186,152,0.13)] px-2.5 py-1.5 text-xs font-semibold text-[#7CE7CD]"
                   >
                     Open Bridge with this address
                   </Link>
