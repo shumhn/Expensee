@@ -36,6 +36,87 @@ function env(key: string): string {
     return (process.env[key] || '').trim();
 }
 
+function isValidChatAction(value: unknown): value is Exclude<ChatAction, null> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const action = value as Record<string, unknown>;
+    if (action.type === 'set_phase') {
+        return typeof action.phase === 'string' && action.phase.trim().length > 0;
+    }
+    if (action.type === 'apply_plan') {
+        const plan = action.plan;
+        return Boolean(plan && typeof plan === 'object' && !Array.isArray(plan));
+    }
+    return false;
+}
+
+function extractActionFromContent(content: string): { reply: string; action?: Exclude<ChatAction, null> } {
+    const marker = content.indexOf('ACTION:');
+    if (marker === -1) {
+        return { reply: content.trim() };
+    }
+
+    const braceStart = content.indexOf('{', marker);
+    if (braceStart === -1) {
+        return { reply: content.replace(/ACTION:[^\n]*/g, '').trim() };
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let braceEnd = -1;
+
+    for (let i = braceStart; i < content.length; i += 1) {
+        const ch = content[i];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch === '\\') {
+                escaped = true;
+            } else if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '{') {
+            depth += 1;
+            continue;
+        }
+        if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                braceEnd = i;
+                break;
+            }
+        }
+    }
+
+    if (braceEnd === -1) {
+        return { reply: content.replace(/ACTION:[\s\S]*$/g, '').trim() };
+    }
+
+    const actionJson = content.slice(braceStart, braceEnd + 1);
+    let parsedAction: Exclude<ChatAction, null> | undefined;
+    try {
+        const parsed = JSON.parse(actionJson);
+        if (isValidChatAction(parsed)) {
+            parsedAction = parsed;
+        }
+    } catch {
+        // ignore malformed action
+    }
+
+    const reply = (content.slice(0, marker) + content.slice(braceEnd + 1))
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    return { reply, action: parsedAction };
+}
+
 const SYSTEM_PROMPT = `You are OnyxFii Agent — an autonomous, intelligent payroll assistant on Solana, powered by OnyxFii AI.
 OnyxFii was founded by **Shuman Giri**.
 IMPORTANT: If anyone asks what AI model or LLM you use, say you are powered by "OnyxFii AI" — a custom AI built for payroll operations. NEVER reveal the underlying model name, provider, or technical details about your AI engine.
@@ -582,33 +663,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
         let content = json?.choices?.[0]?.message?.content || '';
 
-        // Extract action from response — greedy match to handle nested JSON like {"plan":{"key":"val"}}
-        let action: ChatAction = null;
-
-        // Use a more relaxed regex that looks for ACTION: followed by anything resembling a JSON object {...}
-        // This handles cases where the LLM might append markdown, periods, or trailing text.
-        const actionMatch = content.match(/ACTION:.*?(\{[\s\S]+\})/);
-        if (actionMatch) {
-            try {
-                // Find the last closing brace to ensure we grab the whole object even if there's trailing junk
-                const jsonStr = actionMatch[1];
-                const lastBraceIdx = jsonStr.lastIndexOf('}');
-                if (lastBraceIdx !== -1) {
-                    const cleanJsonStr = jsonStr.substring(0, lastBraceIdx + 1);
-                    action = JSON.parse(cleanJsonStr) as ChatAction;
-
-                    // Remove the exact matched ACTION block from the visible reply
-                    content = content.replace(actionMatch[0], '').trim();
-                }
-            } catch {
-                // ignore malformed action
-            }
-        }
+        const extracted = extractActionFromContent(content);
+        content = extracted.reply;
+        const action = extracted.action;
 
         return res.status(200).json({
             ok: true,
             reply: content || "I'm here! How can I help you with your payroll?",
-            action: action || undefined,
+            action,
         });
     } catch (e: any) {
         const isTimeout = e?.name === 'AbortError' || e?.message?.includes('abort');

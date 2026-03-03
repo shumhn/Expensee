@@ -96,6 +96,7 @@ type AgentRunStatePayload = {
   agentPrompt: string;
   agentDraft: AgentPlanDraft | null;
   agentQueue: AgentExecutionStep[];
+  agentQueueContextKey?: string;
   agentEnableHighSpeed: boolean;
   agentApprovalMode: AgentApprovalMode;
   agentMessages: any[];
@@ -134,6 +135,35 @@ function normalizeAgentQueue(raw: unknown): AgentExecutionStep[] {
     });
   }
   return next;
+}
+
+function trimAgentMessages(raw: any[]): any[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(-40)
+    .map((item) => ({
+      id:
+        typeof item?.id === "string"
+          ? item.id.slice(0, 80)
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      role: item?.role === "user" ? "user" : "agent",
+      text:
+        typeof item?.text === "string"
+          ? item.text.slice(0, 1200)
+          : "",
+      timestamp:
+        typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
+    }))
+    .filter((m) => m.text.trim().length > 0);
+}
+
+function trimAgentQueue(raw: AgentExecutionStep[]): AgentExecutionStep[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((step) => ({
+    ...step,
+    detail: typeof step.detail === "string" ? step.detail.slice(0, 220) : undefined,
+    txid: typeof step.txid === "string" ? step.txid.slice(0, 120) : undefined,
+  }));
 }
 function isPayPreset(value: string): value is PayPreset {
   return (
@@ -210,12 +240,19 @@ export default function EmployerPage() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentDraft, setAgentDraft] = useState<AgentPlanDraft | null>(null);
   const [agentQueue, setAgentQueue] = useState<AgentExecutionStep[]>([]);
+  const [agentQueueContextKey, setAgentQueueContextKey] = useState("");
   const [agentExecuteBusy, setAgentExecuteBusy] = useState(false);
   const [agentEnableHighSpeed, setAgentEnableHighSpeed] = useState(true);
   const [agentApprovalMode, setAgentApprovalMode] =
     useState<AgentApprovalMode>("high_risk_only");
   const [agentRunHydrated, setAgentRunHydrated] = useState(false);
   const [showAdvancedMode, setShowAdvancedMode] = useState(false);
+  const [showPrivacyProof, setShowPrivacyProof] = useState(true);
+  const [proofToast, setProofToast] = useState("");
+  const [proofToastVisible, setProofToastVisible] = useState(false);
+  const proofToastTimerRef = useRef<number | null>(null);
+  const proofTxCountRef = useRef(0);
+  const proofInitRef = useRef(false);
 
   const [raiseSalaryPerSecond, setRaiseSalaryPerSecond] = useState("0.0001");
   const [bonusAmount, setBonusAmount] = useState("1");
@@ -293,6 +330,55 @@ export default function EmployerPage() {
     return Number.isFinite(n) && n >= 0 ? n : null;
   }, [streamIndexInput]);
 
+  const activeAgentIntent = useMemo(() => {
+    const hasWorkerDraft =
+      !!employeeWallet ||
+      !!agentDraft?.employeeWallet ||
+      !!agentDraft?.payPreset;
+    const hasStreamIndex =
+      (streamStatus?.streamIndex !== undefined &&
+        streamStatus?.streamIndex !== null) ||
+      (agentDraft?.streamIndex !== undefined &&
+        agentDraft?.streamIndex !== null);
+    let intent = (agentDraft && agentDraft.intent) ? agentDraft.intent : "create_stream";
+    if (!intent || intent === "unknown" || intent === "none") {
+      intent = "create_stream";
+    }
+    if (hasWorkerDraft && !hasStreamIndex && intent !== "create_stream") {
+      intent = "create_stream";
+    }
+    return intent;
+  }, [agentDraft, employeeWallet, streamStatus?.streamIndex]);
+
+  const computedQueueContextKey = useMemo(() => {
+    const walletTarget = (
+      (agentDraft?.employeeWallet || employeeWallet || "").trim() || "none"
+    );
+    const streamTarget =
+      agentDraft?.streamIndex ??
+      streamStatus?.streamIndex ??
+      streamIndexInput ??
+      "none";
+    return [
+      `intent:${activeAgentIntent}`,
+      `wallet:${walletTarget}`,
+      `stream:${String(streamTarget)}`,
+      `hs:${agentEnableHighSpeed ? "1" : "0"}`,
+      `keeper:${autoGrantKeeperDecrypt ? "1" : "0"}`,
+      `bound:${boundPresetPeriod ? "1" : "0"}`,
+    ].join("|");
+  }, [
+    activeAgentIntent,
+    agentDraft?.employeeWallet,
+    agentDraft?.streamIndex,
+    employeeWallet,
+    streamStatus?.streamIndex,
+    streamIndexInput,
+    agentEnableHighSpeed,
+    autoGrantKeeperDecrypt,
+    boundPresetPeriod,
+  ]);
+
   const hasWorkerRecord = Boolean(streamStatus);
   const hasProgressedPastFunding = v2ConfigExists || hasWorkerRecord;
   const hasVaultFundingSignal = vaultFundingObserved || hasProgressedPastFunding;
@@ -318,6 +404,228 @@ export default function EmployerPage() {
     hasWorkerRecord,
     highSpeedOn,
   });
+
+  const proofTxs = useMemo(() => {
+    const keyOrder = [
+      "register-business",
+      "create-vault-pda-token",
+      "init-vault",
+      "create-depositor-token",
+      "deposit-funds",
+      "init-automation",
+      "create-worker-record",
+      "grant-keeper-access",
+      "enable-high-speed",
+    ];
+    const labelByKey: Record<string, string> = {
+      "register-business": "Register company",
+      "create-vault-pda-token": "Create encrypted vault account",
+      "init-vault": "Initialize vault custody",
+      "create-depositor-token": "Create source account",
+      "deposit-funds": "Deposit payroll funds",
+      "init-automation": "Initialize automation",
+      "create-worker-record": "Create private payroll record",
+      "grant-keeper-access": "Grant automation decrypt access",
+      "enable-high-speed": "Enable high-speed mode",
+    };
+    const byKey = new Map(
+      agentQueue
+        .filter((s) => s.status === "done" && typeof s.txid === "string" && !!s.txid)
+        .map((s) => [s.key, s] as const),
+    );
+    const seen = new Set<string>();
+    const rows: { label: string; txid: string; url: string }[] = [];
+    for (const key of keyOrder) {
+      const step = byKey.get(key);
+      if (!step?.txid || seen.has(step.txid)) continue;
+      seen.add(step.txid);
+      rows.push({
+        label: labelByKey[key] || step.label,
+        txid: step.txid,
+        url: explorerTxUrl(step.txid),
+      });
+    }
+    for (const step of agentQueue) {
+      if (step.status !== "done" || !step.txid || seen.has(step.txid)) continue;
+      seen.add(step.txid);
+      rows.push({
+        label: step.label,
+        txid: step.txid,
+        url: explorerTxUrl(step.txid),
+      });
+    }
+    if (lastTx?.sig && !seen.has(lastTx.sig)) {
+      rows.unshift({
+        label: lastTx.label || "Latest transaction",
+        txid: lastTx.sig,
+        url: explorerTxUrl(lastTx.sig),
+      });
+    }
+    return rows.slice(0, 8);
+  }, [agentQueue, explorerTxUrl, lastTx]);
+
+  const privacyProof = useMemo(() => {
+    const routePrivate =
+      streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null
+        ? !streamStatus.hasFixedDestination
+        : null;
+    const plannedPrivateRoute = destinationRouteMode === "private_shield";
+    const encryptedHandlePresent = Boolean(streamStatus?.accruedHandle?.trim());
+    const keeperGrantDone = agentQueue.some(
+      (s) => s.key === "grant-keeper-access" && s.status === "done",
+    );
+    const privateRecordDone = agentQueue.some(
+      (s) => s.key === "create-worker-record" && s.status === "done",
+    );
+    const keeperDecryptReady = Boolean(
+      v2ConfigExists &&
+      (keeperGrantDone || (autoGrantKeeperDecrypt && privateRecordDone)),
+    );
+    const magicBlockDelegated =
+      streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null
+        ? Boolean(streamStatus.isDelegated || streamRoute?.delegated)
+        : null;
+    const checks = [routePrivate, encryptedHandlePresent, keeperDecryptReady, magicBlockDelegated];
+    const passed = checks.filter((v) => v === true).length;
+    const total = checks.length;
+    return {
+      routePrivate,
+      plannedPrivateRoute,
+      encryptedHandlePresent,
+      keeperDecryptReady,
+      magicBlockDelegated,
+      streamAddress: streamStatus?.address,
+      encryptedReference: streamStatus?.accruedHandle,
+      txProofs: proofTxs,
+      passed,
+      total,
+    };
+  }, [
+    streamStatus,
+    destinationRouteMode,
+    agentQueue,
+    v2ConfigExists,
+    autoGrantKeeperDecrypt,
+    streamRoute?.delegated,
+    proofTxs,
+  ]);
+
+  const showProofToastMessage = useCallback((text: string) => {
+    setProofToast(text);
+    setProofToastVisible(true);
+    if (proofToastTimerRef.current) window.clearTimeout(proofToastTimerRef.current);
+    proofToastTimerRef.current = window.setTimeout(() => {
+      setProofToastVisible(false);
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (proofToastTimerRef.current) window.clearTimeout(proofToastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const count = privacyProof.txProofs.length;
+    if (!proofInitRef.current) {
+      proofInitRef.current = true;
+      proofTxCountRef.current = count;
+      return;
+    }
+    if (count > proofTxCountRef.current) {
+      showProofToastMessage(`Proof refreshed from on-chain tx (${count} records).`);
+    }
+    proofTxCountRef.current = count;
+  }, [privacyProof.txProofs.length, showProofToastMessage]);
+
+  const handleCopyProofTxs = useCallback(async () => {
+    if (!privacyProof.txProofs.length) {
+      showProofToastMessage("No transaction proofs to copy yet.");
+      return;
+    }
+    const text = privacyProof.txProofs
+      .map((tx, i) => `${i + 1}. ${tx.label}\n${tx.url}`)
+      .join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      showProofToastMessage("Transaction proofs copied.");
+    } catch {
+      showProofToastMessage("Clipboard blocked. Copy failed.");
+    }
+  }, [privacyProof.txProofs, showProofToastMessage]);
+
+  const handleDownloadProofReceipt = useCallback(() => {
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      wallet: ownerPubkey?.toBase58() || null,
+      checks: {
+        routePrivate: privacyProof.routePrivate,
+        plannedPrivateRoute: privacyProof.plannedPrivateRoute,
+        encryptedHandlePresent: privacyProof.encryptedHandlePresent,
+        keeperDecryptReady: privacyProof.keeperDecryptReady,
+        magicBlockDelegated: privacyProof.magicBlockDelegated,
+      },
+      streamAccount: privacyProof.streamAddress || null,
+      encryptedReference: privacyProof.encryptedReference || null,
+      passed: privacyProof.passed,
+      total: privacyProof.total,
+      transactions: privacyProof.txProofs.map((tx) => ({
+        label: tx.label,
+        txid: tx.txid,
+        url: tx.url,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expensee-proof-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showProofToastMessage("Proof receipt downloaded.");
+  }, [ownerPubkey, privacyProof, showProofToastMessage]);
+
+  const handleExportProofPdf = useCallback(() => {
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    const lines = [
+      `Generated: ${new Date().toLocaleString()}`,
+      `Wallet: ${ownerPubkey?.toBase58() || "N/A"}`,
+      `Checks Passed: ${privacyProof.passed}/${privacyProof.total}`,
+      `Route Privacy: ${privacyProof.routePrivate === null ? "Pending" : privacyProof.routePrivate ? "Pass" : "Fail"}`,
+      `Encrypted Ref: ${privacyProof.encryptedHandlePresent ? "Pass" : "Pending"}`,
+      `Keeper Decrypt: ${privacyProof.keeperDecryptReady ? "Pass" : "Pending"}`,
+      `MagicBlock Delegation: ${privacyProof.magicBlockDelegated === null ? "Pending" : privacyProof.magicBlockDelegated ? "Pass" : "Optional"}`,
+      `Stream Account: ${privacyProof.streamAddress || "Not created"}`,
+      "",
+      "Transaction Proofs:",
+      ...(
+        privacyProof.txProofs.length
+          ? privacyProof.txProofs.map((tx, i) => `${i + 1}. ${tx.label}\n${tx.url}`)
+          : ["No transaction proofs captured yet."]
+      ),
+    ];
+    const html = `<!doctype html><html><head><title>Expensee Proof Receipt</title><style>body{font-family:Arial,sans-serif;background:#07090f;color:#fff;padding:24px}h1{font-size:24px;margin:0 0 12px;color:#6fe8ff}pre{white-space:pre-wrap;line-height:1.5;font-size:13px;background:#0d111b;border:1px solid #1d2738;border-radius:10px;padding:16px}</style></head><body><h1>Expensee Privacy Proof Receipt</h1><pre>${escapeHtml(lines.join("\n"))}</pre></body></html>`;
+    const win = window.open("", "_blank", "noopener,noreferrer,width=860,height=780");
+    if (!win) {
+      showProofToastMessage("Popup blocked. Unable to export PDF.");
+      return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+    showProofToastMessage("Print dialog opened. Save as PDF.");
+  }, [ownerPubkey, privacyProof, showProofToastMessage]);
 
   const infraStatuses = useMemo(
     () => [
@@ -550,6 +858,9 @@ export default function EmployerPage() {
       // EDGE CASE: Reset all agent state on disconnect so next wallet starts fresh
       setAgentMessages([]);
       setAgentPhase("greeting");
+      setAgentDraft(null);
+      setAgentQueue([]);
+      setAgentQueueContextKey("");
       setInitialDataLoaded(false);
       agentGreetedRef.current = false;
       return;
@@ -595,6 +906,9 @@ export default function EmployerPage() {
         if (Array.isArray(remote.agentQueue)) {
           setAgentQueue(normalizeAgentQueue(remote.agentQueue));
         }
+        if (typeof remote.agentQueueContextKey === "string") {
+          setAgentQueueContextKey(remote.agentQueueContextKey);
+        }
         if (remote.agentDraft && typeof remote.agentDraft === "object") {
           setAgentDraft(remote.agentDraft as AgentPlanDraft);
         }
@@ -619,16 +933,18 @@ export default function EmployerPage() {
   useEffect(() => {
     if (!ownerPubkey || !agentRunHydrated) return;
     const owner = ownerPubkey.toBase58();
+    const payload: AgentRunStatePayload = {
+      agentPrompt: agentPrompt.slice(0, 1000),
+      agentDraft,
+      agentQueue: trimAgentQueue(agentQueue),
+      agentQueueContextKey: agentQueueContextKey || computedQueueContextKey,
+      agentEnableHighSpeed,
+      agentApprovalMode,
+      agentMessages: trimAgentMessages(agentMessages),
+      agentPhase,
+    };
     const timer = window.setTimeout(() => {
-      void saveAgentRunState(owner, {
-        agentPrompt,
-        agentDraft,
-        agentQueue,
-        agentEnableHighSpeed,
-        agentApprovalMode,
-        agentMessages,
-        agentPhase,
-      });
+      void saveAgentRunState(owner, payload);
     }, 450);
     return () => window.clearTimeout(timer);
   }, [
@@ -637,6 +953,8 @@ export default function EmployerPage() {
     agentEnableHighSpeed,
     agentPrompt,
     agentQueue,
+    agentQueueContextKey,
+    computedQueueContextKey,
     agentRunHydrated,
     agentMessages,
     agentPhase,
@@ -671,9 +989,9 @@ export default function EmployerPage() {
             id: correctionId,
             role: "agent",
             text:
-              `Welcome back to OnyxFii! I've synchronized with the blockchain. \n\n` +
-              `Your account status:\n Company registered\n Payroll vault ready\n Automation configured\n\n` +
-              `Everything is set up. Ready to create a new payment stream? Paste an **employee auth wallet address** to begin.`,
+              `🤖 Welcome back to OnyxFii! I've synchronized with the blockchain. \n\n` +
+              `📊 Your account status:\n✅ Company registered\n✅ Payroll vault ready\n✅ Automation configured\n\n` +
+              `Everything is set up. Paste an **employee auth wallet address** to begin a new payment stream.`,
             timestamp: Date.now(),
           },
         ]);
@@ -688,7 +1006,7 @@ export default function EmployerPage() {
             id: correctionId,
             role: "agent",
             text:
-              ` **Chain Sync Notice:** I noticed your on-chain data doesn't match our previous conversation (possibly a new wallet or network reset).\n\n` +
+              `🔄 **Chain Sync Notice:** I noticed your on-chain data doesn't match our previous conversation (possibly a new wallet or network reset).\n\n` +
               `Let's get back on track. It looks like you still need to complete the foundational setup. Type **"setup"** to resume where the blockchain left off.`,
             timestamp: Date.now(),
           },
@@ -704,12 +1022,12 @@ export default function EmployerPage() {
     agentGreetedRef.current = true;
 
     const statusParts: string[] = [];
-    if (businessExists) statusParts.push(" Company registered");
-    else statusParts.push(" Company not yet registered");
-    if (vaultExists) statusParts.push(" Payroll vault ready");
-    else statusParts.push(" Payroll vault needed");
-    if (v2ConfigExists) statusParts.push(" Automation configured");
-    else statusParts.push(" Automation needed");
+    if (businessExists) statusParts.push("✅ Company registered");
+    else statusParts.push("⚠️ Company not yet registered");
+    if (vaultExists) statusParts.push("✅ Payroll vault ready");
+    else statusParts.push("⚠️ Payroll vault needed");
+    if (v2ConfigExists) statusParts.push("✅ Automation configured");
+    else statusParts.push("⚠️ Automation needed");
 
     const nextPending = agentQueue.find((s) => s.status === "pending");
     const isFullySetup =
@@ -722,8 +1040,8 @@ export default function EmployerPage() {
           id: msgId,
           role: "agent",
           text:
-            `Welcome back to OnyxFii! I've synchronized with the blockchain. \n\n` +
-            `Your account status:\n${statusParts.join("\n")}\n\n` +
+            `🤖 Welcome back to OnyxFii! I've synchronized with the blockchain. \n\n` +
+            `📊 Your account status:\n${statusParts.join("\n")}\n\n` +
             `The company is fully initialized. Ready to set up a new payment stream? Paste an **employee auth wallet address** to begin.`,
           timestamp: Date.now(),
         },
@@ -731,16 +1049,16 @@ export default function EmployerPage() {
       setAgentPhase("ask_wallet");
     } else {
       const stepMsg = nextPending
-        ? `I see we have a pending task: **${nextPending.label}**.\n\nType **"go"** and I'll handle that for you.`
-        : `It looks like you haven't finished setting up your company profile. Type **"setup"** and I'll walk you through the missing initialization steps.`;
+        ? `🧭 Pending task: **${nextPending.label}**.\n\nType **"go"** and I'll execute it with you.`
+        : `It looks like your company setup is incomplete. Type **"setup"** and I'll guide you through the missing initialization steps.`;
 
       setAgentMessages([
         {
           id: msgId,
           role: "agent",
           text:
-            `Welcome to OnyxFii! I'm your autonomous payroll agent. \n\n` +
-            `Your account status:\n${statusParts.join("\n")}\n\n` +
+            `🤖 Welcome to OnyxFii! I'm your autonomous payroll agent. \n\n` +
+            `📊 Your account status:\n${statusParts.join("\n")}\n\n` +
             stepMsg,
           timestamp: Date.now(),
         },
@@ -1351,18 +1669,7 @@ export default function EmployerPage() {
 
   const buildAgentExecutionQueue = useCallback((): AgentExecutionStep[] => {
     const steps: AgentExecutionStep[] = [];
-    // Intent logic: default to 'create_stream' if any worker-related details are present but no stream index yet.
-    // This prevents accidental 'update_stream' or 'unknown' intents from skipping setup steps.
-    const hasWorkerDraft = !!employeeWallet || !!agentDraft?.employeeWallet || !!agentDraft?.payPreset;
-    const hasStreamIndex = (streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null) || (agentDraft?.streamIndex !== undefined && agentDraft?.streamIndex !== null);
-
-    let intent = (agentDraft && agentDraft.intent) ? agentDraft.intent : "create_stream";
-    if (!intent || intent === "unknown" || intent === "none") {
-      intent = "create_stream";
-    }
-    if (hasWorkerDraft && !hasStreamIndex && intent !== 'create_stream') {
-      intent = "create_stream";
-    }
+    const intent = activeAgentIntent;
 
     // Shared: Refresh state
     steps.push({
@@ -1599,8 +1906,8 @@ export default function EmployerPage() {
 
     return steps;
   }, [
-    agentDraft,
     agentEnableHighSpeed,
+    activeAgentIntent,
     businessExists,
     vaultExists,
     depositorTokenAccount,
@@ -1619,6 +1926,12 @@ export default function EmployerPage() {
       const freshQueue = buildAgentExecutionQueue();
       const currentKeys = agentQueue.map(s => s.key).join(',');
       const freshKeys = freshQueue.map(s => s.key).join(',');
+      const sameContext = agentQueueContextKey === computedQueueContextKey;
+      if (!sameContext) {
+        setAgentQueue(freshQueue);
+        setAgentQueueContextKey(computedQueueContextKey);
+        return;
+      }
       if (currentKeys !== freshKeys) {
         const mergedQueue = freshQueue.map(step => {
           const existing = agentQueue.find(s => s.key === step.key);
@@ -1627,9 +1940,10 @@ export default function EmployerPage() {
             : step;
         });
         setAgentQueue(mergedQueue);
+        setAgentQueueContextKey(computedQueueContextKey);
       }
     }
-  }, [agentQueue, buildAgentExecutionQueue]);
+  }, [agentQueue, buildAgentExecutionQueue, agentQueueContextKey, computedQueueContextKey]);
 
   const previewAgentExecution = useCallback(() => {
     const workerWallet = employeeWallet.trim();
@@ -1646,8 +1960,9 @@ export default function EmployerPage() {
     }
     setError("");
     setAgentQueue(queue);
+    setAgentQueueContextKey(computedQueueContextKey);
     setMessage("Execution preview ready. Review and run.");
-  }, [buildAgentExecutionQueue, employeeWallet]);
+  }, [buildAgentExecutionQueue, employeeWallet, computedQueueContextKey]);
 
   const executeAgentQueue = useCallback(async () => {
     if (!ownerPubkey) {
@@ -1661,6 +1976,7 @@ export default function EmployerPage() {
     }
 
     setAgentQueue(queue);
+    setAgentQueueContextKey(computedQueueContextKey);
     setAgentExecuteBusy(true);
     setBusy(true);
     setBusyAction("Executing assistant plan");
@@ -1902,11 +2218,19 @@ export default function EmployerPage() {
           }
 
           if (step.key === "pause-stream") {
+            const index = Number(
+              agentDraft?.streamIndex ??
+              streamStatus?.streamIndex ??
+              streamIndexInput
+            );
+            if (!Number.isFinite(index) || index < 0) {
+              throw new Error("No valid payroll record number selected to pause.");
+            }
             const txid = await pauseStreamV2(
               connection,
               wallet,
               ownerPubkey,
-              1,
+              index,
             );
             updateStep(step.key, { status: "done", txid });
             continue;
@@ -2015,7 +2339,6 @@ export default function EmployerPage() {
     agentApprovalMode,
     buildAgentExecutionQueue,
     connection,
-    createWorkerDestinationAccountTask,
     createWorkerPayrollRecordTask,
     deactivateStreamSafelyTask,
     effectiveKeeperPubkey,
@@ -2027,6 +2350,8 @@ export default function EmployerPage() {
     rotateAutomationWalletTask,
     runStreamMutationWithHighSpeedRecovery,
     settleIntervalSecs,
+    computedQueueContextKey,
+    streamStatus?.streamIndex,
     streamIndexInput,
     wallet,
   ]);
@@ -2039,9 +2364,11 @@ export default function EmployerPage() {
 
       // Always get the latest "truth" from buildAgentExecutionQueue
       const freshQueue = buildAgentExecutionQueue();
+      const sameContext = agentQueueContextKey === computedQueueContextKey;
 
       // Merge status from existing agentQueue to preserve "done" or "running" status for this session
       const mergedQueue = freshQueue.map((step): AgentExecutionStep => {
+        if (!sameContext) return step;
         const existing = agentQueue.find((s) => s.key === step.key);
         if (
           existing &&
@@ -2064,6 +2391,7 @@ export default function EmployerPage() {
       runIdRef.current = runId;
 
       setAgentQueue(mergedQueue);
+      setAgentQueueContextKey(computedQueueContextKey);
       setAgentExecuteBusy(true);
       setBusy(true);
       setBusyAction(`Executing: ${nextStep.label}`);
@@ -2226,10 +2554,9 @@ export default function EmployerPage() {
           const rotateRes = await rotateAutomationWalletTask();
           result = { txid: rotateRes.txid, detail: rotateRes.message || "Automation wallet rotated." };
         } else if (nextStep.key === "create-worker-token") {
-          const workerTokenRes = await createWorkerDestinationAccountTask();
           result = {
-            txid: workerTokenRes.txid,
-            detail: "Private payout route account created.",
+            txid: "",
+            detail: "Skipped: privacy mode uses claim-time destination.",
           };
         } else if (nextStep.key === "configure-worker-options") {
           // This step triggers the ask_options conversational flow in AgentChat
@@ -2263,7 +2590,15 @@ export default function EmployerPage() {
           );
           result = { txid, detail: "High-speed mode enabled." };
         } else if (nextStep.key === "pause-stream") {
-          const txid = await pauseStreamV2(connection, wallet, ownerPubkey, 1);
+          const index = Number(
+            agentDraft?.streamIndex ??
+            streamStatus?.streamIndex ??
+            streamIndexInput
+          );
+          if (!Number.isFinite(index) || index < 0) {
+            throw new Error("No valid payroll record number selected to pause.");
+          }
+          const txid = await pauseStreamV2(connection, wallet, ownerPubkey, index);
           result = { txid, detail: "Payroll stream paused." };
         } else if (nextStep.key === "resume-stream") {
           const txid = await resumeStreamV2(connection, wallet);
@@ -2385,9 +2720,10 @@ export default function EmployerPage() {
       agentDraft,
       agentExecuteBusy,
       agentQueue,
+      agentQueueContextKey,
       buildAgentExecutionQueue,
+      computedQueueContextKey,
       connection,
-      createWorkerDestinationAccountTask,
       createWorkerPayrollRecordTask,
       deactivateStreamSafelyTask,
       destinationRouteMode,
@@ -2400,6 +2736,7 @@ export default function EmployerPage() {
       rotateAutomationWalletTask,
       runStreamMutationWithHighSpeedRecovery,
       settleIntervalSecs,
+      streamStatus?.streamIndex,
       streamIndexInput,
       wallet,
     ]);
@@ -2530,7 +2867,15 @@ export default function EmployerPage() {
       setDepositAmount(String(plan.depositAmount));
       setHasConfirmedDeposit(true);
     }
-    setAutoGrantKeeperDecrypt(true);
+    const keeperDecryptPref =
+      typeof plan.autoGrantKeeperDecrypt === "boolean"
+        ? plan.autoGrantKeeperDecrypt
+        : typeof plan.autoGrantDecrypt === "boolean"
+          ? plan.autoGrantDecrypt
+          : undefined;
+    if (typeof keeperDecryptPref === "boolean") {
+      setAutoGrantKeeperDecrypt(keeperDecryptPref);
+    }
     if (plan.recoverAmount && (typeof plan.recoverAmount === "string" || typeof plan.recoverAmount === "number"))
       setVaultWithdrawAmount(String(plan.recoverAmount));
     if (plan.intent && typeof plan.intent === "string") {
@@ -2544,7 +2889,7 @@ export default function EmployerPage() {
         return { ...prev!, intent: hasStream ? 'update_stream' : 'create_stream' };
       });
     }
-  }, [depositorTokenAccount, wallet.publicKey]);
+  }, [streamStatus?.streamIndex, wallet.publicKey]);
 
   const handleCancelBusy = useCallback(() => {
     runIdRef.current += 1; // Invalidate any pending execution promises
@@ -2655,12 +3000,183 @@ export default function EmployerPage() {
           agentGreetedRef.current = false;
           setAgentDraft(null);
           setAgentQueue([]);
+          setAgentQueueContextKey("");
         }}
-        autoGrantKeeperDecrypt={true}
-        setAutoGrantKeeperDecrypt={() => { }}
+        autoGrantKeeperDecrypt={autoGrantKeeperDecrypt}
+        setAutoGrantKeeperDecrypt={setAutoGrantKeeperDecrypt}
         boundPresetPeriod={boundPresetPeriod}
         setBoundPresetPeriod={setBoundPresetPeriod}
+        proofSummary={{
+          routePrivate: privacyProof.routePrivate,
+          encryptedHandlePresent: privacyProof.encryptedHandlePresent,
+          keeperDecryptReady: privacyProof.keeperDecryptReady,
+          magicBlockDelegated: privacyProof.magicBlockDelegated,
+          streamAddress: privacyProof.streamAddress,
+          encryptedReference: privacyProof.encryptedReference,
+          txProofs: privacyProof.txProofs,
+        }}
       />
+
+      <section className="mt-6 mb-6 rounded-3xl border border-[var(--app-border)] bg-black/70 backdrop-blur-xl p-5 shadow-xl shadow-cyan-900/5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300">
+              Privacy Proof
+            </div>
+            <h3 className="mt-1 text-xl font-bold text-[var(--app-ink)]">
+              Inco Encryption + MagicBlock Verification
+            </h3>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-white">
+              {privacyProof.passed}/{privacyProof.total} checks passed
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleCopyProofTxs()}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-[var(--app-ink)] hover:border-cyan-400/40 hover:text-cyan-200 transition"
+            >
+              Copy TXs
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadProofReceipt}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-[var(--app-ink)] hover:border-cyan-400/40 hover:text-cyan-200 transition"
+            >
+              Download JSON
+            </button>
+            <button
+              type="button"
+              onClick={handleExportProofPdf}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-[var(--app-ink)] hover:border-cyan-400/40 hover:text-cyan-200 transition"
+            >
+              Export PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPrivacyProof((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-cyan-200 hover:bg-cyan-500/15 transition"
+              aria-expanded={showPrivacyProof}
+              aria-controls="privacy-proof-body"
+            >
+              {showPrivacyProof ? "Hide Proof" : "Show Proof"}
+              <span className={`transition-transform ${showPrivacyProof ? "rotate-180" : ""}`}>⌄</span>
+            </button>
+          </div>
+        </div>
+        {proofToastVisible && (
+          <div className="mt-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200">
+            {proofToast}
+          </div>
+        )}
+
+        {showPrivacyProof && (
+          <div id="privacy-proof-body">
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                  Route Privacy
+                </div>
+                <div className={`mt-1 text-sm font-bold ${privacyProof.routePrivate === null
+                  ? "text-white"
+                  : privacyProof.routePrivate
+                    ? "text-emerald-400"
+                    : "text-cyan-200"
+                  }`}>
+                  {privacyProof.routePrivate === null
+                    ? `Pending: Stream not created yet (${privacyProof.plannedPrivateRoute ? "private shield selected" : "route not set"})`
+                    : privacyProof.routePrivate
+                      ? "PASS: No fixed destination pinned"
+                      : "FAIL: Fixed destination detected"}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                  Encrypted Earnings Ref
+                </div>
+                <div className={`mt-1 text-sm font-bold ${privacyProof.encryptedHandlePresent ? "text-emerald-400" : "text-white"}`}>
+                  {privacyProof.encryptedHandlePresent
+                    ? `PASS: ${privacyProof.encryptedReference?.slice(0, 18)}...`
+                    : "Pending: No encrypted handle yet"}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                  Automation Decrypt Access
+                </div>
+                <div className={`mt-1 text-sm font-bold ${privacyProof.keeperDecryptReady ? "text-emerald-400" : "text-white"}`}>
+                  {privacyProof.keeperDecryptReady ? "PASS: Keeper decrypt permissions active" : "Pending: Keeper decrypt access not confirmed"}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                  MagicBlock Delegation
+                </div>
+                <div className={`mt-1 text-sm font-bold ${privacyProof.magicBlockDelegated === null
+                  ? "text-white"
+                  : privacyProof.magicBlockDelegated
+                    ? "text-emerald-400"
+                    : "text-cyan-200"
+                  }`}>
+                  {privacyProof.magicBlockDelegated === null
+                    ? "Pending: Stream not created yet"
+                    : privacyProof.magicBlockDelegated
+                      ? "PASS: High-speed delegated"
+                      : "Optional: Not delegated"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+              <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                On-chain Stream Account
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--app-ink)] break-all">
+                {privacyProof.streamAddress ? (
+                  <a
+                    href={explorerAddressUrl(privacyProof.streamAddress)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-cyan-300 hover:text-cyan-200 underline decoration-cyan-500/40"
+                  >
+                    {privacyProof.streamAddress}
+                  </a>
+                ) : (
+                  "Not created yet"
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
+              <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[var(--app-muted)]">
+                Transaction Proofs
+              </div>
+              {privacyProof.txProofs.length ? (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {privacyProof.txProofs.map((tx) => (
+                    <a
+                      key={tx.txid}
+                      href={tx.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200 hover:bg-cyan-500/10 transition"
+                    >
+                      <div className="font-bold">{tx.label}</div>
+                      <div className="mt-0.5 font-mono text-[11px] text-cyan-300/80">
+                        {tx.txid.slice(0, 14)}...{tx.txid.slice(-8)}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-[var(--app-muted)]">
+                  No proof transactions captured yet. Execute setup steps via chat and this will auto-populate.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
 
       <button
         className="advanced-mode-toggle"
@@ -2748,6 +3264,7 @@ export default function EmployerPage() {
                   setAgentPrompt("");
                   setAgentDraft(null);
                   setAgentQueue([]);
+                  setAgentQueueContextKey("");
                   void fetchWithTimeout(
                     `/api/agent/run-state?owner=${encodeURIComponent(owner)}&scope=employer`,
                     { method: "DELETE" },

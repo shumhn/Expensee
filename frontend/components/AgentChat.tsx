@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Logo } from './Logo';
 
 type ChatMessage = {
@@ -35,6 +35,16 @@ type ParsedPlan = {
     source?: string;
 };
 
+type AgentProofSummary = {
+    routePrivate: boolean | null;
+    encryptedHandlePresent: boolean;
+    keeperDecryptReady: boolean;
+    magicBlockDelegated: boolean | null;
+    streamAddress?: string;
+    encryptedReference?: string;
+    txProofs: { label: string; txid: string; url?: string }[];
+};
+
 type AgentChatProps = {
     walletConnected: boolean;
     walletAddress: string;
@@ -67,6 +77,7 @@ type AgentChatProps = {
     setAutoGrantKeeperDecrypt?: (val: boolean) => void;
     boundPresetPeriod?: boolean;
     setBoundPresetPeriod?: (val: boolean) => void;
+    proofSummary?: AgentProofSummary;
 };
 
 const GO_COMMANDS = [
@@ -124,15 +135,43 @@ export default function AgentChat({
     setAutoGrantKeeperDecrypt,
     boundPresetPeriod,
     setBoundPresetPeriod,
+    proofSummary,
 }: AgentChatProps) {
     const [input, setInput] = useState('');
     const [pendingPlan, setPendingPlan] = useState<ParsedPlan | null>(null);
     const [thinking, setThinking] = useState(false);
     const [optionStep, setOptionStep] = useState(0);
+    const [showExecutionLog, setShowExecutionLog] = useState(false);
     const messagesRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const hasGreeted = useRef(false);
     const isSending = useRef(false);
+    const actionableSteps = useMemo(
+        () => executionSteps.filter((s) => s.key !== 'refresh-state'),
+        [executionSteps]
+    );
+    const activeStep = useMemo(
+        () =>
+            actionableSteps.find((s) => s.status === 'running') ||
+            actionableSteps.find((s) => s.status === 'pending') ||
+            null,
+        [actionableSteps]
+    );
+    const activeStepIndex = useMemo(
+        () => (activeStep ? actionableSteps.findIndex((s) => s.key === activeStep.key) + 1 : null),
+        [actionableSteps, activeStep]
+    );
+    const completedStepCount = useMemo(
+        () => actionableSteps.filter((s) => s.status === 'done').length,
+        [actionableSteps]
+    );
+    const progressPercent = useMemo(
+        () =>
+            actionableSteps.length > 0
+                ? Math.round((completedStepCount / actionableSteps.length) * 100)
+                : 0,
+        [actionableSteps.length, completedStepCount]
+    );
 
     const handleClearChat = useCallback(() => {
         setMessages([]);
@@ -179,7 +218,9 @@ export default function AgentChat({
                         vaultExists,
                         configExists,
                         executionSteps,
-                        currentlyActiveStep: executionSteps.find(s => s.status === 'pending'),
+                        currentlyActiveStep:
+                            executionSteps.find(s => s.status === 'running' && s.key !== 'refresh-state') ||
+                            executionSteps.find(s => s.status === 'pending' && s.key !== 'refresh-state'),
                         depositorBalance,
                         vaultBalance,
                         depositorTokenAccount,
@@ -188,7 +229,8 @@ export default function AgentChat({
                         payAmount,
                         streamIndex,
                         autoGrantKeeperDecrypt,
-                        boundPresetPeriod
+                        boundPresetPeriod,
+                        proofSummary
                     },
                     phase,
                 }),
@@ -200,7 +242,7 @@ export default function AgentChat({
             console.error('[AgentChat] askGrok fetch error:', err);
             return { reply: `I couldn't reach my brain. Please try again.` };
         }
-    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase, autoGrantKeeperDecrypt, boundPresetPeriod]);
+    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, streamIndex, executionSteps, phase, autoGrantKeeperDecrypt, boundPresetPeriod, proofSummary]);
 
     const handleSend = useCallback(async () => {
         const text = input.trim();
@@ -222,6 +264,97 @@ export default function AgentChat({
             setInput('');
             addUserMsg(text);
 
+            const lower = text.toLowerCase();
+            const normalized = lower.replace(/\s+/g, ' ').trim();
+            const isHelpCommand = /^\/?(help|commands?|cmd)$/.test(normalized);
+            const isWhereCommand =
+                /^\/?(where|status|progress|current)$/.test(normalized) ||
+                /^where\s*am\s*i$/.test(normalized);
+            const isStepsCommand = /^\/?(steps|checklist|tasks|plan)$/.test(normalized);
+            const isProofCommand = /^\/?(proof|verify|trust)$/.test(normalized);
+
+            if (isHelpCommand) {
+                addAgentMsg(
+                    ` **Quick commands**\n\n` +
+                    `• \`/where\` — show your current step\n` +
+                    `• \`/steps\` — show full checklist status\n` +
+                    `• \`/proof\` — show privacy/security proof\n` +
+                    `• \`/run\` (or \`go\`) — execute next pending step\n` +
+                    `• \`/step N\` — jump focus to step number`
+                );
+                return;
+            }
+
+            if (isWhereCommand) {
+                if (!actionableSteps.length) {
+                    addAgentMsg(` **No execution checklist yet.** Type **setup** to initialize the workflow.`);
+                } else if (!activeStep || !activeStepIndex) {
+                    addAgentMsg(` **All setup steps are complete.** Paste a worker wallet to start a new payroll flow.`);
+                } else {
+                    addAgentMsg(` **You are on Step ${activeStepIndex}/${actionableSteps.length}: ${activeStep.label}**\n\nType ${randomGoCmd()} to execute it.`);
+                }
+                return;
+            }
+
+            if (isStepsCommand) {
+                if (!actionableSteps.length) {
+                    addAgentMsg(` **No checklist available yet.** Type **setup** to generate onboarding steps.`);
+                } else {
+                    setShowExecutionLog(true);
+                    const lines = actionableSteps.map((s, i) => {
+                        const marker = s.status === 'done' ? '✅' : s.status === 'running' ? '▶' : '•';
+                        return `${marker} Step ${i + 1}: ${s.label}`;
+                    });
+                    addAgentMsg(` **Execution Checklist**\n\n${lines.join('\n')}\n\nType \`/where\` to see your active step, then type ${randomGoCmd()} to execute.`);
+                }
+                return;
+            }
+
+            if (isProofCommand) {
+                if (!proofSummary) {
+                    addAgentMsg(` **Proof data is not available yet.** Run setup steps first, then try \`/proof\` again.`);
+                    return;
+                }
+                const refShort = proofSummary.encryptedReference
+                    ? `${proofSummary.encryptedReference.slice(0, 16)}...`
+                    : 'Unavailable';
+                const streamShort = proofSummary.streamAddress
+                    ? `${proofSummary.streamAddress.slice(0, 8)}...${proofSummary.streamAddress.slice(-6)}`
+                    : 'Not created yet';
+                const routeLine = proofSummary.routePrivate === null
+                    ? `⏳ Route privacy pending (stream not created yet)`
+                    : proofSummary.routePrivate
+                        ? `✅ Private route enforced (no fixed destination)`
+                        : `⚠️ Route privacy check failed`;
+                const encLine = proofSummary.encryptedHandlePresent
+                    ? `✅ Inco encrypted reference present (\`${refShort}\`)`
+                    : `⚠️ Encrypted reference missing`;
+                const keeperLine = proofSummary.keeperDecryptReady
+                    ? `✅ Automation decrypt access configured`
+                    : `⚠️ Automation decrypt access pending`;
+                const mbLine = proofSummary.magicBlockDelegated === null
+                    ? `⏳ MagicBlock delegation not applicable yet`
+                    : proofSummary.magicBlockDelegated
+                        ? `✅ MagicBlock high-speed delegation active`
+                        : `⚠️ MagicBlock delegation not active`;
+                const txLines = proofSummary.txProofs.length
+                    ? proofSummary.txProofs
+                        .slice(0, 6)
+                        .map((tx) => `• ${tx.label}: [View tx](${tx.url || `https://explorer.solana.com/tx/${tx.txid}?cluster=devnet`})`)
+                        .join('\n')
+                    : '• No transaction proofs captured yet';
+                addAgentMsg(
+                    ` **Privacy & Security Proof**\n\n` +
+                    `${routeLine}\n` +
+                    `${encLine}\n` +
+                    `${keeperLine}\n` +
+                    `${mbLine}\n\n` +
+                    `**Stream Account:** \`${streamShort}\`\n\n` +
+                    `**Transaction Proofs**\n${txLines}`
+                );
+                return;
+            }
+
             // Fallback for error state
             if (phase === 'error') {
                 addAgentMsg(`Something went wrong previously. Type **"reset"** or **"start"** to recover.`);
@@ -237,7 +370,8 @@ export default function AgentChat({
                     return;
                 }
 
-                const isGoContent = /\b(?:go|continue|yes|skip|proceed)\b/i.test(text);
+                const isGoContent = /\b(?:go|continue|yes|skip|proceed|run|execute|next)\b/i.test(text) ||
+                    /^\/(?:go|run|next|execute)$/.test(normalized);
                 const numMatch = text.match(/\b\d+(\.\d+)?\b/);
 
                 if (numMatch) {
@@ -262,136 +396,6 @@ export default function AgentChat({
                     }, 500);
                 } else {
                     addAgentMsg(`Please provide a number (e.g., "100") or type **"go"** to skip. If you want to chat normally, click **Cancel** first.`);
-                }
-                return;
-            }
-
-            const lower = text.toLowerCase();
-            const isStatusCommand = /\b(status|checklist|tasks|where\s*am\s*i|progress|steps|show\s*steps)\b/i.test(lower);
-            const isGoCommand = /\b(setup|start|yes|go|continue|execute|run|do\s*it|next|proceed|lets\s*go|let's\s*go)\b/i.test(lower);
-            const isEditKeyword = /\b(edit|change|no|update|modify)\b/i.test(lower);
-            const isOptionsKeyword = /\b(option|options|settings|permissions|access|auto.?stop)\b/i.test(lower);
-            const hasNumber = /\d/.test(text);
-
-            // ---- CHECKLIST / STATUS COMMAND ----
-            // Points user to the visual checklist below — no text duplication
-            if (isStatusCommand && !isGoCommand) {
-                const nextPending = executionSteps.find(s => s.status === 'pending' && s.key !== 'refresh-state');
-                const total = executionSteps.length;
-
-                if (total === 0) {
-                    addAgentMsg(` **No execution steps yet.**\n\nType **"setup"** to start the onboarding flow, or paste a worker's wallet address.`);
-                } else if (!nextPending) {
-                    addAgentMsg(` **All done!** Check the checklist below — everything is green. Paste a new worker wallet to add another, or ask me anything.`);
-                } else {
-                    const nextIdx = executionSteps.findIndex(s => s.key === nextPending.key) + 1;
-                    addAgentMsg(` **Check the checklist below.** You're on **Step ${nextIdx}: ${nextPending.label}**.\n\nType ${randomGoCmd()} to execute it!`);
-                }
-                return;
-            }
-
-            // ---- "USE MY WALLET" SHORTCUT ----
-            const isUseMyWallet = /\b(use\s+my\s+wallet|demo\s+mode|my\s+wallet|use\s+this\s+wallet)\b/i.test(text);
-            if (isUseMyWallet && walletAddress) {
-                onApplyPlan({ employeeWallet: walletAddress, intent: 'create_stream' } as any);
-                addAgentMsg(` **Using your wallet as the worker wallet!**\n\n\`${walletAddress}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
-                return;
-            }
-
-            // ---- SOLANA ADDRESS DETECTION ----
-            const solanaAddrMatch = text.match(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/);
-            if (solanaAddrMatch && !isGoCommand) {
-                const addr = solanaAddrMatch[1];
-                const isJustAddress = text.trim().length < 60;
-                if (isJustAddress) {
-                    onApplyPlan({ employeeWallet: addr, intent: 'create_stream' } as any);
-                    addAgentMsg(` **Worker wallet set!**\n\n\`${addr}\`\n\nThe next step is to **Create Worker Destination Account**. Type ${randomGoCmd()} when you're ready and approve the transaction in your wallet.`);
-                    return;
-                }
-            }
-
-            const hasWorkToDo = !businessExists || !vaultExists || !configExists;
-            const hasPendingSteps = executionSteps.some(s => s.status === 'pending' && s.key !== 'refresh-state');
-
-            // ---- GO COMMAND EXECUTION ----
-            // ALWAYS try to execute when the user says "go" — the backend (executeNextAgentStep)
-            // rebuilds the queue from blockchain state, so it has the freshest truth.
-            if (isGoCommand && !isEditKeyword) {
-                setPhase('executing');
-                setThinking(true);
-
-                const nextStep = executionSteps.find(s => s.status === 'pending' && s.key !== 'refresh-state');
-                const stepCount = executionSteps.length;
-                const nextIdx = executionSteps.findIndex(s => s.key === nextStep?.key) + 1;
-
-                if (nextStep) {
-                    addAgentMsg(` **Executing Step ${nextIdx}/${stepCount}: ${nextStep.label}...**\n\n*Please approve the transaction in your wallet to proceed...*`);
-                } else {
-                    addAgentMsg(` **Checking for remaining steps...**\n\n*Please approve the transaction in your wallet to proceed...*`);
-                }
-
-                try {
-                    // Start execution — the backend will rebuild the queue and run the real next step
-                    const step = await onExecutePlan('next');
-
-                    // Use a local check for the NEXT pending step instead of relying on stale props
-                    const nextStepExists = executionSteps.some(s => s.status === 'pending' && s.key !== 'refresh-state' && s.key !== step?.key);
-
-                    if (!step && !nextStepExists) {
-                        addAgentMsg(` **All steps completed successfully!** Your payroll setup is now live and fully operational.`);
-                        setPhase('done');
-                        return;
-                    }
-
-                    if (step?.status === 'done') {
-                        const proof = step.txid ? `\n\n**🔗 Transaction Proof:**\n[View on Solscan](https://solscan.io/tx/${step.txid}?cluster=devnet)` : '';
-
-                        if (step.key === 'init-vault') {
-                            addAgentMsg(` **Step 4 (Vault Custody) is over!** Your company profile and payroll vault are fully initialized.${proof}\n\nType ${randomGoCmd()} to create your **Company Source Account (Step 5)**.`);
-                            setPhase('executing');
-                        } else if (step.key === 'deposit-funds') {
-                            addAgentMsg(` **Step 6 (Funding) is complete!** Funds have been successfully deposited into the payroll vault.${proof}\n\nType ${randomGoCmd()} to move to **Step 7 (Initialize automation service)**.`);
-                        } else if (step.key === 'create-worker-record') {
-                            // Check if high-speed mode step exists and is pending
-                            const hsStep = executionSteps.find(s => s.key === 'enable-high-speed');
-                            if (hsStep && hsStep.status === 'pending') {
-                                addAgentMsg(` **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\nType ${randomGoCmd()} to continue with **Enable High-speed Mode**, or you're all set!`);
-                                setPhase('confirm_plan');
-                            } else {
-                                addAgentMsg(` **Step 11 (Worker Record) created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee.`);
-                                setPhase('done');
-                            }
-                        } else if (step.key === 'enable-high-speed') {
-                            addAgentMsg(` **Step 8 (High-speed mode) enabled!** Your payroll stream is now delegated to MagicBlock for faster delegated execution.${proof}\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee for earnings and withdrawals.`);
-                            setPhase('done');
-                        } else if (step.key === 'create-depositor-token') {
-                            addAgentMsg(` **Step 5 (Company source account) created!** ${proof}\n\n**How much payroll funds** do you want to deposit into the vault for Step 6? (e.g. type "10" or "fund 100")`);
-                            setPhase('ask_funding');
-                            return;
-                        } else if (step.key === 'init-automation') {
-                            addAgentMsg(` **Step 7: Automation service initialized!**${proof}\n\nNow let's add a worker.  Please paste the **worker's Solana wallet address** or say **"use my wallet"** to test with your own wallet.`);
-                            setPhase('ask_wallet');
-                        } else if (step.key === 'create-worker-token') {
-                            addAgentMsg(` **Step 9: Worker destination account created!**${proof}\n\nNow let's set up the pay plan. Here are your options:\n\n **Hourly** — e.g. "pay 25 per hour" (great for contractors)\n **Weekly** — e.g. "pay 500 per week" (standard for part-time)\n **Monthly (30d)** — e.g. "pay 3000 per month" (standard salary)\n **Fixed Total** — e.g. "pay 5000 over 30 days" (project-based)\n **Per-second** — e.g. "pay 0.0001 per second" (advanced)\n\nJust tell me how you'd like to pay!`);
-                            setPhase('ask_pay');
-                        } else if (step.key === 'configure-worker-options') {
-                            addAgentMsg(` **Step 10: Pay plan configured!** Now let's set up your worker record preferences.\n\n **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
-                            setOptionStep(0);
-                            setPhase('ask_options');
-                        } else {
-                            addAgentMsg(` **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType ${randomGoCmd()} to move to the next step, or ask me any questions.`);
-                        }
-                        // Only keep 'executing' phase for steps that don't set their own phase
-                        const stepsWithOwnPhase = ['init-automation', 'create-worker-token', 'configure-worker-options', 'create-depositor-token', 'create-worker-record', 'enable-high-speed'];
-                        if (!stepsWithOwnPhase.includes(step.key)) setPhase('confirm_plan');
-                    }
-                } catch (e: any) {
-                    const msg = e?.message || 'Transaction rejected';
-                    if (msg === 'ABORTED') return;
-                    addAgentMsg(`❌ **Step failed:** ${msg}\n\nYou can type **"go"** to retry, or ask me what happened.`);
-                    setPhase('ask_setup');
-                } finally {
-                    setThinking(false);
                 }
                 return;
             }
@@ -426,14 +430,168 @@ export default function AgentChat({
                 } else if (optionStep === 1) {
                     setBoundPresetPeriod?.(isYes);
                     addAgentMsg(isYes ? ` **Auto-stop active.**\n\n` : `⬜ **Continuous streaming.**\n\n`);
-                    addAgentMsg(`🎯 **All options configured!** Type ${randomGoCmd()} to move to **Step 11: Create worker payroll record**.`);
+                    addAgentMsg(`🎯 **All options configured!** Type ${randomGoCmd()} to move to the next setup step.`);
                     setPhase('confirm_plan');
+                }
+                return;
+            }
+            const isStatusCommand = /\b(status|checklist|tasks|where\s*am\s*i|progress|steps|show\s*steps)\b/i.test(lower);
+            const isGoCommand = /\b(setup|start|go|continue|execute|run|do\s*it|next|proceed|lets\s*go|let's\s*go)\b/i.test(lower);
+            const isEditKeyword = /\b(edit|change|no|update|modify)\b/i.test(lower);
+            const isOptionsKeyword = /\b(option|options|settings|permissions|access|auto.?stop)\b/i.test(lower);
+            const hasNumber = /\d/.test(text);
+            const isExplicitPlanIntent = /\b(pay|salary|amount|rate|bonus|raise|plan|stream|per\s*(hour|week|month|second)|hourly|weekly|monthly|fixed)\b/i.test(lower);
+            const shouldParsePlanChange =
+                isOptionsKeyword || ((isEditKeyword || hasNumber) && isExplicitPlanIntent);
+            const gotoMatch = normalized.match(/^\/(?:step|goto)\s+(\d{1,2})$/);
+
+            let forceExecuteCurrent = false;
+            if (gotoMatch) {
+                const target = Number(gotoMatch[1]);
+                if (!actionableSteps.length) {
+                    addAgentMsg(` **No checklist available yet.** Type **setup** first.`);
+                    return;
+                }
+                const targetStep = actionableSteps[target - 1];
+                if (!targetStep) {
+                    addAgentMsg(`That step doesn't exist. Choose a step between **1** and **${actionableSteps.length}**.`);
+                    return;
+                }
+                if (targetStep.status === 'done') {
+                    addAgentMsg(`Step **${target} (${targetStep.label})** is already complete. Type \`/where\` to see your current step.`);
+                    return;
+                }
+                if (!activeStepIndex || target !== activeStepIndex) {
+                    addAgentMsg(`I can't skip ahead to Step **${target}**.\n\nCurrent executable step is **${activeStepIndex || 1}: ${activeStep?.label || actionableSteps[0].label}**. Type ${randomGoCmd()} to continue.`);
+                    return;
+                }
+                forceExecuteCurrent = true;
+            }
+
+            // ---- CHECKLIST / STATUS COMMAND ----
+            // Points user to the visual checklist below — no text duplication
+            if (isStatusCommand && !isGoCommand) {
+                const nextPending = activeStep;
+                const total = actionableSteps.length;
+
+                if (total === 0) {
+                    addAgentMsg(` **No execution steps yet.**\n\nType **"setup"** to start the onboarding flow, or paste a worker's wallet address.`);
+                } else if (!nextPending) {
+                    addAgentMsg(` **All done!** Check the checklist below — everything is green. Paste a new worker wallet to add another, or ask me anything.`);
+                } else {
+                    const nextIdx = activeStepIndex ?? 1;
+                    addAgentMsg(` **Check the checklist below.** You're on **Step ${nextIdx}: ${nextPending.label}**.\n\nType ${randomGoCmd()} to execute it!`);
+                }
+                return;
+            }
+
+            // ---- "USE MY WALLET" SHORTCUT ----
+            const isUseMyWallet = /\b(use\s+my\s+wallet|demo\s+mode|my\s+wallet|use\s+this\s+wallet)\b/i.test(text);
+            if (isUseMyWallet && walletAddress) {
+                onApplyPlan({ employeeWallet: walletAddress, intent: 'create_stream' } as any);
+                addAgentMsg(` **Using your wallet as the worker wallet!**\n\n\`${walletAddress}\`\n\nType ${randomGoCmd()} and I'll continue with the next pending setup step.`);
+                return;
+            }
+
+            // ---- SOLANA ADDRESS DETECTION ----
+            const solanaAddrMatch = text.match(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/);
+            if (solanaAddrMatch && !isGoCommand) {
+                const addr = solanaAddrMatch[1];
+                const isJustAddress = text.trim().length < 60;
+                if (isJustAddress) {
+                    onApplyPlan({ employeeWallet: addr, intent: 'create_stream' } as any);
+                    addAgentMsg(` **Worker wallet set!**\n\n\`${addr}\`\n\nType ${randomGoCmd()} and I'll continue with the next pending setup step.`);
+                    return;
+                }
+            }
+
+            // ---- GO COMMAND EXECUTION ----
+            // ALWAYS try to execute when the user says "go" — the backend (executeNextAgentStep)
+            // rebuilds the queue from blockchain state, so it has the freshest truth.
+            if ((isGoCommand || forceExecuteCurrent) && !isEditKeyword) {
+                setShowExecutionLog(true);
+                setPhase('executing');
+                setThinking(true);
+
+                const nextStep = actionableSteps.find(s => s.status === 'pending' || s.status === 'running');
+                const stepCount = actionableSteps.length;
+                const nextIdx = actionableSteps.findIndex(s => s.key === nextStep?.key) + 1;
+
+                if (nextStep) {
+                    addAgentMsg(` **Executing Step ${nextIdx}/${stepCount}: ${nextStep.label}...**\n\n*Please approve the transaction in your wallet to proceed...*`);
+                } else {
+                    addAgentMsg(` **Checking for remaining steps...**\n\n*Please approve the transaction in your wallet to proceed...*`);
+                }
+
+                try {
+                    // Start execution — the backend will rebuild the queue and run the real next step
+                    const step = await onExecutePlan('next');
+
+                    // Use a local check for the NEXT pending step instead of relying on stale props
+                    const nextStepExists = actionableSteps.some(s => s.status === 'pending' && s.key !== step?.key);
+
+                    if (!step && !nextStepExists) {
+                        addAgentMsg(` **All steps completed successfully!** Your payroll setup is now live and fully operational.`);
+                        setPhase('done');
+                        return;
+                    }
+
+                    if (step?.status === 'done') {
+                        const proof = step.txid ? `\n\n**🔗 Transaction Proof:**\n[View on Solscan](https://solscan.io/tx/${step.txid}?cluster=devnet)` : '';
+
+                        if (step.key === 'init-vault') {
+                            addAgentMsg(` **Vault custody is complete!** Your company profile and payroll vault are fully initialized.${proof}\n\nType ${randomGoCmd()} to continue with the next checklist step.`);
+                            setPhase('executing');
+                        } else if (step.key === 'deposit-funds') {
+                            addAgentMsg(` **Funding is complete!** Funds have been successfully deposited into the payroll vault.${proof}\n\nType ${randomGoCmd()} to continue with the next checklist step.`);
+                        } else if (step.key === 'create-worker-record') {
+                            // Check if high-speed mode step exists and is pending
+                            const hsStep = executionSteps.find(s => s.key === 'enable-high-speed');
+                            if (hsStep && hsStep.status === 'pending') {
+                                addAgentMsg(` **Private payroll record created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\nType \`/proof\` to see privacy verification, then ${randomGoCmd()} to continue with high-speed mode.`);
+                                setPhase('confirm_plan');
+                            } else {
+                                addAgentMsg(` **Private payroll record created!** The employee can now open the **Employee Portal**.${proof}\n\n*Automation decrypt handling was configured in options. For earnings reveal, use keeper relay grant from Employee Portal if needed.*\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee.\nType \`/proof\` any time to see encryption/delegation verification.`);
+                                setPhase('done');
+                            }
+                        } else if (step.key === 'enable-high-speed') {
+                            addAgentMsg(` **High-speed mode enabled!** Your payroll stream is now delegated to MagicBlock for faster delegated execution.${proof}\n\n **Setup is complete!** The employee can now open the **Employee Portal** at /employee for earnings and withdrawals.\nType \`/proof\` to review security proof with tx links.`);
+                            setPhase('done');
+                        } else if (step.key === 'create-depositor-token') {
+                            addAgentMsg(` **Company source account created!** ${proof}\n\n**How much payroll funds** do you want to deposit into the vault? (e.g. type "10" or "fund 100")`);
+                            setPhase('ask_funding');
+                            return;
+                        } else if (step.key === 'init-automation') {
+                            addAgentMsg(` **Automation service initialized!**${proof}\n\nNow let's add a worker. Please paste the **worker's Solana wallet address** or say **"use my wallet"** to test with your own wallet.`);
+                            setPhase('ask_wallet');
+                        } else if (step.key === 'create-worker-token') {
+                            addAgentMsg(` **Privacy route confirmed.** No fixed destination account is required in this mode.${proof}\n\nNow let's configure worker options and finalize the private payroll record.`);
+                            setOptionStep(0);
+                            setPhase('ask_options');
+                        } else if (step.key === 'configure-worker-options') {
+                            addAgentMsg(` **Worker options configured!** Now let's set up your worker record preferences.\n\n **Would you like the worker to be able to view their earnings automatically?** (yes/no)`);
+                            setOptionStep(0);
+                            setPhase('ask_options');
+                        } else {
+                            addAgentMsg(` **Step Complete: ${step.label}**\nReasoning: ${step.detail || 'The operation was successful.'}${proof}\n\nType ${randomGoCmd()} to move to the next step, or ask me any questions.`);
+                        }
+                        // Only keep 'executing' phase for steps that don't set their own phase
+                        const stepsWithOwnPhase = ['init-automation', 'create-worker-token', 'configure-worker-options', 'create-depositor-token', 'create-worker-record', 'enable-high-speed'];
+                        if (!stepsWithOwnPhase.includes(step.key)) setPhase('confirm_plan');
+                    }
+                } catch (e: any) {
+                    const msg = e?.message || 'Transaction rejected';
+                    if (msg === 'ABORTED') return;
+                    addAgentMsg(`❌ **Step failed:** ${msg}\n\nYou can type **"go"** to retry, or ask me what happened.`);
+                    setPhase('confirm_plan');
+                } finally {
+                    setThinking(false);
                 }
                 return;
             }
 
             // ---- EDIT / MODIFY PLAN HANDLER ----
-            if (hasNumber || isEditKeyword || isOptionsKeyword) {
+            if (shouldParsePlanChange) {
                 if (isOptionsKeyword) {
                     addAgentMsg(`Sure! Let's re-configure options.\n\n **Allow automation service decrypt access?** (yes/no)`);
                     setOptionStep(0);
@@ -470,9 +628,27 @@ export default function AgentChat({
             setThinking(true);
             try {
                 const { reply, action } = await askGrok(text);
-                addAgentMsg(reply);
-                if (action?.type === 'set_phase') setPhase(action.phase);
-                if (action?.type === 'apply_plan') onApplyPlan(action.plan);
+                const canApplyAiAction =
+                    isGoCommand ||
+                    isStatusCommand ||
+                    shouldParsePlanChange ||
+                    isUseMyWallet ||
+                    !!solanaAddrMatch ||
+                    /\b(setup|start|reset|cancel|abort|stop)\b/i.test(lower);
+
+                const contextHint =
+                    activeStep && activeStepIndex
+                        ? `\n\nCurrent focus: **Step ${activeStepIndex}: ${activeStep.label}**. Type ${randomGoCmd()} to continue.`
+                        : '';
+
+                if (!canApplyAiAction && activeStep) {
+                    addAgentMsg(`${reply}${contextHint}`);
+                } else {
+                    addAgentMsg(reply);
+                }
+
+                if (canApplyAiAction && action?.type === 'set_phase') setPhase(action.phase);
+                if (canApplyAiAction && action?.type === 'apply_plan') onApplyPlan(action.plan);
             } catch {
                 addAgentMsg(`I'm sorry, I'm having trouble. Try "go" to continue.`);
             } finally {
@@ -482,11 +658,11 @@ export default function AgentChat({
             isSending.current = false;
         }
     }, [
-        input, thinking, busy, ready, hydrated, phase, pendingPlan,
+        input, thinking, busy, ready, hydrated, phase,
         businessExists, vaultExists, configExists, addAgentMsg, addUserMsg,
-        askGrok, executionSteps, onDraftPlan, onExecutePlan, onApplyPlan,
+        askGrok, executionSteps, onDraftPlan, onExecutePlan, onApplyPlan, actionableSteps, activeStep, activeStepIndex,
         setInput, walletAddress, setDepositAmount, setOptionStep, optionStep,
-        setAutoGrantKeeperDecrypt, setBoundPresetPeriod
+        setAutoGrantKeeperDecrypt, setBoundPresetPeriod, onCancelBusy, setPhase, proofSummary
     ]);
 
     const handleKeyDown = useCallback(
@@ -499,35 +675,54 @@ export default function AgentChat({
         [handleSend]
     );
 
+    const triggerQuickCommand = useCallback(
+        (command: string) => {
+            if (!walletConnected || thinking || busy || !ready || !hydrated) return;
+            setInput(command);
+            setTimeout(() => {
+                void handleSend();
+            }, 0);
+        },
+        [walletConnected, thinking, busy, ready, hydrated, handleSend]
+    );
+
+    const timelineSteps = actionableSteps.filter((step) => {
+        const label = (step.label || '').toLowerCase();
+        const detail = (step.detail || '').toLowerCase();
+        if (label.includes('not needed')) return false;
+        if (detail.startsWith('skipped:')) return false;
+        return true;
+    });
+
     return (
-        <section className="premium-agent-container glass overflow-hidden border border-[var(--app-border)] shadow-2xl rounded-3xl flex flex-col h-[620px] max-h-[78vh] bg-[var(--app-surface)] backdrop-blur-xl transition-all duration-500 hover:shadow-cyan-500/5 hover:border-cyan-400">
+        <section className="premium-agent-container glass overflow-hidden border border-[var(--app-border)] shadow-2xl rounded-3xl flex flex-col h-[680px] max-h-[82vh] bg-[var(--app-surface)] backdrop-blur-xl transition-all duration-500 hover:shadow-cyan-500/5 hover:border-cyan-400">
             {/* Header */}
-            <div className="flex items-center justify-between p-5 border-b border-[var(--app-border)] bg-[var(--app-surface-alt)] backdrop-blur-md">
-                <div className="flex items-center gap-4">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--app-border)] bg-[var(--app-surface-alt)] backdrop-blur-md">
+                <div className="flex items-center gap-3">
                     <div className="relative">
-                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#bff2ff] via-[#8fe8ff] to-[#6fdcff] flex items-center justify-center text-2xl shadow-lg ring-4 ring-cyan-300/20">
-                            <Logo className="w-7 h-7 text-[#05334a]" />
+                        <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#bff2ff] via-[#8fe8ff] to-[#6fdcff] flex items-center justify-center shadow-lg ring-2 ring-cyan-300/20">
+                            <Logo className="w-5 h-5 text-[#05334a]" />
                         </div>
-                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-[var(--app-surface)] shadow-sm ${phase === 'executing' ? 'bg-amber-500' : !ready || !hydrated || thinking ? 'bg-cyan-400 animate-pulse' : 'bg-emerald-500'
+                        <div className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[var(--app-surface)] shadow-sm ${phase === 'executing' ? 'bg-amber-500' : !ready || !hydrated || thinking ? 'bg-cyan-400 animate-pulse' : 'bg-emerald-500'
                             }`} />
                     </div>
                     <div>
-                        <h2 className="text-sm font-bold text-[var(--app-ink)] tracking-tight">OnyxFii Intelligence</h2>
-                        <p className="text-[11px] font-semibold text-[var(--app-muted)] uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                            {phase === 'executing' ? 'Processor Active' : thinking ? 'Analyzing Engine' : 'Hybrid AI Online'}
+                        <h2 className="text-[17px] font-bold text-[var(--app-ink)] tracking-tight leading-tight">OnyxFii Intelligence</h2>
+                        <p className="text-[11px] font-semibold text-[var(--app-muted)] uppercase tracking-[0.14em] flex items-center gap-1.5 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            {phase === 'executing' ? 'Active' : thinking ? 'Thinking' : 'Ready'}
                         </p>
                     </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                     {messages.length > 0 && (
                         <button
                             onClick={handleClearChat}
-                            className="inline-flex items-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-[var(--app-muted)] hover:text-[var(--app-ink)] hover:border-cyan-300/40 hover:bg-[var(--app-surface-alt)] transition-all"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-1.5 text-[10px] font-bold text-[var(--app-muted)] hover:text-[var(--app-ink)] hover:border-cyan-300/40 hover:bg-[var(--app-surface-alt)] transition-all"
                             title="Clear Chat"
                             disabled={busy || phase === 'executing'}
                         >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
                             <span>Clear Chat</span>
@@ -536,19 +731,47 @@ export default function AgentChat({
                 </div>
             </div>
 
+            {walletConnected && actionableSteps.length > 0 && (
+                <div className="px-3 py-1.5 border-b border-[var(--app-border)] bg-[var(--app-surface)]/70 backdrop-blur-md">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-300 whitespace-nowrap">
+                            {activeStep && activeStepIndex
+                                ? `Step ${activeStepIndex}/${actionableSteps.length}`
+                                : 'Completed'}
+                        </span>
+                        <span className="text-[10px] font-semibold text-[var(--app-ink)] truncate flex-1">
+                            {activeStep ? activeStep.label : 'All setup steps completed'}
+                        </span>
+                        <button
+                            onClick={() => triggerQuickCommand('/run')}
+                            disabled={!activeStep || phase === 'executing' || thinking || busy}
+                            className="px-2 py-0.5 rounded-md border border-cyan-400/40 bg-cyan-500/10 text-[9px] font-bold uppercase tracking-wider text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40"
+                        >
+                            Run
+                        </button>
+                    </div>
+                    <div className="mt-1 h-0.5 rounded-full bg-[var(--app-surface-alt)] overflow-hidden border border-[var(--app-border)]">
+                        <div
+                            className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
+                            style={{ width: `${progressPercent}%` }}
+                        />
+                    </div>
+                </div>
+            )}
+
             {/* Messages Area */}
             <div ref={messagesRef} className="chat-scrollbar flex-1 overflow-y-auto p-6 space-y-6">
                 {(!ready || !hydrated) && walletConnected && (
                     <div className="flex flex-col items-center justify-center py-12">
-                        <div className="w-10 h-10 border-2 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
-                        <p className="text-xs font-bold text-indigo-500/60 uppercase tracking-widest">Quantum Link Synchronizing...</p>
+                        <div className="w-10 h-10 border-2 border-cyan-400/25 border-t-cyan-300 rounded-full animate-spin mb-4" />
+                        <p className="text-xs font-bold text-cyan-300/80 uppercase tracking-widest">Agent Wallet Synchronizing...</p>
                     </div>
                 )}
 
                 {!walletConnected && (
                     <div className="flex flex-col items-center justify-center py-12 text-center px-4">
                         <div className="w-16 h-16 rounded-3xl bg-[var(--app-surface-alt)] flex items-center justify-center text-3xl mb-4 text-[var(--app-muted)]">
-
+                            <Logo className="w-10 h-10" />
                         </div>
                         <h3 className="text-sm font-bold text-[var(--app-ink)] mb-1">Authorization Missing</h3>
                         <p className="text-xs text-[var(--app-muted)] max-w-[200px]">Connect your secure wallet to authorize AI command access.</p>
@@ -595,40 +818,51 @@ export default function AgentChat({
                     </div>
                 )}
 
-                {executionSteps.length > 0 && (
+                {timelineSteps.length > 0 && (
                     <div className="mt-8 border-t border-[var(--app-border)] pt-6">
-                        <div className="flex items-center gap-2 mb-4 px-2">
-                            <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                            <span className="text-[10px] font-extrabold text-[var(--app-muted)] uppercase tracking-widest italic">Blockchain Real-time Execution Log</span>
+                        <div className="flex items-center justify-between mb-4 px-2">
+                            <div className="flex items-center gap-2">
+                                <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
+                                <span className="text-[10px] font-extrabold text-[var(--app-muted)] uppercase tracking-widest italic">Blockchain Real-time Execution Log</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowExecutionLog((prev) => !prev)}
+                                className="rounded-full border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--app-muted)] hover:text-cyan-200 hover:border-cyan-400/40 transition"
+                            >
+                                {showExecutionLog ? 'Hide' : 'Show'}
+                            </button>
                         </div>
-                        <div className="space-y-3 px-2">
-                            {executionSteps.map((step, idx) => (
-                                <div key={step.key} className="flex items-start gap-4 group">
-                                    <div className="flex flex-col items-center">
-                                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold border-2 transition-all ${step.status === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' :
-                                            step.status === 'running' ? 'bg-cyan-500/10 border-cyan-400 text-cyan-500 dark:text-cyan-400 animate-pulse ring-4 ring-indigo-500/10' :
-                                                step.status === 'failed' ? 'bg-red-500 border-red-500 text-white' :
-                                                    'bg-[var(--app-surface-alt)] border-[var(--app-border)] text-[var(--app-muted)]'
-                                            }`}>
-                                            {step.status === 'done' ? '✓' : idx + 1}
+                        {showExecutionLog && (
+                            <div className="space-y-3 px-2">
+                                {timelineSteps.map((step, idx) => (
+                                    <div key={step.key} className="flex items-start gap-4 group">
+                                        <div className="flex flex-col items-center">
+                                            <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold border-2 transition-all ${step.status === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' :
+                                                step.status === 'running' ? 'bg-cyan-500/10 border-cyan-400 text-cyan-500 dark:text-cyan-400 animate-pulse ring-4 ring-indigo-500/10' :
+                                                    step.status === 'failed' ? 'bg-red-500 border-red-500 text-white' :
+                                                        'bg-[var(--app-surface-alt)] border-[var(--app-border)] text-[var(--app-muted)]'
+                                                }`}>
+                                                {step.status === 'done' ? '✓' : idx + 1}
+                                            </div>
+                                            {idx !== timelineSteps.length - 1 && (
+                                                <div className="w-0.5 h-4 bg-[var(--app-border)] group-hover:bg-[var(--app-muted)] transition-colors" />
+                                            )}
                                         </div>
-                                        {idx !== executionSteps.length - 1 && (
-                                            <div className="w-0.5 h-4 bg-[var(--app-border)] group-hover:bg-[var(--app-muted)] transition-colors" />
-                                        )}
-                                    </div>
-                                    <div className="flex-1 pt-0.5">
-                                        <div className={`text-xs font-bold transition-colors ${step.status === 'done' ? 'text-[var(--app-ink)] line-through' :
-                                            step.status === 'running' ? 'text-cyan-500 dark:text-cyan-400' : 'text-[var(--app-muted)]'
-                                            }`}>
-                                            {step.label}
+                                        <div className="flex-1 pt-0.5">
+                                            <div className={`text-xs font-bold transition-colors ${step.status === 'done' ? 'text-[var(--app-ink)] line-through' :
+                                                step.status === 'running' ? 'text-cyan-500 dark:text-cyan-400' : 'text-[var(--app-muted)]'
+                                                }`}>
+                                                {step.label}
+                                            </div>
+                                            {step.detail && (
+                                                <div className="text-[10px] text-[var(--app-muted)] font-medium mt-0.5 italic">{step.detail}</div>
+                                            )}
                                         </div>
-                                        {step.detail && (
-                                            <div className="text-[10px] text-[var(--app-muted)] font-medium mt-0.5 italic">{step.detail}</div>
-                                        )}
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
                 <div className="h-4" />
@@ -636,6 +870,22 @@ export default function AgentChat({
 
             {/* Input Area */}
             <div className="p-5 border-t border-[var(--app-border)] bg-[var(--app-surface-alt)] backdrop-blur-md">
+                {walletConnected && ready && hydrated && (
+                    <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-[var(--app-muted)]">Try</span>
+                        {['/run', '/steps', '/proof', '/where', '/help'].map((cmd) => (
+                            <button
+                                key={cmd}
+                                type="button"
+                                onClick={() => triggerQuickCommand(cmd)}
+                                disabled={thinking || busy || phase === 'executing'}
+                                className="rounded-full border border-cyan-500/25 bg-cyan-500/8 px-2 py-0.5 text-[9px] font-bold tracking-wide text-cyan-200 hover:bg-cyan-500/15 disabled:opacity-40 transition"
+                            >
+                                {cmd}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 <div className="relative group">
                     <input
                         ref={inputRef}
@@ -680,11 +930,11 @@ export default function AgentChat({
                     <div className="flex items-center gap-4">
                         <div className="flex items-center gap-1.5">
                             <div className="w-1 h-1 rounded-full bg-[var(--app-border)]"></div>
-                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">L3 Verified Node</span>
+                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">Verified</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <div className="w-1 h-1 rounded-full bg-[var(--app-border)]"></div>
-                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">End-to-End Encrypted</span>
+                            <span className="text-[9px] font-bold text-[var(--app-muted)] uppercase tracking-widest whitespace-nowrap">Encrypted</span>
                         </div>
                     </div>
                     {busy && (
