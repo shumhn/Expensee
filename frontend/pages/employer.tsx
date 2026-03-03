@@ -3368,7 +3368,7 @@ export default function EmployerPage() {
 
                   <div className="mt-4 flex items-center justify-between rounded-xl bg-cyan-500/5 px-4 py-3 border border-cyan-500/20">
                     <span className="text-xs font-bold text-cyan-400">Calculated Stream Force</span>
-                    <span className="font-mono text-sm font-bold text-indigo-400">
+                    <span className="font-mono text-sm font-bold text-cyan-200">
                       {computedRatePreview === null ? "-" : computedRatePreview.toFixed(9)} units/sec
                     </span>
                   </div>
