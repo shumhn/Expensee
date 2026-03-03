@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     title: "Expensee | Web3 Payroll on Autopilot",
     description: "The gold standard for Web3 payroll and global settlements.",
     icons: {
-        icon: "/favicon_final.png",
+        icon: "/favicon.svg",
     },
 };
 
