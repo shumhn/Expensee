@@ -474,13 +474,39 @@ export default function EmployerPage() {
     const keeperGrantDone = agentQueue.some(
       (s) => s.key === "grant-keeper-access" && s.status === "done",
     );
-    const privateRecordDone = agentQueue.some(
+    const privateRecordStep = agentQueue.find(
       (s) => s.key === "create-worker-record" && s.status === "done",
     );
+    const privateRecordDone = Boolean(privateRecordStep);
+    const privateRecordDetail = (privateRecordStep?.detail || "").toLowerCase();
+    const keeperGrantFailed =
+      privateRecordDetail.includes("automation decrypt grant failed");
+    const keeperGrantSkipped =
+      privateRecordDetail.includes("automation decrypt skipped");
+    const hasStreamRecord =
+      streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null;
     const keeperDecryptReady = Boolean(
       v2ConfigExists &&
-      (keeperGrantDone || (autoGrantKeeperDecrypt && privateRecordDone)),
+      (
+        keeperGrantDone ||
+        (
+          autoGrantKeeperDecrypt &&
+          (hasStreamRecord || privateRecordDone) &&
+          !keeperGrantFailed &&
+          !keeperGrantSkipped
+        )
+      ),
     );
+    const keeperDecryptMode: "manual" | "enforced" | "failed" | "pending" =
+      keeperGrantDone
+        ? "manual"
+        : autoGrantKeeperDecrypt
+          ? keeperGrantFailed
+            ? "failed"
+            : hasStreamRecord || privateRecordDone
+              ? "enforced"
+              : "pending"
+          : "manual";
     const magicBlockDelegated =
       streamStatus?.streamIndex !== undefined && streamStatus?.streamIndex !== null
         ? Boolean(streamStatus.isDelegated || streamRoute?.delegated)
@@ -493,6 +519,7 @@ export default function EmployerPage() {
       plannedPrivateRoute,
       encryptedHandlePresent,
       keeperDecryptReady,
+      keeperDecryptMode,
       magicBlockDelegated,
       streamAddress: streamStatus?.address,
       encryptedReference: streamStatus?.accruedHandle,
@@ -3089,7 +3116,13 @@ export default function EmployerPage() {
                   Automation Decrypt Access
                 </div>
                 <div className={`mt-1 text-sm font-bold ${privacyProof.keeperDecryptReady ? "text-emerald-400" : "text-white"}`}>
-                  {privacyProof.keeperDecryptReady ? "PASS: Keeper decrypt permissions active" : "Pending: Keeper decrypt access not confirmed"}
+                  {privacyProof.keeperDecryptReady
+                    ? privacyProof.keeperDecryptMode === "enforced"
+                      ? "PASS: Enforced by private-mode default policy"
+                      : "PASS: Keeper decrypt permissions active"
+                    : privacyProof.keeperDecryptMode === "failed"
+                      ? "Pending: Last keeper grant attempt failed"
+                      : "Pending: Keeper decrypt access not confirmed"}
                 </div>
               </div>
               <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] px-4 py-3">
