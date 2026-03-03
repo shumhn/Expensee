@@ -296,6 +296,7 @@ export default function EmployeePage() {
   }, [claimContextStorageKey, claimDestinationTokenAccount, claimSuccessTx, lastClaimProof]);
 
   // Wallet-scoped fallback so workers can recover destination details after refresh/session changes.
+  // Only hydrate on key changes; never overwrite active manual edits while typing.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -303,25 +304,19 @@ export default function EmployeePage() {
       if (!raw) return;
       const parsed = JSON.parse(raw);
 
-      if (!employerWallet && typeof parsed?.employerWallet === 'string') {
-        setEmployerWallet(parsed.employerWallet);
+      if (typeof parsed?.employerWallet === 'string') {
+        setEmployerWallet((prev) => (prev.trim() ? prev : parsed.employerWallet));
       }
-      if (
-        (streamIndexInput === '' || streamIndexInput === '0') &&
-        typeof parsed?.streamIndexInput === 'string'
-      ) {
-        setStreamIndexInput(parsed.streamIndexInput);
+      if (typeof parsed?.streamIndexInput === 'string') {
+        setStreamIndexInput((prev) => ((prev === '' || prev === '0') ? parsed.streamIndexInput : prev));
       }
-      if (
-        !claimDestinationTokenAccount.trim() &&
-        typeof parsed?.destinationTokenAccount === 'string'
-      ) {
-        setClaimDestinationTokenAccount(parsed.destinationTokenAccount);
+      if (typeof parsed?.destinationTokenAccount === 'string') {
+        setClaimDestinationTokenAccount((prev) => (prev.trim() ? prev : parsed.destinationTokenAccount));
       }
-      if (!claimSuccessTx && typeof parsed?.claimTx === 'string') {
-        setClaimSuccessTx(parsed.claimTx);
+      if (typeof parsed?.claimTx === 'string') {
+        setClaimSuccessTx((prev) => (prev ? prev : parsed.claimTx));
       }
-      if (!lastClaimProof && parsed?.lastClaimProof && typeof parsed.lastClaimProof === 'object') {
+      if (parsed?.lastClaimProof && typeof parsed.lastClaimProof === 'object') {
         const p = parsed.lastClaimProof;
         if (
           typeof p.nonce === 'number' &&
@@ -329,29 +324,24 @@ export default function EmployeePage() {
           (typeof p.bufferTx === 'string' || p.bufferTx === null) &&
           typeof p.claimTx === 'string'
         ) {
-          setLastClaimProof({
-            nonce: p.nonce,
-            payoutPda: p.payoutPda,
-            bufferTx: p.bufferTx,
-            claimTx: p.claimTx,
-            destinationTokenAccount:
-              typeof p.destinationTokenAccount === 'string'
-                ? p.destinationTokenAccount
-                : null,
-          });
+          setLastClaimProof((prev) =>
+            prev || {
+              nonce: p.nonce,
+              payoutPda: p.payoutPda,
+              bufferTx: p.bufferTx,
+              claimTx: p.claimTx,
+              destinationTokenAccount:
+                typeof p.destinationTokenAccount === 'string'
+                  ? p.destinationTokenAccount
+                  : null,
+            }
+          );
         }
       }
     } catch {
       // ignore
     }
-  }, [
-    claimDestinationTokenAccount,
-    claimSuccessTx,
-    employerWallet,
-    lastClaimProof,
-    streamIndexInput,
-    workerLastClaimStorageKey,
-  ]);
+  }, [workerLastClaimStorageKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !wallet.publicKey) return;
