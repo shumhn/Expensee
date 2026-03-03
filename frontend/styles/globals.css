@@ -727,11 +727,11 @@ a:hover {
   gap: 1rem;
 }
 
-.step-card-flow > .grid {
+.step-card-flow>.grid {
   gap: 0.9rem;
 }
 
-.step-card-flow > .grid:first-child {
+.step-card-flow>.grid:first-child {
   padding: 0.2rem;
 }
 

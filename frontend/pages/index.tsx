@@ -69,9 +69,7 @@ export default function HomePage() {
             {/* Hero Content */}
             <div className="flex flex-col items-start justify-center flex-1 max-w-lg">
               <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black tracking-[-0.04em] leading-[1.05] text-white mb-8" style={{ fontFamily: 'var(--font-outfit), sans-serif' }}>
-                Get the best
-                <br />
-                <span className="text-white">Payroll</span>
+                Get the best Payroll
                 <br />
                 <span className="text-white">experience</span>
               </h1>
