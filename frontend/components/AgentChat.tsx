@@ -146,6 +146,8 @@ export default function AgentChat({
     const inputRef = useRef<HTMLInputElement>(null);
     const hasGreeted = useRef(false);
     const isSending = useRef(false);
+    const stickToBottomRef = useRef(true);
+    const lastScrollHeightRef = useRef(0);
     const actionableSteps = useMemo(
         () => executionSteps.filter((s) => s.key !== 'refresh-state'),
         [executionSteps]
@@ -194,14 +196,27 @@ export default function AgentChat({
         ]);
     }, [setMessages]);
 
-    // Auto-scroll to bottom
+    // Respect manual scrolling: only auto-scroll when user is already near bottom.
     useEffect(() => {
         const container = messagesRef.current;
         if (!container) return;
-        container.scrollTo({
-            top: container.scrollHeight,
-            behavior: 'smooth',
-        });
+        const updateStickiness = () => {
+            const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            stickToBottomRef.current = distanceFromBottom < 96;
+        };
+        updateStickiness();
+        container.addEventListener('scroll', updateStickiness, { passive: true });
+        return () => container.removeEventListener('scroll', updateStickiness);
+    }, []);
+
+    // Auto-scroll to bottom only if user hasn't scrolled away from bottom.
+    useEffect(() => {
+        const container = messagesRef.current;
+        if (!container) return;
+        const grew = container.scrollHeight > lastScrollHeightRef.current;
+        lastScrollHeightRef.current = container.scrollHeight;
+        if (!grew || !stickToBottomRef.current) return;
+        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
     }, [messages, executionSteps, thinking]);
 
     // Route a message through Grok LLM for conversational responses
