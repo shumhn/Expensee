@@ -2,7 +2,7 @@
  * Payroll Program Client (v2)
  *
  * Integrates with the deployed Confidential Streaming Payroll program.
- * Program ID: 3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn
+ * Program ID: C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP
  *
  * Architecture:
  * - Business PDA: ["business", owner_pubkey]
@@ -17,7 +17,7 @@
  * - Deactivate individual streams
  */
 
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } from '@solana/web3.js';
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { encryptValue } from '@inco/solana-sdk/encryption';
@@ -30,7 +30,7 @@ import { hexToBuffer } from '@inco/solana-sdk/utils';
 // NOTE: Hardcoded to the current deploy since it rarely changes,
 // but can be overridden by environment variables.
 export const PAYROLL_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || '3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn'
+  process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || 'C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP'
 );
 
 export const INCO_LIGHTNING_ID = new PublicKey(
@@ -733,18 +733,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   }) as Promise<T>;
 }
 
+/**
+ * Send and confirm a transaction containing one or more instructions
+ */
 async function sendAndConfirmTransaction(
   connection: Connection,
   wallet: WalletContextState,
-  instruction: TransactionInstruction,
+  instructionOrTransaction: TransactionInstruction | Transaction,
   label: string = 'transaction'
 ): Promise<string> {
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error('Wallet not connected');
   }
 
-  const transaction = new Transaction().add(instruction);
-  console.log(`[sendAndConfirm] Fetching latest blockhash for: ${label}`);
+  let transaction: Transaction;
+  if (instructionOrTransaction instanceof TransactionInstruction) {
+    // Wrap the single instruction in a transaction
+    transaction = new Transaction().add(instructionOrTransaction);
+  } else {
+    // It's already a Transaction
+    transaction = instructionOrTransaction;
+  }
+  console.log(`[sendAndConfirm] Fetching latest blockhash for: transaction`);
   const { blockhash, lastValidBlockHeight } = await withTimeout(
     connection.getLatestBlockhash('confirmed'),
     20_000,
@@ -1076,7 +1086,7 @@ export async function deposit(
   const instruction = new TransactionInstruction({
     keys: [
       { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: businessPDA, isSigner: false, isWritable: true }, // Fails with ConstraintMut if false against current deploy
       { pubkey: vaultPDA, isSigner: false, isWritable: true },
       { pubkey: depositorTokenAccount, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
@@ -1355,7 +1365,10 @@ export async function addEmployeeStreamV2(
     data,
   });
 
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
+  const heapIx = ComputeBudgetProgram.requestHeapFrame({ bytes: 256000 });
+  const tx = new Transaction().add(heapIx, instruction);
+  
+  const txid = await sendAndConfirmTransaction(connection, wallet, tx);
   return { txid, employeeStreamPDA, streamIndex, employeeAuthHash };
 }
 
