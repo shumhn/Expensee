@@ -300,11 +300,20 @@ export default function EmployerPage() {
   } | null>(null);
 
   const ownerPubkey = wallet.publicKey;
+  const keeperMismatch = useMemo(() => {
+    return (
+      !!v2ConfigExists &&
+      !!v2Config?.keeper &&
+      !!DEFAULT_AUTOMATION_WALLET &&
+      v2Config.keeper !== DEFAULT_AUTOMATION_WALLET
+    );
+  }, [v2ConfigExists, v2Config?.keeper]);
+
   const effectiveKeeperPubkey = useMemo(
     () =>
       (
-        keeperPubkey ||
         DEFAULT_AUTOMATION_WALLET ||
+        keeperPubkey ||
         wallet.publicKey?.toBase58() ||
         ""
       ).trim(),
@@ -388,8 +397,8 @@ export default function EmployerPage() {
   const automationMismatch = Boolean(
     v2ConfigExists &&
     v2Config?.keeper &&
-    effectiveKeeperPubkey &&
-    v2Config.keeper !== effectiveKeeperPubkey,
+    DEFAULT_AUTOMATION_WALLET &&
+    v2Config.keeper !== DEFAULT_AUTOMATION_WALLET,
   );
   const automationStatusLabel = !v2ConfigExists
     ? "Pending"
@@ -1325,7 +1334,10 @@ export default function EmployerPage() {
   const grantAutomationDecryptAccessTask = useCallback(
     async (targetStreamIndex: number) => {
       if (!ownerPubkey) throw new Error("Wallet not connected");
-      const keeperKey = v2Config?.keeper || effectiveKeeperPubkey;
+      // DEEP-LEVEL FIX: Use the currently active environment Keeper (DEFAULT_AUTOMATION_WALLET)
+      // for new grants, even if the business record on-chain hasn't rotated yet.
+      // This ensures new employees are immediately decryptable by the running service.
+      const keeperKey = DEFAULT_AUTOMATION_WALLET || v2Config?.keeper || effectiveKeeperPubkey;
       if (!keeperKey) throw new Error("Automation wallet missing");
       const keeper = mustPubkey("automation wallet", keeperKey);
 
@@ -1812,8 +1824,8 @@ export default function EmployerPage() {
       const keeperMismatch =
         !!v2ConfigExists &&
         !!v2Config?.keeper &&
-        !!effectiveKeeperPubkey &&
-        v2Config.keeper !== effectiveKeeperPubkey;
+        !!DEFAULT_AUTOMATION_WALLET &&
+        v2Config.keeper !== DEFAULT_AUTOMATION_WALLET;
 
       steps.push({
         key: "init-automation",
@@ -2979,6 +2991,7 @@ export default function EmployerPage() {
           ))}
         </div>
       </div>
+
 
       <AgentChat
         walletConnected={!!wallet.connected}

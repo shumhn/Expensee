@@ -1508,9 +1508,9 @@ export default function EmployeePage() {
                     await revealViaKeeperRelay(status.streamIndex);
                   } catch (e: any) {
                     const msg = e?.message || 'Secure reveal failed';
-                    setError(msg);
+                    setError(`Keeper Error: ${msg}`);
                     setServerRevealHint(
-                      'Keeper relay could not reveal this stream. Confirm automation decrypt access is enabled in Employer setup, then try again.'
+                      `The Keeper rejected the request with: "${msg}". Check your logs for details.`
                     );
                   } finally {
                     setRevealLoading(false);

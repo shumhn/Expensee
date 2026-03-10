@@ -306,12 +306,22 @@ pub mod payroll {
         ctx: Context<UpdateKeeperV2>,
         keeper_pubkey: Pubkey,
     ) -> Result<()> {
+        let cfg = &mut ctx.accounts.stream_config_v2;
+        let business = &ctx.accounts.business;
+
+        // Either the business owner or the CURRENTLY authorized keeper can rotate.
+        // This allows for autonomous "behind-the-scenes" synchronization.
+        require!(
+            ctx.accounts.authority.key() == business.owner || 
+            ctx.accounts.authority.key() == cfg.keeper_pubkey, 
+            PayrollError::Unauthorized
+        );
+
         require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
 
-        let cfg = &mut ctx.accounts.stream_config_v2;
         cfg.keeper_pubkey = keeper_pubkey;
 
-        msg!("✅ v2 keeper updated");
+        msg!("✅ v2 keeper updated by {}", ctx.accounts.authority.key());
         msg!("   Business: {}", cfg.business);
         msg!("   New Keeper: {}", cfg.keeper_pubkey);
 

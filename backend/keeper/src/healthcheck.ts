@@ -559,7 +559,9 @@ export function startHealthServer(): void {
 
         // Keeper server-side reveal endpoint
         if (req.method === 'POST' && req.url === '/api/reveal-live') {
+            console.log(`[keeper api] REVEAL-LIVE REQUEST RECEIVED at ${new Date().toISOString()}`);
             if (!ENABLE_SERVER_DECRYPT) {
+                console.warn('[keeper api] REVEAL-LIVE REJECTED: Server decrypt is disabled');
                 res.writeHead(403, { 'Content-Type': 'application/json', ...corsHeaders() });
                 res.end(
                     JSON.stringify({
@@ -591,6 +593,7 @@ export function startHealthServer(): void {
                     assertRecentTimestamp(parsed.timestamp);
                     verifyRevealSignature(parsed);
                     const revealed = await revealLiveWithKeeper(parsed);
+                    console.log(`[keeper api] REVEAL-LIVE SUCCESS for worker ${parsed.workerPubkey}`);
 
                     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
                     res.end(

@@ -41,6 +41,7 @@ import { ed25519 } from '@noble/curves/ed25519';
 const fetchAny: any = (globalThis as any).fetch;
 
 const STREAM_CONFIG_V2_SEED = Buffer.from('stream_config_v2');
+const BUSINESS_SEED = Buffer.from('business');
 const EMPLOYEE_V2_SEED = Buffer.from('employee_v2');
 const VAULT_SEED = Buffer.from('vault');
 const BUFFER_SEED = Buffer.from('buffer');
@@ -73,6 +74,7 @@ const KEEPER_CLAIM_ON_BEHALF_V2_DISC = Buffer.from([161, 194, 33, 127, 138, 221,
 const KEEPER_REQUEST_WITHDRAW_V2_DISC = Buffer.from([241, 181, 94, 57, 32, 108, 61, 165]);
 const GRANT_EMPLOYEE_VIEW_ACCESS_V2_DISC = Buffer.from([201, 191, 208, 133, 117, 221, 125, 147]);
 const REVOKE_VIEW_ACCESS_V2_DISC = Buffer.from([79, 190, 166, 170, 246, 184, 119, 163]);
+const UPDATE_KEEPER_V2_DISC = Buffer.from([52, 172, 105, 244, 89, 165, 39, 71]);
 
 const MAGIC_PROGRAM_ID = new PublicKey(
   process.env.KEEPER_MAGIC_CORE_PROGRAM_ID ||
@@ -3201,6 +3203,75 @@ function log(message: string): void {
   console.log(`[keeper ${ts}] ${message}`);
 }
 
+async function syncOnChainKeeperConfig(): Promise<void> {
+  const businessOwnerRaw = (process.env.KEEPER_BUSINESS_OWNER || '').trim();
+  if (!businessOwnerRaw) {
+    log('Automated Sync: KEEPER_BUSINESS_OWNER not set skip.');
+    return;
+  }
+
+  try {
+    const owner = new PublicKey(businessOwnerRaw);
+    const [businessPDA] = PublicKey.findProgramAddressSync(
+      [BUSINESS_SEED, owner.toBuffer()],
+      PROGRAM_ID
+    );
+    const [streamConfigPDA] = PublicKey.findProgramAddressSync(
+      [STREAM_CONFIG_V2_SEED, businessPDA.toBuffer()],
+      PROGRAM_ID
+    );
+
+    // Use a fresh connection for the on-chain presence check.
+    const checkConnection = new Connection('https://api.devnet.solana.com', 'confirmed');
+    const configInfo = await checkConnection.getAccountInfo(streamConfigPDA);
+    if (!configInfo) {
+      log('Automated Sync: Stream config record not found on-chain skip.');
+      return;
+    }
+
+    // keeper_pubkey is at offset 8 (after discriminator) + 32 (business pubkey) = 40
+    const onChainKeeper = new PublicKey(configInfo.data.slice(40, 72));
+    const localKeeper = payer.publicKey;
+
+    if (onChainKeeper.equals(localKeeper)) {
+      log('Automated Sync: Keeper identity is already synchronized on-chain.');
+      return;
+    }
+
+    log(`Automated Sync: Identity mismatch detected (On-chain: ${onChainKeeper.toBase58()}, Active: ${localKeeper.toBase58()}). Synchronizing...`);
+
+    const data = Buffer.concat([UPDATE_KEEPER_V2_DISC, localKeeper.toBuffer()]);
+    const instruction = new TransactionInstruction({
+      keys: [
+        { pubkey: localKeeper, isSigner: true, isWritable: true }, // authority (Signer)
+        { pubkey: businessPDA, isSigner: false, isWritable: false },
+        { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
+      ],
+      programId: PROGRAM_ID,
+      data,
+    });
+
+    const { blockhash } = await readConnection.getLatestBlockhash();
+    const message = new TransactionMessage({
+      payerKey: localKeeper,
+      recentBlockhash: blockhash,
+      instructions: [instruction],
+    }).compileToV0Message();
+
+    const tx = new VersionedTransaction(message);
+    tx.sign([payer]);
+
+    const txid = await txConnection.sendTransaction(tx);
+    log(`Automated Sync: Success! Transaction sent: ${txid}`);
+    
+    // Wait for confirmation to ensure it's picked up before ticker starts
+    await readConnection.confirmTransaction(txid, 'confirmed');
+    log('Automated Sync: Transaction confirmed.');
+  } catch (e: any) {
+    log(`Automated Sync: Failed with error: ${e?.message || 'unknown'}`);
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -3247,6 +3318,11 @@ async function main(): Promise<void> {
   } catch (e: any) {
     log(`Failed to connect to MongoDB queue: ${e?.message}`);
   }
+
+  // DEEP-LEVEL FIX: Autonomous Heartbeat Sync
+  // Check if this keeper's identity matches the on-chain registration for the company.
+  // If not, use the new contract permission to "claim" the role automatically.
+  await syncOnChainKeeperConfig();
 
   await processTick();
   setInterval(() => {

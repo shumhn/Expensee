@@ -188,12 +188,12 @@ pub struct InitStreamConfigV2<'info> {
 #[derive(Accounts)]
 pub struct UpdateKeeperV2<'info> {
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub authority: Signer<'info>,
 
+    /// The business being updated.
     #[account(
-        seeds = [BUSINESS_SEED, owner.key().as_ref()],
+        seeds = [BUSINESS_SEED, business.owner.as_ref()],
         bump = business.bump,
-        has_one = owner
     )]
     pub business: Account<'info, Business>,
 
