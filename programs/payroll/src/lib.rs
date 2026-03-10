@@ -25,7 +25,7 @@ use ephemeral_rollups_sdk::anchor::ephemeral;
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
-declare_id!("3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn");
+declare_id!("C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP");
 
 pub mod constants;
 pub mod contexts;
