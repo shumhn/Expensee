@@ -813,6 +813,11 @@ async function sendInstruction(
     tx.feePayer = payer.publicKey;
 
     try {
+      // ALWAYS set the recentBlockhash using the most reliable connection (base chain)
+      // to avoid "Transaction recentBlockhash required" errors on specialized routers.
+      const { blockhash, lastValidBlockHeight } = await readConnection.getLatestBlockhash('processed');
+      tx.recentBlockhash = blockhash;
+
       if (conn instanceof ConnectionMagicRouter) {
         const signature = await conn.sendAndConfirmTransaction(
           tx,
@@ -826,8 +831,6 @@ async function sendInstruction(
         return signature;
       }
 
-      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('processed');
-      tx.recentBlockhash = blockhash;
       tx.sign(payerSigner, ...extraSigners);
 
       const signature = await conn.sendRawTransaction(tx.serialize(), {
