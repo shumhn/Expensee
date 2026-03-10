@@ -1,4 +1,9 @@
-import 'dotenv/config';
+import path from 'path';
+import dotenv from 'dotenv';
+
+// Load env from current dir or backend/keeper/.env if running from root
+dotenv.config(); 
+dotenv.config({ path: path.resolve(process.cwd(), 'backend/keeper/.env') });
 import {
   Connection,
   Keypair,
@@ -30,7 +35,7 @@ import {
 } from './claims-queue';
 import fs from 'fs';
 
-import path from 'path';
+
 import { ed25519 } from '@noble/curves/ed25519';
 
 const fetchAny: any = (globalThis as any).fetch;

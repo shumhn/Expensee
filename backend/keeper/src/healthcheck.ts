@@ -13,6 +13,11 @@ import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import dotenv from 'dotenv';
+
+// Load env before using requiredEnv
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), 'backend/keeper/.env') });
 
 
 const PORT = Number(process.env.KEEPER_HEALTH_PORT || '9090');
