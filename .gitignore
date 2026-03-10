@@ -73,3 +73,6 @@ test-ledger/
 Thumbs.db
 
 bun.lock
+.env*.local
+.env.production
+keys/
