@@ -35,7 +35,7 @@ A 2-hop shielded architecture with stealth routing makes employer-to-employee pa
 | **Unlinkable Payments** | 2-hop shielded architecture + stealth accounts break all employer↔employee traceability |
 | **Real-Time Streaming** | Workers earn every second and withdraw on demand through ephemeral accounts |
 | **AI-Powered Setup** | OnyxFii Agent guides employers through payroll configuration conversationally |
-| **Autonomous Settlement** | Keeper service handles accrual, routing, and claims without human intervention |
+| **Autonomous Settlement** | Self-healing Keeper service handles accrual, routing, and auto-syncs its on-chain identity 24/7 |
 
 > *Expensee: AI-assisted, private, real-time payroll for the global workforce.*
 
@@ -150,7 +150,8 @@ Setting up cross-border encrypted payroll is inherently complex — confidential
 **How Expensee automates everything:**
 
 - **OnyxFii AI Agent** — A conversational co-pilot that walks employers through an 11-step setup process in plain English. Say "pay Alice $3000/month" and it handles everything.
-- **Autonomous Keeper** — Runs the entire settlement pipeline 24/7 without human intervention: accrue salaries → checkpoint to base layer → settle to shielded staging → route through stealth relay → claim on behalf of employee → re-delegate to TEE. Every ~4 seconds.
+- **Autonomous Keeper & "Heartbeat" Sync** — Runs the entire settlement pipeline 24/7 without human intervention. On startup, the Keeper performs a "Heartbeat" check: it cross-references its local identity with the on-chain business record and **autonomously synchronizes** itself if a mismatch is found.
+- **Self-Healing Role Claiming** — The smart contract was upgraded to allow the *Current Keeper* or *Business Owner* to authorize rotations. This means you can update your server keys and the Keeper will silently "claim" its role on the next tick — no manual UI interaction needed.
 - **Zero-touch operations** — Once a payroll stream is live, neither the employer nor the employee needs to do anything. The Keeper handles accrual, withdrawal processing, stealth routing, and re-delegation automatically.
 
 > **Result:** Admin overhead drops **50–70%**, processing costs drop **30–40%**. No intermediary banks. No manual compliance. No human in the loop.
@@ -799,6 +800,7 @@ The Keeper is a **4,300-line TypeScript service** that automates the entire payo
 | **Dead Letter Queue** | Failed payouts logged to `dead-letter.log` with full context |
 | **Compliance Controls** | Optional pause/resume with Range Protocol integration |
 | **Auto Re-delegation** | Streams automatically re-delegated to TEE after settlement |
+| **Heartbeat Sync** | On-chain identity self-healing logic (startup auto-sync) |
 
 ### Umbra Relay (`services/umbra-relay/`)
 
