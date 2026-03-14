@@ -6,6 +6,7 @@ import {
     Transaction,
 } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, mintTo } from '@solana/spl-token';
+import path from 'path';
 import fs from 'fs';
 
 type Ok = {
@@ -15,12 +16,29 @@ type Ok = {
 
 type Err = { ok: false; error: string };
 
+function resolveKeypairPath(pathOrJson: string): string {
+    const trimmed = pathOrJson.trim();
+    if (!trimmed || trimmed.startsWith('[')) return trimmed;
+    if (path.isAbsolute(trimmed)) return trimmed;
+
+    const candidates = [
+        path.resolve(process.cwd(), trimmed),
+        path.resolve(process.cwd(), '..', trimmed),
+        path.resolve(process.cwd(), '..', '..', trimmed),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    return trimmed;
+}
+
 function loadKeypairFromPath(pathOrJson: string): Keypair {
     const trimmed = pathOrJson.trim();
     if (trimmed.startsWith('[')) {
         return Keypair.fromSecretKey(new Uint8Array(JSON.parse(trimmed)));
     }
-    const raw = fs.readFileSync(trimmed, 'utf-8');
+    const resolved = resolveKeypairPath(trimmed);
+    const raw = fs.readFileSync(resolved, 'utf-8');
     const arr = JSON.parse(raw);
     return Keypair.fromSecretKey(new Uint8Array(arr));
 }
@@ -46,6 +64,7 @@ export default async function handler(
         }
 
         const keyPath =
+            process.env.PUBLIC_USDC_MINT_AUTHORITY_KEYPAIR_PATH ||
             process.env.MINT_AUTHORITY_KEYPAIR_PATH ||
             process.env.BRIDGE_PAYUSD_MINT_AUTHORITY_KEYPAIR_PATH ||
             '../keys/payroll-authority.json';
