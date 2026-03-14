@@ -27,7 +27,7 @@ If `spl-token` is not working in your environment, you can use the repo helper i
 RPC_URL=https://api.devnet.solana.com \
 FEE_PAYER_KEYPAIR_PATH=keys/payroll-authority.json \
 AMOUNT=1000 \
-node frontend/scripts/create-public-usdc-mint.cjs
+node scripts/create-public-usdc-mint.cjs
 ```
 
 Copy the printed mint address and export it:
@@ -75,7 +75,7 @@ This is the existing helper:
 DEST_TOKEN_ACCOUNT=YOUR_INCO_SOURCE_TOKEN_ACCOUNT \
 MINT_AUTHORITY_KEYPAIR_PATH=keys/payroll-authority.json \
 AMOUNT=100 \
-node frontend/scripts/mint-payusd.cjs
+node scripts/mint-payusd.cjs
 ```
 
 Now you can deposit into the Expensee vault from the Employer UI:
@@ -109,7 +109,7 @@ For demo, “unwrap” is custodial:
 If you use the `/bridge` page, make sure you created an escrow Inco token account once:
 
 ```bash
-node frontend/scripts/create-bridge-escrow-confidential-account.cjs
+node scripts/create-bridge-escrow-confidential-account.cjs
 ```
 
 This is the unavoidable tradeoff on public chains:

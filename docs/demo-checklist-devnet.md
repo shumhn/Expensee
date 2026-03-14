@@ -53,7 +53,7 @@ set -a; source /Users/sumangiri/Desktop/expensee/backend/keeper/.env; set +a
 SETUP_MINT_AUTHORITY_KEYPAIR_PATH=/Users/sumangiri/Desktop/expensee/keys/payroll-authority.json \
 SETUP_MINT_UI=100 \
 SETUP_DEPOSIT_UI=50 \
-node /Users/sumangiri/Desktop/expensee/frontend/scripts/setup-v2-stream.cjs
+node /Users/sumangiri/Desktop/expensee/scripts/setup-v2-stream.cjs
 ```
 
 ---
@@ -78,7 +78,7 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
      ```bash
      cd /Users/sumangiri/Desktop/expensee
      set -a; source frontend/.env.local; set +a
-     DEST_TOKEN_ACCOUNT=YOUR_SOURCE_TOKEN_ACCOUNT AMOUNT=100 node frontend/scripts/mint-payusd.cjs
+     DEST_TOKEN_ACCOUNT=YOUR_SOURCE_TOKEN_ACCOUNT AMOUNT=100 node scripts/mint-payusd.cjs
      ```
      If your mint authority is not `~/.config/solana/id.json`, set:
      - `MINT_AUTHORITY_KEYPAIR_PATH=/path/to/keypair.json`
@@ -93,7 +93,7 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
      - Update `NEXT_PUBLIC_PAYUSD_MINT` in:
        - `/Users/sumangiri/Desktop/expensee/frontend/.env.local`
        - `/Users/sumangiri/Desktop/expensee/backend/keeper/.env` (via `NEXT_PUBLIC_PAYUSD_MINT` only if you reference it elsewhere; keeper uses on-chain vault mint)
-     - Restart app + keeper, then mint to your source token account using `frontend/scripts/mint-payusd.cjs`.
+     - Restart app + keeper, then mint to your source token account using `scripts/mint-payusd.cjs`.
 6. **Deposit to Vault**
    - Paste your source token account
    - Choose amount

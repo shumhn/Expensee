@@ -1,8 +1,8 @@
 {
-  "name": "private-payroll-v2-app",
+  "name": "expensee-app",
   "version": "0.1.0",
   "private": true,
-  "description": "Private real-time payroll v2 frontend",
+  "description": "Private real-time payroll and employee payouts setup",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

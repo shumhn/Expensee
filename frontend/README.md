@@ -9,10 +9,7 @@ Frontend for the v4 pooled-vault privacy flow (index-based PDAs + Inco FHE).
 - `/employee` v4 payroll status + withdraw request (default)
 
 Legacy consoles (advanced):
-- `/employer-v3` Legacy v3 console
-- `/employee-v3` Legacy v3 portal
-- `/employer-v2` Legacy v2 console (deprecated)
-- `/employee-v2` Legacy v2 portal (deprecated)
+
 
 ## Core behavior
 

@@ -22,12 +22,12 @@
     "dev:all": "node scripts/dev-all.cjs",
     "umbra:relay:dev": "node services/umbra-relay/server.cjs",
     "umbra:relay:self-test": "node services/umbra-relay/self-test.cjs",
-    "privacy:purge": "node frontend/scripts/purge-v2-privacy.cjs",
-    "setup:stream": "node frontend/scripts/setup-stream.cjs",
-    "withdraw:flow": "node frontend/scripts/withdraw-flow.cjs",
-    "withdraw:request": "node frontend/scripts/request-withdraw.cjs",
-    "withdraw:claim": "node frontend/scripts/claim-payout.cjs",
-    "flow:v4": "node frontend/scripts/run-v4-flow.cjs"
+    "privacy:purge": "node scripts/purge-v2-privacy.cjs",
+    "setup:stream": "node scripts/setup-stream.cjs",
+    "withdraw:flow": "node scripts/withdraw-flow.cjs",
+    "withdraw:request": "node scripts/request-withdraw.cjs",
+    "withdraw:claim": "node scripts/claim-payout.cjs",
+    "flow:v4": "node scripts/run-v4-flow.cjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
