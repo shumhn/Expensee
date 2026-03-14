@@ -1,6 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { deriveV4Checklist } from '../../../lib/agentV4Checklist';
-
 type ChatMessage = {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -184,16 +182,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         return res.status(400).json({ ok: false, error: 'Message is required' });
     }
 
-    // Build context for the LLM — make it clear this is VERIFIED data
+    // Build context for the LLM
     const status = accountStatus as Record<string, any>;
-    const {
-        visibleSteps,
-        checklistLines,
-        checklistNextStep,
-        currentStep,
-        missingInputs,
-    } = deriveV4Checklist(status);
-
     const automationLabel = 'Automation (stream config) set up';
     const contextBlock = [
         `═══ VERIFIED SYSTEM STATE (THIS IS REAL-TIME TRUTH) ═══`,
@@ -208,14 +198,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         `The checklist below is the ONLY thing you should use to determine which step the user is on.`,
         `Internal-only steps (e.g. refresh-state) are intentionally hidden here.`,
         ``,
-        ...(checklistLines.length ? checklistLines : ['(no steps available yet)']),
+        `(no steps available yet)`,
         ``,
-        `CURRENT STEP: ${checklistNextStep}`,
-        `CURRENT STEP KEY: ${currentStep?.key || 'none'}`,
-        `CURRENT STEP REQUIRED: ${currentStep ? (currentStep.required === false ? 'NO (optional)' : 'YES') : 'N/A'}`,
-        `CURRENT STEP REQUIRES SIGNATURE: ${currentStep ? (currentStep.requiresSignature === false ? 'NO' : 'YES') : 'N/A'}`,
-        `MISSING INPUTS (ASK USER FIRST IF NOT EMPTY): ${missingInputs.length ? missingInputs.join(', ') : 'none'}`,
-        `USE "${checklistNextStep}" for your "Current Goal:" header.`,
+        `CURRENT STEP: unknown`,
+        `CURRENT STEP KEY: unknown`,
+        `CURRENT STEP REQUIRED: N/A`,
+        `CURRENT STEP REQUIRES SIGNATURE: N/A`,
+        `MISSING INPUTS: none`,
+        `USE "unknown" for your "Current Goal:" header.`,
         `NEVER suggest a step that has ✅ next to it. Those are DONE.`,
         `If all steps are ✅, say "Current Goal: All Setup Steps Completed!" and congratulate the user.`,
         `If no checklist exists yet, say "Current Goal: No Checklist Available" and ask the user to type "setup".`,
