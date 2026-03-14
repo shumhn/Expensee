@@ -1,13 +1,13 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke},
+    program::{get_return_data, invoke, invoke_signed},
 };
 
 use crate::constants::*;
 use crate::errors::PayrollError;
 use crate::state::EncryptedHandle;
-use crate::state::EmployeeStreamV2;
+use crate::state::{EmployeeEntryV3, EmployeeEntryV4, EmployeeStreamV2};
 
 // ============================================================
 // Handle Conversion Helpers
@@ -47,7 +47,50 @@ pub fn load_employee_stream_v2(account: &AccountInfo<'_>) -> Result<EmployeeStre
     EmployeeStreamV2::try_deserialize(&mut slice).map_err(Into::into)
 }
 
-pub fn save_employee_stream_v2(account: &AccountInfo<'_>, employee: &EmployeeStreamV2) -> Result<()> {
+pub fn save_employee_stream_v2(
+    account: &AccountInfo<'_>,
+    employee: &EmployeeStreamV2,
+) -> Result<()> {
+    let mut data = account.try_borrow_mut_data()?;
+    let mut dst: &mut [u8] = &mut data;
+    employee.try_serialize(&mut dst)?;
+    Ok(())
+}
+
+// ============================================================
+// Employee Entry V3 Serialization
+// ============================================================
+
+pub fn load_employee_entry_v3(account: &AccountInfo<'_>) -> Result<EmployeeEntryV3> {
+    let data = account.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    EmployeeEntryV3::try_deserialize(&mut slice).map_err(Into::into)
+}
+
+pub fn save_employee_entry_v3(
+    account: &AccountInfo<'_>,
+    employee: &EmployeeEntryV3,
+) -> Result<()> {
+    let mut data = account.try_borrow_mut_data()?;
+    let mut dst: &mut [u8] = &mut data;
+    employee.try_serialize(&mut dst)?;
+    Ok(())
+}
+
+// ============================================================
+// Employee Entry V4 Serialization
+// ============================================================
+
+pub fn load_employee_entry_v4(account: &AccountInfo<'_>) -> Result<EmployeeEntryV4> {
+    let data = account.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    EmployeeEntryV4::try_deserialize(&mut slice).map_err(Into::into)
+}
+
+pub fn save_employee_entry_v4(
+    account: &AccountInfo<'_>,
+    employee: &EmployeeEntryV4,
+) -> Result<()> {
     let mut data = account.try_borrow_mut_data()?;
     let mut dst: &mut [u8] = &mut data;
     employee.try_serialize(&mut dst)?;
@@ -64,6 +107,7 @@ pub fn inco_sighash(name: &str) -> Result<[u8; 8]> {
         "as_euint128" => Ok([0x56, 0x3d, 0x17, 0xad, 0xbb, 0x02, 0xf7, 0x60]),
         "e_mul" => Ok([0xe5, 0x99, 0xf5, 0x11, 0x5f, 0x94, 0x3d, 0xf7]),
         "e_add" => Ok([0x14, 0x53, 0x12, 0xa7, 0x78, 0x21, 0xd1, 0xee]),
+        "e_sub" => Ok([0xbb, 0x0b, 0x91, 0x1e, 0x32, 0x36, 0x3a, 0xe4]),
         _ => Err(PayrollError::InvalidCiphertext.into()),
     }
 }
@@ -84,6 +128,7 @@ pub fn inco_new_euint128<'info>(
     inco_lightning_program: &AccountInfo<'info>,
     ciphertext: Vec<u8>,
     input_type: u8,
+    signer_seeds: Option<&[&[&[u8]]]>,
 ) -> Result<u128> {
     require!(
         !ciphertext.is_empty() && ciphertext.len() <= MAX_CIPHERTEXT_BYTES,
@@ -102,7 +147,10 @@ pub fn inco_new_euint128<'info>(
         data,
     };
 
-    invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?;
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&ix, &[signer.clone(), inco_lightning_program.clone()], seeds)?,
+        None => invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?,
+    }
     read_inco_u128_return()
 }
 
@@ -110,6 +158,7 @@ pub fn inco_as_euint128<'info>(
     signer: &AccountInfo<'info>,
     inco_lightning_program: &AccountInfo<'info>,
     value: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
 ) -> Result<u128> {
     let mut data = Vec::with_capacity(8 + 16);
     data.extend_from_slice(&inco_sighash("as_euint128")?);
@@ -121,7 +170,10 @@ pub fn inco_as_euint128<'info>(
         data,
     };
 
-    invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?;
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&ix, &[signer.clone(), inco_lightning_program.clone()], seeds)?,
+        None => invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?,
+    }
     read_inco_u128_return()
 }
 
@@ -132,6 +184,7 @@ pub fn inco_binary_op_u128<'info>(
     lhs: u128,
     rhs: u128,
     scalar_byte: u8,
+    signer_seeds: Option<&[&[&[u8]]]>,
 ) -> Result<u128> {
     let mut data = Vec::with_capacity(8 + 16 + 16 + 1);
     data.extend_from_slice(&inco_sighash(op_name)?);
@@ -145,21 +198,67 @@ pub fn inco_binary_op_u128<'info>(
         data,
     };
 
-    invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?;
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&ix, &[signer.clone(), inco_lightning_program.clone()], seeds)?,
+        None => invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?,
+    }
     read_inco_u128_return()
+}
+
+pub fn inco_add_u128<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    lhs: u128,
+    rhs: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    inco_binary_op_u128(signer, inco_lightning_program, "e_add", lhs, rhs, 0, signer_seeds)
+}
+
+pub fn inco_sub_u128<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    lhs: u128,
+    rhs: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    inco_binary_op_u128(signer, inco_lightning_program, "e_sub", lhs, rhs, 0, signer_seeds)
+}
+
+pub fn inco_mul_u128<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    lhs: u128,
+    rhs: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    inco_binary_op_u128(signer, inco_lightning_program, "e_mul", lhs, rhs, 0, signer_seeds)
 }
 
 // ============================================================
 // Authorization
 // ============================================================
 
-pub fn authorize_keeper_or_owner(
+pub fn authorize_keeper_or_owner(caller: Pubkey, owner: Pubkey, keeper: Pubkey) -> Result<()> {
+    require!(
+        caller == owner || caller == keeper,
+        PayrollError::UnauthorizedKeeper
+    );
+    Ok(())
+}
+
+pub fn authorize_keeper_only(caller: Pubkey, keeper: Pubkey) -> Result<()> {
+    require!(caller == keeper, PayrollError::UnauthorizedKeeper);
+    Ok(())
+}
+
+pub fn authorize_keeper_or_master(
     caller: Pubkey,
-    owner: Pubkey,
+    master_authority: Pubkey,
     keeper: Pubkey,
 ) -> Result<()> {
     require!(
-        caller == owner || caller == keeper,
+        caller == master_authority || caller == keeper,
         PayrollError::UnauthorizedKeeper
     );
     Ok(())

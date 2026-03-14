@@ -878,9 +878,9 @@ dependencies = [
 
 [[package]]
 name = "ephemeral-rollups-sdk"
-version = "0.8.3"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed917e408b4eff536c6c7e7e25b23b1fff6fcaa158b951f03f2bfe2b66ad114d"
+checksum = "5382adbd81b6532054e6b270c2bac713bf6ca03fa8391dc67259bd9a96f9822b"
 dependencies = [
  "anchor-lang 0.32.1",
  "base64ct",
@@ -889,18 +889,22 @@ dependencies = [
  "ephemeral-rollups-sdk-attribute-commit",
  "ephemeral-rollups-sdk-attribute-delegate",
  "ephemeral-rollups-sdk-attribute-ephemeral",
+ "ephemeral-rollups-sdk-attribute-ephemeral-accounts",
  "getrandom 0.2.17",
  "magicblock-delegation-program",
  "magicblock-magic-program-api",
+ "num-derive",
+ "num-traits",
  "solana-program 2.3.0",
  "solana-system-interface 2.0.0",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "ephemeral-rollups-sdk-attribute-action"
-version = "0.8.3"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bbc7b8801d6ddb40fe969af3e0fa22f24998c06f1c4aa256d3654db2952f861"
+checksum = "31804758eef070c3c46d12cd826b97fa373f8e0431e665641f3e055e0114de5a"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -908,9 +912,9 @@ dependencies = [
 
 [[package]]
 name = "ephemeral-rollups-sdk-attribute-commit"
-version = "0.8.3"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c66cf29fa39da0f2c33fcaacd578a3c93b5532c32349d94d993b1dffd5fc95b"
+checksum = "4df6fd684272cc0a0b3ae0a85199fd067ca44070e170b7090573b11781553bea"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -918,9 +922,9 @@ dependencies = [
 
 [[package]]
 name = "ephemeral-rollups-sdk-attribute-delegate"
-version = "0.8.3"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6888922286a30e01f30d45fc05ba2d1b7a2e13e2bca504bfe5b0c92382ce2883"
+checksum = "6bbfaa338039b11e9fefa2b7abf8649706d0f7012177b3327b6b8742854ce986"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -929,9 +933,20 @@ dependencies = [
 
 [[package]]
 name = "ephemeral-rollups-sdk-attribute-ephemeral"
-version = "0.8.3"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db3c9f62759fc3d533d6324745b2aa44a33f442b4948ac7fa3a368914c4c784"
+checksum = "60ca7532687b5c55a6f83150e283557215cca7e8e69af3140a73d0c600517e66"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "ephemeral-rollups-sdk-attribute-ephemeral-accounts"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c9c23a4b846294088ed6bc6a50056e0ed65f75991c69634606e3542ed01423"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1296,9 +1311,9 @@ dependencies = [
 
 [[package]]
 name = "magicblock-magic-program-api"
-version = "0.3.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce6ec80d63618a71bb4db324ec5fdca8f85552d0469a51aa063d290256d425f5"
+checksum = "543c03de47b7a85bfed9d1c7ad07021df6cfd4cd9d53f096e2c5f42e7729135e"
 dependencies = [
  "bincode",
  "serde",
@@ -1433,9 +1448,11 @@ name = "payroll"
 version = "0.1.0"
 dependencies = [
  "anchor-lang 0.32.1",
+ "bincode",
  "ephemeral-rollups-sdk",
  "inco-lightning",
  "inco-token",
+ "magicblock-magic-program-api",
  "sha2 0.10.9",
 ]
 

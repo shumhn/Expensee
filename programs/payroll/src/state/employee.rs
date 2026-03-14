@@ -77,6 +77,9 @@ pub struct EmployeeStreamV2 {
     pub period_start: i64,
     /// Pay period end (unix timestamp). 0 = unbounded (legacy behavior).
     pub period_end: i64,
+
+    /// ENCRYPTED employee identity handle (e.g., hashed pubkey via Inco).
+    pub encrypted_employee_id: EncryptedHandle,
 }
 
 impl EmployeeStreamV2 {
@@ -94,5 +97,5 @@ impl EmployeeStreamV2 {
         1 +                      // bump
         8 +                      // period_start
         8 +                      // period_end
-        32;                      // padding
+        32;                      // encrypted_employee_id
 }

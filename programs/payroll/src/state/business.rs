@@ -24,6 +24,10 @@ pub struct Business {
 
     /// PDA bump
     pub bump: u8,
+
+    /// ENCRYPTED employer identity handle (e.g., hashed pubkey via Inco).
+    /// Note: owner pubkey remains for authority; this adds an encrypted copy for privacy analytics.
+    pub encrypted_employer_id: EncryptedHandle,
 }
 
 impl Business {
@@ -35,7 +39,7 @@ impl Business {
         1 +                      // is_active
         8 +                      // created_at
         1 +                      // bump
-        32;                      // padding
+        32;                      // encrypted_employer_id
 }
 
 #[account]

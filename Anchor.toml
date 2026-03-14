@@ -8,10 +8,10 @@ skip-lint = false
 [programs.devnet]
 delegation_program = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"
 inco_lightning = "5sjEbPiqgZrYwR31ahR6Uk9wf5awoX61YGg7jExQSwaj"
-payroll = "C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP"
+payroll = "97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU"
 
 [programs.localnet]
-payroll = "C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP"
+payroll = "97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU"
 
 [registry]
 url = "https://api.apr.dev"

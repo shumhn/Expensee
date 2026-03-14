@@ -22,10 +22,22 @@ use sha2::{Digest, Sha256};
 
 // MagicBlock Ephemeral Rollups SDK
 use ephemeral_rollups_sdk::anchor::ephemeral;
+use ephemeral_rollups_sdk::access_control::instructions::{
+    CommitAndUndelegatePermissionCpiBuilder,
+    CreatePermissionCpiBuilder,
+    DelegatePermissionCpiBuilder,
+};
+use ephemeral_rollups_sdk::access_control::structs::{
+    Member,
+    MembersArgs,
+    AUTHORITY_FLAG,
+    TX_BALANCES_FLAG,
+    TX_LOGS_FLAG,
+};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::commit_and_undelegate_accounts;
 
-declare_id!("C5Jk6FSFTFEACfB6FQh6PA5ux2ujWteKNcSc1DrGrMtP");
+declare_id!("97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU");
 
 pub mod constants;
 pub mod contexts;
@@ -38,6 +50,42 @@ use constants::*;
 use contexts::*;
 use errors::*;
 use events::*;
+
+// Privacy-first logging: disabled unless the "privacy_logs" feature is enabled.
+#[cfg(feature = "privacy_logs")]
+macro_rules! privacy_msg {
+    ($($arg:tt)*) => {
+        privacy_msg!($($arg)*);
+    };
+}
+#[cfg(not(feature = "privacy_logs"))]
+macro_rules! privacy_msg {
+    ($($arg:tt)*) => {};
+}
+
+// Privacy-first events: disabled unless the "privacy_events" feature is enabled.
+#[cfg(feature = "privacy_events")]
+macro_rules! privacy_emit {
+    ($event:expr) => {
+        emit!($event);
+    };
+}
+#[cfg(not(feature = "privacy_events"))]
+macro_rules! privacy_emit {
+    ($event:expr) => {};
+}
+
+fn magicblock_permission_program() -> Pubkey {
+    Pubkey::try_from(MAGICBLOCK_PERMISSION_PROGRAM).unwrap_or(Pubkey::default())
+}
+
+fn derive_permission_pda(permissioned_account: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[PERMISSION_SEED, permissioned_account.as_ref()],
+        &magicblock_permission_program(),
+    )
+}
+
 use helpers::*;
 use state::*;
 
@@ -58,9 +106,20 @@ pub mod payroll {
     ///
     /// Creates a Business PDA for the owner. Must be followed by
     /// init_vault() to set up token custody.
-    pub fn register_business(ctx: Context<RegisterBusiness>) -> Result<()> {
+    pub fn register_business(
+        ctx: Context<RegisterBusiness>,
+        encrypted_employer_id: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            encrypted_employer_id.len() <= MAX_CIPHERTEXT_BYTES
+                && !encrypted_employer_id.is_empty(),
+            PayrollError::InvalidCiphertext
+        );
+
         let business = &mut ctx.accounts.business;
         let clock = Clock::get()?;
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let signer = ctx.accounts.owner.to_account_info();
 
         business.owner = ctx.accounts.owner.key();
         business.vault = Pubkey::default(); // Set by init_vault
@@ -68,16 +127,2234 @@ pub mod payroll {
         business.is_active = true;
         business.created_at = clock.unix_timestamp;
         business.bump = ctx.bumps.business;
-        business.encrypted_employee_count = EncryptedHandle::default();
+        // Initialize encrypted employer ID and encrypted employee count.
+        let employer_id_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employer_id,
+            0, None)?;
+        business.encrypted_employer_id = u128_to_handle(employer_id_handle);
 
-        msg!("✅ Business registered");
-        msg!("   Owner: {}", business.owner);
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        business.encrypted_employee_count = u128_to_handle(zero_handle);
 
-        emit!(BusinessRegistered {
-            business_index: 0,
+        privacy_msg!("✅ Business registered");
+
+        privacy_emit!(BusinessRegistered {
             timestamp: clock.unix_timestamp,
         });
 
+        Ok(())
+    }
+
+    // ════════════════════════════════════════════════════════
+    // V3 PRIVACY-FIRST SETUP (INDEX-BASED PDAs)
+    // ════════════════════════════════════════════════════════
+
+    /// Initialize the single MasterVaultV3 PDA.
+    pub fn init_master_vault_v3(ctx: Context<InitMasterVaultV3>) -> Result<()> {
+        let vault = &mut ctx.accounts.master_vault_v3;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        vault.authority = ctx.accounts.authority.key();
+        vault.next_business_index = 0;
+        vault.is_active = true;
+        vault.bump = ctx.bumps.master_vault_v3;
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        vault.encrypted_business_count = u128_to_handle(zero_handle);
+        vault.encrypted_employee_count = u128_to_handle(zero_handle);
+
+        privacy_msg!("✅ v3 master vault initialized");
+        Ok(())
+    }
+
+    /// Register a v3 business using index-based PDA seeds.
+    ///
+    /// Stores only encrypted employer identity on-chain.
+    pub fn register_business_v3(
+        ctx: Context<RegisterBusinessV3>,
+        encrypted_employer_id: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            !encrypted_employer_id.is_empty() && encrypted_employer_id.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+
+        let master = &mut ctx.accounts.master_vault_v3;
+        require!(master.is_active, PayrollError::Unauthorized);
+
+        let business_index = master.next_business_index;
+        master.next_business_index = master
+            .next_business_index
+            .checked_add(1)
+            .ok_or(PayrollError::InvalidAmount)?;
+
+        let business = &mut ctx.accounts.business_v3;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let clock = Clock::get()?;
+
+        business.master_vault = master.key();
+        business.business_index = business_index;
+        business.vault = Pubkey::default();
+        business.next_employee_index = 0;
+        business.is_active = true;
+        business.bump = ctx.bumps.business_v3;
+
+        let employer_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employer_id,
+            0, None)?;
+        business.encrypted_employer_id = u128_to_handle(employer_handle);
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        business.encrypted_balance = u128_to_handle(zero_handle);
+        business.encrypted_employee_count = u128_to_handle(zero_handle);
+
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_business_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&master.encrypted_business_count),
+            one_handle, None)?;
+        master.encrypted_business_count = u128_to_handle(updated_business_count);
+
+        emit!(BusinessRegistered {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v3 business registered");
+        Ok(())
+    }
+
+    // ════════════════════════════════════════════════════════
+    // V4 POOLED VAULT (SINGLE MASTER VAULT POOL)
+    // ════════════════════════════════════════════════════════
+
+    /// Initialize the v4 pooled master vault.
+    pub fn init_master_vault_v4(ctx: Context<InitMasterVaultV4>) -> Result<()> {
+        let vault = &mut ctx.accounts.master_vault_v4;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        vault.authority = ctx.accounts.authority.key();
+        vault.vault_token_account = Pubkey::default();
+        vault.mint = Pubkey::default();
+        vault.use_confidential_tokens = true;
+        vault.next_business_index = 0;
+        vault.is_active = true;
+        vault.bump = ctx.bumps.master_vault_v4;
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        vault.encrypted_business_count = u128_to_handle(zero_handle);
+        vault.encrypted_employee_count = u128_to_handle(zero_handle);
+        vault.encrypted_total_balance = u128_to_handle(zero_handle);
+
+        privacy_msg!("✅ v4 pooled master vault initialized");
+        Ok(())
+    }
+
+    /// Set the pooled vault token account + mint for v4.
+    pub fn set_pool_vault_v4(
+        ctx: Context<SetPoolVaultV4>,
+        mint: Pubkey,
+        use_confidential_tokens: bool,
+    ) -> Result<()> {
+        let vault = &mut ctx.accounts.master_vault_v4;
+        require!(
+            vault.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+        require!(vault.is_active, PayrollError::Unauthorized);
+
+        vault.vault_token_account = ctx.accounts.vault_token_account.key();
+        vault.mint = mint;
+        vault.use_confidential_tokens = use_confidential_tokens;
+
+        privacy_msg!("✅ v4 pooled vault token account set");
+        Ok(())
+    }
+
+    /// Register a v4 business using index-based PDA seeds (pooled vault).
+    pub fn register_business_v4(
+        ctx: Context<RegisterBusinessV4>,
+        encrypted_employer_id: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            !encrypted_employer_id.is_empty() && encrypted_employer_id.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+
+        let master = &mut ctx.accounts.master_vault_v4;
+        require!(master.is_active, PayrollError::Unauthorized);
+
+        let business_index = master.next_business_index;
+        master.next_business_index = master
+            .next_business_index
+            .checked_add(1)
+            .ok_or(PayrollError::InvalidAmount)?;
+
+        let business = &mut ctx.accounts.business_v4;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let clock = Clock::get()?;
+
+        business.master_vault = master.key();
+        business.business_index = business_index;
+        business.next_employee_index = 0;
+        business.is_active = true;
+        business.bump = ctx.bumps.business_v4;
+
+        let employer_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employer_id,
+            0, None)?;
+        business.encrypted_employer_id = u128_to_handle(employer_handle);
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        business.encrypted_balance = u128_to_handle(zero_handle);
+        business.encrypted_employee_count = u128_to_handle(zero_handle);
+
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_business_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&master.encrypted_business_count),
+            one_handle, None)?;
+        master.encrypted_business_count = u128_to_handle(updated_business_count);
+
+        emit!(BusinessRegistered {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v4 business registered");
+        Ok(())
+    }
+
+    /// Initialize v4 stream config (keeper + cadence).
+    pub fn init_stream_config_v4(
+        ctx: Context<InitStreamConfigV4>,
+        keeper_pubkey: Pubkey,
+        settle_interval_secs: u64,
+    ) -> Result<()> {
+        require!(
+            settle_interval_secs >= MIN_SETTLE_INTERVAL_SECS,
+            PayrollError::InvalidSettleInterval
+        );
+        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
+
+        let master = &ctx.accounts.master_vault_v4;
+        require!(master.is_active, PayrollError::Unauthorized);
+
+        let config = &mut ctx.accounts.stream_config_v4;
+        config.business = ctx.accounts.business_v4.key();
+        config.keeper_pubkey = keeper_pubkey;
+        config.settle_interval_secs = settle_interval_secs;
+        config.is_paused = false;
+        config.pause_reason = PAUSE_REASON_NONE;
+        config.bump = ctx.bumps.stream_config_v4;
+
+        privacy_msg!("✅ v4 stream config initialized");
+        Ok(())
+    }
+
+    /// Update v4 keeper public key.
+    pub fn update_keeper_v4(
+        ctx: Context<UpdateKeeperV4>,
+        keeper_pubkey: Pubkey,
+    ) -> Result<()> {
+        let master = &ctx.accounts.master_vault_v4;
+        require!(master.is_active, PayrollError::Unauthorized);
+        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
+
+        let config = &mut ctx.accounts.stream_config_v4;
+        config.keeper_pubkey = keeper_pubkey;
+
+        privacy_msg!("✅ v4 keeper updated");
+        Ok(())
+    }
+
+    /// Add a v4 employee (pooled vault ledger).
+    pub fn add_employee_v4(
+        ctx: Context<AddEmployeeV4>,
+        employee_index: u64,
+        encrypted_employee_id: Vec<u8>,
+        encrypted_salary_rate: Vec<u8>,
+        period_start: i64,
+        period_end: i64,
+    ) -> Result<()> {
+        require!(
+            !encrypted_employee_id.is_empty() && encrypted_employee_id.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+        require!(
+            !encrypted_salary_rate.is_empty() && encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+        require!(
+            period_end == 0 || period_end > period_start,
+            PayrollError::InvalidPeriodBounds
+        );
+
+        let master = &mut ctx.accounts.master_vault_v4;
+        require!(master.is_active, PayrollError::Unauthorized);
+
+        let business = &mut ctx.accounts.business_v4;
+        require!(
+            employee_index == business.next_employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+        business.next_employee_index = business
+            .next_employee_index
+            .checked_add(1)
+            .ok_or(PayrollError::InvalidAmount)?;
+
+        let employee = &mut ctx.accounts.employee_v4;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let clock = Clock::get()?;
+
+        employee.business = business.key();
+        employee.employee_index = employee_index;
+        employee.last_accrual_time = clock.unix_timestamp;
+        employee.last_settle_time = clock.unix_timestamp;
+        employee.is_active = true;
+        employee.is_delegated = false;
+        employee.bump = ctx.bumps.employee_v4;
+        employee.period_start = period_start;
+        employee.period_end = period_end;
+
+        let employee_id_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employee_id,
+            0, None)?;
+        employee.encrypted_employee_id = u128_to_handle(employee_id_handle);
+
+        let salary_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_salary_rate,
+            0, None)?;
+        employee.encrypted_salary_rate = u128_to_handle(salary_handle);
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        employee.encrypted_accrued = u128_to_handle(zero_handle);
+
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_employee_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&business.encrypted_employee_count),
+            one_handle, None)?;
+        business.encrypted_employee_count = u128_to_handle(updated_employee_count);
+
+        let one_handle2 = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_total_employee_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&master.encrypted_employee_count),
+            one_handle2, None)?;
+        master.encrypted_employee_count = u128_to_handle(updated_total_employee_count);
+
+        privacy_msg!("✅ v4 employee added");
+        Ok(())
+    }
+
+    /// Initialize rate history PDA for a v4 employee.
+    /// Enables selective disclosure payslips for v4 streams.
+    pub fn init_rate_history_v4(
+        ctx: Context<InitRateHistoryV4>,
+        employee_index: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let baseline_time = if employee.last_settle_time > 0 {
+            employee.last_settle_time
+        } else {
+            employee.last_accrual_time
+        };
+
+        let history = &mut ctx.accounts.rate_history_v4;
+        history.business = business_key;
+        history.employee_index = employee_index;
+        history.count = 1;
+        history.bump = ctx.bumps.rate_history_v4;
+        history._reserved = [0u8; 6];
+        history.entries = std::array::from_fn(|_| RateHistoryEntryV4::default());
+        history.entries[0] = RateHistoryEntryV4 {
+            effective_at: baseline_time,
+            encrypted_salary_rate: employee.encrypted_salary_rate.clone(),
+        };
+
+        privacy_msg!("✅ v4 rate history initialized");
+        Ok(())
+    }
+
+    /// Update v4 salary rate privately (encrypted). Intended for raises.
+    ///
+    /// For safety and simplicity on devnet demos, this requires the stream to be undelegated
+    /// (owned by this program). If delegated, undelegate first and retry.
+    pub fn update_salary_rate_v4(
+        ctx: Context<UpdateSalaryRateV4>,
+        employee_index: u64,
+        encrypted_salary_rate: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES
+                && !encrypted_salary_rate.is_empty(),
+            PayrollError::InvalidCiphertext
+        );
+
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+        require!(
+            ctx.accounts.employee_v4.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let mut employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let clock = Clock::get()?;
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        let mut effective_from = employee.last_accrual_time;
+        if employee.period_start > 0 && effective_from < employee.period_start {
+            effective_from = employee.period_start;
+        }
+        let mut effective_to = clock.unix_timestamp;
+        if employee.period_end > 0 && effective_to > employee.period_end {
+            effective_to = employee.period_end;
+        }
+
+        if effective_to > effective_from {
+            let elapsed = (effective_to - effective_from) as u128;
+            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
+            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
+
+            let delta = inco_binary_op_u128(
+                &signer,
+                &inco_lightning_program,
+                "e_mul",
+                salary_rate,
+                elapsed,
+                1, None)?;	// scalar_byte = 1
+
+            let updated_accrued = inco_add_u128(
+                &signer,
+                &inco_lightning_program,
+                current_accrued,
+                delta, None)?;
+            employee.encrypted_accrued = u128_to_handle(updated_accrued);
+        }
+
+        // Register new encrypted salary rate and store handle.
+        let new_rate_handle =
+            inco_new_euint128(&signer, &inco_lightning_program, encrypted_salary_rate, 0, None)?;
+        employee.encrypted_salary_rate = u128_to_handle(new_rate_handle);
+
+        if effective_to > employee.last_accrual_time {
+            employee.last_accrual_time = effective_to;
+        }
+        save_employee_entry_v4(&ctx.accounts.employee_v4, &employee)?;
+
+        // Append to rate history for selective disclosure payslips.
+        let history = &mut ctx.accounts.rate_history_v4;
+        require!(
+            history.business == business_key,
+            PayrollError::InvalidRateHistory
+        );
+        require!(
+            history.employee_index == employee_index,
+            PayrollError::InvalidRateHistory
+        );
+        let idx = history.count as usize;
+        require!(
+            idx < RATE_HISTORY_MAX_ENTRIES,
+            PayrollError::RateHistoryFull
+        );
+        history.entries[idx] = RateHistoryEntryV4 {
+            effective_at: clock.unix_timestamp,
+            encrypted_salary_rate: employee.encrypted_salary_rate.clone(),
+        };
+        history.count = history
+            .count
+            .checked_add(1)
+            .ok_or(PayrollError::InvalidAmount)?;
+
+        privacy_msg!("✅ v4 salary rate updated (encrypted)");
+        Ok(())
+    }
+
+    /// Initialize a v4 user token registry entry (deterministic lookup).
+    pub fn init_user_token_account_v4(ctx: Context<InitUserTokenAccountV4>) -> Result<()> {
+        let entry = &mut ctx.accounts.user_token_account_v4;
+        let signer = ctx.accounts.owner.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let clock = Clock::get()?;
+
+        entry.owner = ctx.accounts.owner.key();
+        entry.mint = ctx.accounts.mint.key();
+        entry.inco_token_account = Pubkey::default();
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        entry.encrypted_balance = u128_to_handle(zero_handle);
+        entry.initialized_at = clock.unix_timestamp;
+        entry.bump = ctx.bumps.user_token_account_v4;
+
+        privacy_msg!("✅ v4 user token registry initialized");
+        Ok(())
+    }
+
+    /// Link a v4 user token registry entry to an Inco token account.
+    pub fn link_user_token_account_v4(
+        ctx: Context<LinkUserTokenAccountV4>,
+        encrypted_balance: Vec<u8>,
+    ) -> Result<()> {
+        require_keys_eq!(
+            *ctx.accounts.inco_token_account.owner,
+            INCO_TOKEN_PROGRAM_ID,
+            PayrollError::InvalidIncoTokenAccount
+        );
+
+        let entry = &mut ctx.accounts.user_token_account_v4;
+        entry.inco_token_account = ctx.accounts.inco_token_account.key();
+
+        if !encrypted_balance.is_empty() {
+            require!(
+                encrypted_balance.len() <= MAX_CIPHERTEXT_BYTES,
+                PayrollError::InvalidCiphertext
+            );
+            let signer = ctx.accounts.owner.to_account_info();
+            let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+            let handle = inco_new_euint128(
+                &signer,
+                &inco_lightning_program,
+                encrypted_balance,
+                0, None)?;
+            entry.encrypted_balance = u128_to_handle(handle);
+        }
+
+        privacy_msg!("✅ v4 user token registry linked");
+        Ok(())
+    }
+
+    /// Deposit encrypted tokens into the pooled vault and credit business balance.
+    pub fn deposit_v4(
+        ctx: Context<DepositV4>,
+        encrypted_amount: Vec<u8>,
+    ) -> Result<()> {
+        require!(
+            !encrypted_amount.is_empty() && encrypted_amount.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+
+        let master = &mut ctx.accounts.master_vault_v4;
+        require!(master.is_active, PayrollError::Unauthorized);
+        require!(
+            master.vault_token_account == ctx.accounts.vault_token_account.key(),
+            PayrollError::InvalidIncoTokenAccount
+        );
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.depositor_token_account.key(),
+            ctx.accounts.vault_token_account.key(),
+            ctx.accounts.authority.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            encrypted_amount.clone(),
+            0,
+        );
+        invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.depositor_token_account.to_account_info(),
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.authority.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let business = &mut ctx.accounts.business_v4;
+
+        let deposit_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_amount,
+            0, None)?;
+        let updated_balance = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&business.encrypted_balance),
+            deposit_handle, None)?;
+        business.encrypted_balance = u128_to_handle(updated_balance);
+
+        let current_total = if is_handle_zero(&master.encrypted_total_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&master.encrypted_total_balance)
+        };
+        let updated_total = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_total,
+            deposit_handle, None)?;
+        master.encrypted_total_balance = u128_to_handle(updated_total);
+
+        privacy_msg!("✅ v4 pooled deposit complete");
+        Ok(())
+    }
+
+    /// Accrue v4 salary using homomorphic operations.
+    pub fn accrue_v4(ctx: Context<AccrueV4>, employee_index: u64) -> Result<()> {
+        authorize_keeper_only(
+            ctx.accounts.caller.key(),
+            ctx.accounts.stream_config_v4.keeper_pubkey,
+        )?;
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _employee_bump) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+        let mut employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let clock = Clock::get()?;
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        let mut effective_from = employee.last_accrual_time;
+        if employee.period_start > 0 && effective_from < employee.period_start {
+            effective_from = employee.period_start;
+        }
+        let mut effective_to = clock.unix_timestamp;
+        if employee.period_end > 0 && effective_to > employee.period_end {
+            effective_to = employee.period_end;
+        }
+
+        if effective_to > effective_from {
+            let elapsed = (effective_to - effective_from) as u128;
+            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
+            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
+
+            // Use scalar_byte=1 optimization for plaintext elapsed time.
+            let delta = inco_binary_op_u128(
+                &signer,
+                &inco_lightning_program,
+                "e_mul",
+                salary_rate,
+                elapsed,
+                1, None)?;	// scalar_byte = 1
+
+            let updated_accrued = inco_add_u128(
+                &signer,
+                &inco_lightning_program,
+                current_accrued,
+                delta, None)?;
+            employee.encrypted_accrued = u128_to_handle(updated_accrued);
+        }
+
+        if effective_to > employee.last_accrual_time {
+            employee.last_accrual_time = effective_to;
+        }
+        save_employee_entry_v4(&ctx.accounts.employee_v4, &employee)?;
+
+        privacy_msg!("✅ v4 accrued");
+        Ok(())
+    }
+
+    /// Delegate v4 employee stream to MagicBlock TEE.
+    pub fn delegate_stream_v4(ctx: Context<DelegateStreamV4>, employee_index: u64) -> Result<()> {
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+        require!(
+            ctx.accounts.employee_v4.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, employee_bump) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+        let seeds: &[&[u8]] = &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes];
+        let employee_signer_seeds: &[&[u8]] = &[
+            EMPLOYEE_V4_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &[employee_bump],
+        ];
+        let (expected_permission, _permission_bump) =
+            derive_permission_pda(&ctx.accounts.employee_v4.key());
+        require_keys_eq!(
+            ctx.accounts.permission.key(),
+            expected_permission,
+            PayrollError::InvalidPermissionAccount
+        );
+
+        let permission_info = ctx.accounts.permission.to_account_info();
+        if permission_info.data_len() > 0 {
+            require_keys_eq!(
+                *permission_info.owner,
+                magicblock_permission_program(),
+                PayrollError::InvalidPermissionAccount
+            );
+        }
+        if permission_info.data_len() == 0 {
+            let members = Some(vec![
+                Member {
+                    flags: AUTHORITY_FLAG,
+                    pubkey: ctx.accounts.master_vault_v4.authority,
+                },
+                Member {
+                    flags: TX_BALANCES_FLAG | TX_LOGS_FLAG,
+                    pubkey: ctx.accounts.employee_wallet.key(),
+                },
+            ]);
+
+            CreatePermissionCpiBuilder::new(&ctx.accounts.permission_program.to_account_info())
+                .permissioned_account(&ctx.accounts.employee_v4.to_account_info())
+                .permission(&permission_info)
+                .payer(&ctx.accounts.caller.to_account_info())
+                .system_program(&ctx.accounts.system_program.to_account_info())
+                .args(MembersArgs { members })
+                .invoke_signed(&[employee_signer_seeds])?;
+        }
+
+        let validator_key = Some(ctx.accounts.validator.key());
+
+        // IMPORTANT: do not mutate delegated account in this instruction.
+        ctx.accounts.delegate_employee_v4(
+            &ctx.accounts.caller,
+            seeds,
+            DelegateConfig {
+                validator: validator_key,
+                ..Default::default()
+            },
+        )?;
+
+
+        // Delegate the permission account via the Permission Program so it can sign for its PDA.
+        DelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program.to_account_info())
+            .payer(&ctx.accounts.caller.to_account_info())
+            .authority(&ctx.accounts.authority.to_account_info(), false)
+            .permissioned_account(&ctx.accounts.employee_v4.to_account_info(), true)
+            .permission(&permission_info)
+            .system_program(&ctx.accounts.system_program.to_account_info())
+            .owner_program(&ctx.accounts.permission_program.to_account_info())
+            .delegation_buffer(&ctx.accounts.permission_buffer)
+            .delegation_record(&ctx.accounts.permission_delegation_record)
+            .delegation_metadata(&ctx.accounts.permission_delegation_metadata)
+            .delegation_program(&ctx.accounts.delegation_program)
+            .validator(Some(&ctx.accounts.validator))
+            .invoke_signed(&[employee_signer_seeds])?;
+
+        privacy_msg!("✅ v4 stream delegated to TEE");
+        Ok(())
+    }
+
+    /// Commit and undelegate v4 stream back to base layer.
+    pub fn commit_and_undelegate_stream_v4(
+        ctx: Context<CommitAndUndelegateStreamV4>,
+        employee_index: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, employee_bump) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+        let (expected_permission, _) = derive_permission_pda(&ctx.accounts.employee_v4.key());
+        require_keys_eq!(
+            ctx.accounts.permission.key(),
+            expected_permission,
+            PayrollError::InvalidPermissionAccount
+        );
+        let permission_info = ctx.accounts.permission.to_account_info();
+        require!(
+            permission_info.data_len() > 0,
+            PayrollError::InvalidPermissionAccount
+        );
+        require_keys_eq!(
+            *permission_info.owner,
+            magicblock_permission_program(),
+            PayrollError::InvalidPermissionAccount
+        );
+
+        // On ER, delegated accounts can appear owned by the original program.
+        // Do not gate commit/undelegate scheduling on AccountInfo.owner.
+        commit_and_undelegate_accounts(
+            &ctx.accounts.caller,
+            vec![&ctx.accounts.employee_v4],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program,
+        )?;
+
+        let employee_signer_seeds: &[&[u8]] = &[
+            EMPLOYEE_V4_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &[employee_bump],
+        ];
+        CommitAndUndelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program.to_account_info())
+            .authority(&ctx.accounts.authority.to_account_info(), false)
+            .permissioned_account(&ctx.accounts.employee_v4.to_account_info(), true)
+            .permission(&permission_info)
+            .magic_program(&ctx.accounts.magic_program)
+            .magic_context(&ctx.accounts.magic_context)
+            .invoke_signed(&[employee_signer_seeds])?;
+
+        privacy_msg!("✅ v4 commit+undelegate scheduled");
+        Ok(())
+    }
+
+    /// On the Ephemeral Rollup, schedules the crank_settle_v4 instruction to run autonomously.
+    pub fn schedule_crank_v4(
+        ctx: Context<ScheduleCrankV4>,
+        args: ScheduleCrankArgs,
+    ) -> Result<()> {
+        // Construct the target instruction — only the employee account
+        // (the MagicBlock validator will supply itself as the payer/caller)
+        let crank_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: crate::ID,
+            accounts: vec![
+                // The MagicBlock validator signs as caller
+                AccountMeta::new(ctx.accounts.employee_stream.key(), false),
+            ],
+            data: anchor_lang::InstructionData::data(&crate::instruction::CrankSettleV4 { 
+                employee_index: args.employee_index 
+            }),
+        };
+
+        // Serialize magicblock schedule task args
+        let ix_data = bincode::serialize(&magicblock_magic_program_api::instruction::MagicBlockInstruction::ScheduleTask(
+            magicblock_magic_program_api::args::ScheduleTaskArgs {
+                task_id: args.task_id as i64, 
+                execution_interval_millis: args.execution_interval_millis as i64,
+                iterations: args.iterations as i64,
+                instructions: vec![crank_ix],
+            },
+        )).map_err(|err| {
+            msg!("ERROR: failed to serialize crank args {:?}", err);
+            PayrollError::InvalidWithdrawRequest
+        })?;
+
+        let schedule_ix = anchor_lang::solana_program::instruction::Instruction::new_with_bytes(
+            crate::constants::MAGIC_PROGRAM_ID,
+            &ix_data,
+            vec![
+                AccountMeta::new(ctx.accounts.payer.key(), true),
+                AccountMeta::new(ctx.accounts.task_context.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
+                AccountMeta::new_readonly(ctx.accounts.program.key(), false),
+                AccountMeta::new(ctx.accounts.employee_stream.key(), false),
+            ],
+        );
+
+        // Invoke CPI without PDA seeds (as per official magicblock docs)
+        invoke_signed(
+            &schedule_ix,
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.task_context.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.program.to_account_info(),
+                ctx.accounts.employee_stream.to_account_info(),
+                ctx.accounts.magic_program.to_account_info(),
+            ],
+            &[],
+        )?;
+
+        Ok(())
+    }
+
+    /// Re-delegate v4 stream after settlement.
+    pub fn redelegate_stream_v4(ctx: Context<RedelegateStreamV4>, employee_index: u64) -> Result<()> {
+ 
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+        require!(
+            ctx.accounts.employee_v4.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, employee_bump) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+        let seeds: &[&[u8]] = &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes];
+        let employee_signer_seeds: &[&[u8]] = &[
+            EMPLOYEE_V4_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &[employee_bump],
+        ];
+        let (expected_permission, _) = derive_permission_pda(&ctx.accounts.employee_v4.key());
+        require_keys_eq!(
+            ctx.accounts.permission.key(),
+            expected_permission,
+            PayrollError::InvalidPermissionAccount
+        );
+        let permission_info = ctx.accounts.permission.to_account_info();
+        require!(
+            permission_info.data_len() > 0,
+            PayrollError::InvalidPermissionAccount
+        );
+        require_keys_eq!(
+            *permission_info.owner,
+            magicblock_permission_program(),
+            PayrollError::InvalidPermissionAccount
+        );
+        let validator_key = Some(ctx.accounts.validator.key());
+
+        ctx.accounts.delegate_employee_v4(
+            &ctx.accounts.caller,
+            seeds,
+            DelegateConfig {
+                validator: validator_key,
+                ..Default::default()
+            },
+        )?;
+
+        DelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program.to_account_info())
+            .payer(&ctx.accounts.caller.to_account_info())
+            .authority(&ctx.accounts.authority.to_account_info(), false)
+            .permissioned_account(&ctx.accounts.employee_v4.to_account_info(), true)
+            .permission(&permission_info)
+            .system_program(&ctx.accounts.system_program.to_account_info())
+            .owner_program(&ctx.accounts.permission_program.to_account_info())
+            .delegation_buffer(&ctx.accounts.permission_buffer)
+            .delegation_record(&ctx.accounts.permission_delegation_record)
+            .delegation_metadata(&ctx.accounts.permission_delegation_metadata)
+            .delegation_program(&ctx.accounts.delegation_program)
+            .validator(Some(&ctx.accounts.validator))
+            .invoke_signed(&[employee_signer_seeds])?;
+
+        privacy_msg!("✅ v4 stream re-delegated");
+        Ok(())
+    }
+
+    /// Employee requests a v4 withdrawal (pooled vault).
+    pub fn request_withdraw_v4(
+        ctx: Context<RequestWithdrawV4>,
+        employee_index: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let auth_handle_u128 = handle_to_u128(&employee.encrypted_employee_id);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let allowed = ctx.accounts.requester.key();
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, allowed.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.withdraw_request_v4;
+        req.business = business_key;
+        req.employee_index = employee_index;
+        req.requester_auth_handle = employee.encrypted_employee_id.handle;
+        req.requested_at = clock.unix_timestamp;
+        req.is_pending = true;
+        req.bump = ctx.bumps.withdraw_request_v4;
+
+        privacy_msg!("✅ v4 withdraw requested");
+        Ok(())
+    }
+
+    /// TEE Crank processes an autonomous v4 settlement.
+    /// Simplified for MagicBlock ER: uses plaintext math only (no Inco CPIs).
+    /// The ER doesn't have the Inco Lightning program, so we operate on
+    /// the raw handle bytes as plaintext u128 values inside the TEE.
+    /// When the account is committed back to the base layer, the FHE
+    /// state is preserved because we're operating on the same byte offsets.
+    pub fn crank_settle_v4(
+        ctx: Context<CrankSettleV4>,
+        employee_index: u64,
+    ) -> Result<()> {
+        let mut employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let clock = Clock::get()?;
+
+        // Calculate time-based accrual using plaintext math
+        let elapsed = clock
+            .unix_timestamp
+            .checked_sub(employee.last_accrual_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+
+        if elapsed > 0 {
+            // Read salary rate and accrued as raw u128 from the handle bytes
+            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
+            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
+
+            // delta = salary_rate * elapsed (plaintext math inside TEE)
+            let delta = salary_rate.wrapping_mul(elapsed as u128);
+
+            // updated_accrued = current_accrued + delta
+            let updated_accrued = current_accrued.wrapping_add(delta);
+            employee.encrypted_accrued = u128_to_handle(updated_accrued);
+        }
+
+        // Update timestamps 
+        employee.last_accrual_time = clock.unix_timestamp;
+        employee.last_settle_time = clock.unix_timestamp;
+
+        save_employee_entry_v4(&ctx.accounts.employee_v4, &employee)?;
+
+        privacy_msg!("🤖⚙️ v4 MagicBlock Crank: Accrual updated (plaintext in TEE)");
+        Ok(())
+    }
+
+    /// Keeper processes a pending v4 withdrawal request (pooled vault).
+    pub fn process_withdraw_request_v4(
+        ctx: Context<ProcessWithdrawRequestV4>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+
+        require!(
+            !ctx.accounts.stream_config_v4.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        require!(
+            ctx.accounts.withdraw_request_v4.is_pending,
+            PayrollError::WithdrawNotPending
+        );
+        require!(
+            ctx.accounts.withdraw_request_v4.business == ctx.accounts.business_v4.key(),
+            PayrollError::InvalidWithdrawRequest
+        );
+        require!(
+            ctx.accounts.withdraw_request_v4.employee_index == employee_index,
+            PayrollError::InvalidWithdrawRequest
+        );
+
+        // Stream must be on base layer before we mutate/settle.
+        require!(
+            ctx.accounts.employee_v4.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V4_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v4.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let mut employee = load_employee_entry_v4(&ctx.accounts.employee_v4)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        // Ensure withdraw request auth matches employee handle.
+        require!(
+            ctx.accounts.withdraw_request_v4.requester_auth_handle == employee.encrypted_employee_id.handle,
+            PayrollError::InvalidWithdrawRequester
+        );
+
+        let clock = Clock::get()?;
+        let accrual_age = clock
+            .unix_timestamp
+            .checked_sub(employee.last_accrual_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+        let settle_interval = ctx.accounts.stream_config_v4.settle_interval_secs as i64;
+        let freshness_guard = std::cmp::max(120_i64, settle_interval.saturating_mul(2));
+        require!(accrual_age <= freshness_guard, PayrollError::AccrualNotFresh);
+
+        let elapsed_since_settle = clock
+            .unix_timestamp
+            .checked_sub(employee.last_settle_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+        require!(
+            elapsed_since_settle as u64 >= ctx.accounts.stream_config_v4.settle_interval_secs,
+            PayrollError::SettleTooSoon
+        );
+
+        require!(
+            ctx.accounts.master_vault_v4.vault_token_account
+                == ctx.accounts.vault_token_account.key(),
+            PayrollError::InvalidIncoTokenAccount
+        );
+
+        let payout_handle = employee.encrypted_accrued.handle.to_vec();
+        let accrued_handle_at_settle = handle_to_u128(&employee.encrypted_accrued);
+        let expires_at = clock.unix_timestamp + ShieldedPayoutV4::DEFAULT_EXPIRY_SECS;
+
+        let payout = &mut ctx.accounts.shielded_payout_v4;
+        payout.business = business_key;
+        payout.employee_index = employee_index;
+        payout.nonce = nonce;
+        payout.employee_auth_handle = employee.encrypted_employee_id.handle;
+        payout.encrypted_amount = employee.encrypted_accrued.clone();
+        payout.claimed = false;
+        payout.cancelled = false;
+        payout.created_at = clock.unix_timestamp;
+        payout.expires_at = expires_at;
+        payout.payout_token_account = ctx.accounts.payout_token_account.key();
+        payout.bump = ctx.bumps.shielded_payout_v4;
+
+        let master_bump = ctx.accounts.master_vault_v4.bump;
+        let seeds: &[&[&[u8]]] = &[&[MASTER_VAULT_V4_SEED, &[master_bump]]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.vault_token_account.key(),
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.master_vault_v4.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            payout_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.master_vault_v4.to_account_info(),
+                ctx.accounts.inco_token_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            seeds,
+        )?;
+
+        let signer = ctx.accounts.payer.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let current_balance = if is_handle_zero(&ctx.accounts.business_v4.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&ctx.accounts.business_v4.encrypted_balance)
+        };
+        let updated_balance = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            current_balance,
+            accrued_handle_at_settle, None)?;
+        ctx.accounts.business_v4.encrypted_balance = u128_to_handle(updated_balance);
+
+        let total_current = if is_handle_zero(&ctx.accounts.master_vault_v4.encrypted_total_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&ctx.accounts.master_vault_v4.encrypted_total_balance)
+        };
+        let total_updated = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            total_current,
+            accrued_handle_at_settle, None)?;
+        ctx.accounts.master_vault_v4.encrypted_total_balance = u128_to_handle(total_updated);
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        employee.encrypted_accrued = u128_to_handle(zero_handle);
+        employee.last_settle_time = clock.unix_timestamp;
+        employee.last_accrual_time = clock.unix_timestamp;
+        employee.is_delegated = false;
+        save_employee_entry_v4(&ctx.accounts.employee_v4, &employee)?;
+
+        ctx.accounts.withdraw_request_v4.is_pending = false;
+
+        privacy_emit!(PayoutBuffered {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v4 payout buffered (pooled vault)");
+        Ok(())
+    }
+
+    /// Worker claims a v4 shielded payout (Hop 2).
+    pub fn claim_payout_v4(
+        ctx: Context<ClaimPayoutV4>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        let payout = &ctx.accounts.shielded_payout_v4;
+        require!(!payout.claimed, PayrollError::PayoutAlreadyClaimed);
+        require!(!payout.cancelled, PayrollError::PayoutAlreadyCancelled);
+
+        let clock = Clock::get()?;
+        if payout.expires_at > 0 {
+            require!(
+                clock.unix_timestamp <= payout.expires_at,
+                PayrollError::PayoutExpired
+            );
+        }
+
+        let claimer = ctx.accounts.claimer.key();
+        let auth_handle = EncryptedHandle {
+            handle: payout.employee_auth_handle,
+        };
+        let auth_handle_u128 = handle_to_u128(&auth_handle);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, claimer.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+        require_keys_eq!(
+            *ctx.accounts.allowance_account.owner,
+            INCO_LIGHTNING_ID,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let pda_bump = payout.bump;
+        let amount_handle = payout.encrypted_amount.handle.to_vec();
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let nonce_bytes = nonce.to_le_bytes();
+        let seeds: &[&[&[u8]]] = &[&[
+            SHIELDED_PAYOUT_V4_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &nonce_bytes,
+            &[pda_bump],
+        ]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.destination_token_account.key(),
+            ctx.accounts.shielded_payout_v4.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            amount_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.destination_token_account.to_account_info(),
+                ctx.accounts.shielded_payout_v4.to_account_info(),
+                ctx.accounts.inco_token_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            seeds,
+        )?;
+
+        let payout_mut = &mut ctx.accounts.shielded_payout_v4;
+        payout_mut.claimed = true;
+
+        privacy_emit!(PayoutClaimed {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v4 payout claimed");
+        Ok(())
+    }
+
+    /// Business authority cancels an expired v4 payout and returns funds to pooled vault.
+    pub fn cancel_expired_payout_v4(
+        ctx: Context<CancelExpiredPayoutV4>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        let master = &ctx.accounts.master_vault_v4;
+        require!(
+            master.authority == ctx.accounts.caller.key(),
+            PayrollError::Unauthorized
+        );
+
+        let payout = &ctx.accounts.shielded_payout_v4;
+        require!(!payout.claimed, PayrollError::PayoutAlreadyClaimed);
+        require!(!payout.cancelled, PayrollError::PayoutAlreadyCancelled);
+
+        let clock = Clock::get()?;
+        require!(
+            payout.expires_at > 0 && clock.unix_timestamp > payout.expires_at,
+            PayrollError::PayoutNotExpired
+        );
+
+        require!(
+            ctx.accounts.master_vault_v4.vault_token_account
+                == ctx.accounts.vault_token_account.key(),
+            PayrollError::InvalidIncoTokenAccount
+        );
+
+        let payout_bump = payout.bump;
+        let payout_key = payout.key();
+        let amount_handle = payout.encrypted_amount.handle.to_vec();
+        let business_key = ctx.accounts.business_v4.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let nonce_bytes = nonce.to_le_bytes();
+        let payout_seeds: &[&[&[u8]]] = &[&[
+            SHIELDED_PAYOUT_V4_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &nonce_bytes,
+            &[payout_bump],
+        ]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.vault_token_account.key(),
+            payout_key,
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            amount_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.shielded_payout_v4.to_account_info(),
+                ctx.accounts.inco_token_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            payout_seeds,
+        )?;
+
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let current_balance = if is_handle_zero(&ctx.accounts.business_v4.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&ctx.accounts.business_v4.encrypted_balance)
+        };
+        let payout_handle = handle_to_u128(&ctx.accounts.shielded_payout_v4.encrypted_amount);
+        let updated_balance = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_balance,
+            payout_handle, None)?;
+        ctx.accounts.business_v4.encrypted_balance = u128_to_handle(updated_balance);
+
+        let payout_mut = &mut ctx.accounts.shielded_payout_v4;
+        payout_mut.cancelled = true;
+
+        privacy_msg!("✅ v4 payout cancelled and returned to pool");
+        Ok(())
+    }
+
+    /// Initialize a v3 business vault PDA for token custody.
+    pub fn init_vault_v3(
+        ctx: Context<InitVaultV3>,
+        payusd_mint: Pubkey,
+        vault_token_account: Pubkey,
+    ) -> Result<()> {
+        let master = &ctx.accounts.master_vault_v3;
+        require!(
+            master.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+
+        let vault = &mut ctx.accounts.vault;
+        let business = &mut ctx.accounts.business_v3;
+        let clock = Clock::get()?;
+
+        vault.business = business.key();
+        vault.mint = payusd_mint;
+        vault.token_account = vault_token_account;
+        vault.encrypted_balance = business.encrypted_balance.clone();
+        vault.bump = ctx.bumps.vault;
+
+        business.vault = vault.key();
+
+        emit!(VaultInitialized {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v3 vault initialized");
+        Ok(())
+    }
+
+    /// Add a v3 employee entry (index-based).
+    pub fn add_employee_v3(
+        ctx: Context<AddEmployeeV3>,
+        encrypted_employee_id: Vec<u8>,
+        encrypted_salary_rate: Vec<u8>,
+        period_start: i64,
+        period_end: i64,
+    ) -> Result<()> {
+        require!(
+            !encrypted_employee_id.is_empty() && encrypted_employee_id.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+        require!(
+            !encrypted_salary_rate.is_empty() && encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+        require!(
+            period_end == 0 || period_end > period_start,
+            PayrollError::InvalidPeriodBounds
+        );
+
+        let master = &mut ctx.accounts.master_vault_v3;
+        require!(
+            master.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+        require!(master.is_active, PayrollError::Unauthorized);
+
+        let business = &mut ctx.accounts.business_v3;
+        require!(business.is_active, PayrollError::InactiveBusiness);
+        require!(
+            business.master_vault == master.key(),
+            PayrollError::Unauthorized
+        );
+
+        let employee_index = business.next_employee_index;
+        business.next_employee_index = business
+            .next_employee_index
+            .checked_add(1)
+            .ok_or(PayrollError::InvalidAmount)?;
+
+        let employee = &mut ctx.accounts.employee_v3;
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let clock = Clock::get()?;
+
+        employee.business = business.key();
+        employee.employee_index = employee_index;
+        employee.is_active = true;
+        employee.is_delegated = false;
+        employee.bump = ctx.bumps.employee_v3;
+        employee.last_accrual_time = clock.unix_timestamp;
+        employee.last_settle_time = clock.unix_timestamp;
+        employee.period_start = period_start;
+        employee.period_end = period_end;
+
+        let employee_id_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employee_id,
+            0, None)?;
+        employee.encrypted_employee_id = u128_to_handle(employee_id_handle);
+
+        let salary_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_salary_rate,
+            0, None)?;
+        employee.encrypted_salary_rate = u128_to_handle(salary_handle);
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        employee.encrypted_accrued = u128_to_handle(zero_handle);
+
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_business_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&business.encrypted_employee_count),
+            one_handle, None)?;
+        business.encrypted_employee_count = u128_to_handle(updated_business_count);
+
+        let updated_master_count = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            handle_to_u128(&master.encrypted_employee_count),
+            one_handle, None)?;
+        master.encrypted_employee_count = u128_to_handle(updated_master_count);
+
+        privacy_msg!("✅ v3 employee added");
+        Ok(())
+    }
+
+    /// Deposit encrypted tokens to a v3 business vault and update encrypted balance.
+    pub fn deposit_v3(ctx: Context<DepositV3>, encrypted_amount: Vec<u8>) -> Result<()> {
+        require!(
+            !encrypted_amount.is_empty() && encrypted_amount.len() <= MAX_CIPHERTEXT_BYTES,
+            PayrollError::InvalidCiphertext
+        );
+
+        let master = &ctx.accounts.master_vault_v3;
+        require!(
+            master.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+
+        let business = &mut ctx.accounts.business_v3;
+        let vault = &mut ctx.accounts.vault;
+
+        // Transfer encrypted tokens from depositor to vault.
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.depositor_token_account.key(),
+            ctx.accounts.vault_token_account.key(),
+            ctx.accounts.authority.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            encrypted_amount.clone(),
+            0,
+        );
+        invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.depositor_token_account.to_account_info(),
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.authority.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+
+        let signer = ctx.accounts.authority.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let deposit_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_amount,
+            0, None)?;
+        let updated_balance = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_balance,
+            deposit_handle, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+        business.encrypted_balance = vault.encrypted_balance.clone();
+
+        privacy_msg!("✅ v3 deposit complete");
+        Ok(())
+    }
+
+    /// Initialize v3 stream config for a business entry.
+    pub fn init_stream_config_v3(
+        ctx: Context<InitStreamConfigV3>,
+        keeper_pubkey: Pubkey,
+        settle_interval_secs: u64,
+    ) -> Result<()> {
+        let master = &ctx.accounts.master_vault_v3;
+        require!(
+            master.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+        require!(
+            settle_interval_secs >= MIN_SETTLE_INTERVAL_SECS,
+            PayrollError::InvalidSettleInterval
+        );
+
+        let cfg = &mut ctx.accounts.stream_config_v3;
+        cfg.business = ctx.accounts.business_v3.key();
+        cfg.keeper_pubkey = keeper_pubkey;
+        cfg.settle_interval_secs = settle_interval_secs;
+        cfg.is_paused = false;
+        cfg.pause_reason = PAUSE_REASON_NONE;
+        cfg.bump = ctx.bumps.stream_config_v3;
+
+        privacy_msg!("✅ v3 stream config initialized");
+        Ok(())
+    }
+
+    /// Update v3 keeper pubkey.
+    pub fn update_keeper_v3(
+        ctx: Context<UpdateKeeperV3>,
+        keeper_pubkey: Pubkey,
+    ) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.authority.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
+
+        ctx.accounts.stream_config_v3.keeper_pubkey = keeper_pubkey;
+        privacy_msg!("✅ v3 keeper updated");
+        Ok(())
+    }
+
+    /// Accrue v3 salary using homomorphic operations.
+    pub fn accrue_v3(ctx: Context<AccrueV3>, employee_index: u64) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.caller.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v3.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let mut employee = load_employee_entry_v3(&ctx.accounts.employee_v3)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let clock = Clock::get()?;
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+
+        let elapsed = clock
+            .unix_timestamp
+            .checked_sub(employee.last_accrual_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+        if elapsed > 0 {
+            let elapsed_handle =
+                inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128, None)?;
+            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
+            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
+            let delta = inco_mul_u128(
+                &signer,
+                &inco_lightning_program,
+                salary_rate,
+                elapsed_handle, None)?;
+            let updated_accrued = inco_add_u128(
+                &signer,
+                &inco_lightning_program,
+                current_accrued,
+                delta, None)?;
+            employee.encrypted_accrued = u128_to_handle(updated_accrued);
+        }
+
+        employee.last_accrual_time = clock.unix_timestamp;
+        save_employee_entry_v3(&ctx.accounts.employee_v3, &employee)?;
+
+        privacy_msg!("✅ v3 accrued");
+        Ok(())
+    }
+
+    /// Delegate v3 employee stream to MagicBlock TEE.
+    pub fn delegate_stream_v3(ctx: Context<DelegateStreamV3>, employee_index: u64) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.caller.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+        require!(
+            ctx.accounts.employee_v3.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let employee = load_employee_entry_v3(&ctx.accounts.employee_v3)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let seeds: &[&[u8]] = &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes];
+
+        let validator_key = ctx
+            .accounts
+            .validator
+            .as_ref()
+            .map(|v| v.key())
+            .or_else(|| Pubkey::try_from(TEE_VALIDATOR).ok());
+
+        // IMPORTANT: do not mutate delegated account in this instruction.
+        ctx.accounts.delegate_employee_v3(
+            &ctx.accounts.caller,
+            seeds,
+            DelegateConfig {
+                validator: validator_key,
+                ..Default::default()
+            },
+        )?;
+        privacy_msg!("✅ v3 stream delegated to TEE");
+        Ok(())
+    }
+
+    /// Commit and undelegate v3 stream back to base layer.
+    pub fn commit_and_undelegate_stream_v3(
+        ctx: Context<CommitAndUndelegateStreamV3>,
+        employee_index: u64,
+    ) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.caller.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v3.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        // On ER, delegated accounts can appear owned by the original program.
+        // Do not gate commit/undelegate scheduling on AccountInfo.owner.
+        commit_and_undelegate_accounts(
+            &ctx.accounts.caller,
+            vec![&ctx.accounts.employee_v3],
+            &ctx.accounts.magic_context,
+            &ctx.accounts.magic_program,
+        )?;
+
+        privacy_msg!("✅ v3 commit+undelegate scheduled");
+        Ok(())
+    }
+
+    /// Re-delegate v3 stream after settlement.
+    pub fn redelegate_stream_v3(ctx: Context<RedelegateStreamV3>, employee_index: u64) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.caller.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+        require!(
+            ctx.accounts.employee_v3.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let employee = load_employee_entry_v3(&ctx.accounts.employee_v3)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let seeds: &[&[u8]] = &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes];
+
+        let validator_key = ctx
+            .accounts
+            .validator
+            .as_ref()
+            .map(|v| v.key())
+            .or_else(|| Pubkey::try_from(TEE_VALIDATOR).ok());
+
+        ctx.accounts.delegate_employee_v3(
+            &ctx.accounts.caller,
+            seeds,
+            DelegateConfig {
+                validator: validator_key,
+                ..Default::default()
+            },
+        )?;
+        privacy_msg!("✅ v3 stream re-delegated");
+        Ok(())
+    }
+
+    /// Employee requests a v3 withdrawal (privacy-first).
+    pub fn request_withdraw_v3(
+        ctx: Context<RequestWithdrawV3>,
+        employee_index: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v3.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let employee = load_employee_entry_v3(&ctx.accounts.employee_v3)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let auth_handle_u128 = handle_to_u128(&employee.encrypted_employee_id);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let allowed = ctx.accounts.employee_signer.key();
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, allowed.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.withdraw_request_v3;
+        req.business = business_key;
+        req.employee_index = employee_index;
+        req.requester_auth_handle = employee.encrypted_employee_id.handle;
+        req.requested_at = clock.unix_timestamp;
+        req.is_pending = true;
+        req.bump = ctx.bumps.withdraw_request_v3;
+
+        privacy_msg!("✅ v3 withdraw requested");
+        Ok(())
+    }
+
+    /// Keeper processes a pending v3 withdrawal request (2-hop shielded).
+    pub fn process_withdraw_request_v3(
+        ctx: Context<ProcessWithdrawRequestV3>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        authorize_keeper_or_master(
+            ctx.accounts.caller.key(),
+            ctx.accounts.master_vault_v3.authority,
+            ctx.accounts.stream_config_v3.keeper_pubkey,
+        )?;
+        require!(
+            !ctx.accounts.stream_config_v3.is_paused,
+            PayrollError::StreamPaused
+        );
+
+        require!(
+            ctx.accounts.withdraw_request_v3.is_pending,
+            PayrollError::WithdrawNotPending
+        );
+        require!(
+            ctx.accounts.withdraw_request_v3.business == ctx.accounts.business_v3.key(),
+            PayrollError::InvalidWithdrawRequest
+        );
+        require!(
+            ctx.accounts.withdraw_request_v3.employee_index == employee_index,
+            PayrollError::InvalidWithdrawRequest
+        );
+
+        // Stream must be back on base layer before we mutate/settle.
+        require!(
+            ctx.accounts.employee_v3.owner == &crate::ID,
+            PayrollError::StreamDelegated
+        );
+
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let (expected_employee, _) = Pubkey::find_program_address(
+            &[EMPLOYEE_V3_SEED, business_key.as_ref(), &employee_index_bytes],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.employee_v3.key() == expected_employee,
+            PayrollError::InvalidStreamIndex
+        );
+
+        let mut employee = load_employee_entry_v3(&ctx.accounts.employee_v3)?;
+        require!(employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            employee.employee_index == employee_index,
+            PayrollError::InvalidStreamIndex
+        );
+
+        // Ensure withdraw request auth matches employee handle.
+        require!(
+            ctx.accounts.withdraw_request_v3.requester_auth_handle == employee.encrypted_employee_id.handle,
+            PayrollError::InvalidWithdrawRequester
+        );
+
+        let clock = Clock::get()?;
+        let accrual_age = clock
+            .unix_timestamp
+            .checked_sub(employee.last_accrual_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+        require!(accrual_age <= 120, PayrollError::AccrualNotFresh);
+
+        let elapsed_since_settle = clock
+            .unix_timestamp
+            .checked_sub(employee.last_settle_time)
+            .ok_or(PayrollError::InvalidTimestamp)?;
+        require!(
+            elapsed_since_settle as u64 >= ctx.accounts.stream_config_v3.settle_interval_secs,
+            PayrollError::SettleTooSoon
+        );
+
+        let payout_handle = employee.encrypted_accrued.handle.to_vec();
+        let accrued_handle_at_settle = handle_to_u128(&employee.encrypted_accrued);
+        let expires_at = clock.unix_timestamp + ShieldedPayoutV3::DEFAULT_EXPIRY_SECS;
+
+        let payout = &mut ctx.accounts.shielded_payout_v3;
+        payout.business = business_key;
+        payout.employee_index = employee_index;
+        payout.nonce = nonce;
+        payout.employee_auth_handle = employee.encrypted_employee_id.handle;
+        payout.encrypted_amount = employee.encrypted_accrued.clone();
+        payout.claimed = false;
+        payout.cancelled = false;
+        payout.created_at = clock.unix_timestamp;
+        payout.expires_at = expires_at;
+        payout.payout_token_account = ctx.accounts.payout_token_account.key();
+        payout.bump = ctx.bumps.shielded_payout_v3;
+
+        let vault_bump = ctx.accounts.vault.bump;
+        let seeds: &[&[&[u8]]] = &[&[VAULT_SEED, business_key.as_ref(), &[vault_bump]]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.vault_token_account.key(),
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.vault.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            payout_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.vault.to_account_info(),
+                ctx.accounts.inco_token_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            seeds,
+        )?;
+
+        let vault = &mut ctx.accounts.vault;
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let updated_balance = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            current_balance,
+            accrued_handle_at_settle, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+        ctx.accounts.business_v3.encrypted_balance = vault.encrypted_balance.clone();
+
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        employee.encrypted_accrued = u128_to_handle(zero_handle);
+        employee.last_settle_time = clock.unix_timestamp;
+        employee.last_accrual_time = clock.unix_timestamp;
+        employee.is_delegated = false;
+        save_employee_entry_v3(&ctx.accounts.employee_v3, &employee)?;
+
+        ctx.accounts.withdraw_request_v3.is_pending = false;
+
+        emit!(PayoutBuffered {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v3 payout buffered (2-hop shielded)");
+        Ok(())
+    }
+
+    /// Worker claims a v3 shielded payout (Hop 2).
+    pub fn claim_payout_v3(
+        ctx: Context<ClaimPayoutV3>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        let payout = &ctx.accounts.shielded_payout_v3;
+        require!(!payout.claimed, PayrollError::PayoutAlreadyClaimed);
+        require!(!payout.cancelled, PayrollError::PayoutAlreadyCancelled);
+
+        let clock = Clock::get()?;
+        if payout.expires_at > 0 {
+            require!(
+                clock.unix_timestamp <= payout.expires_at,
+                PayrollError::PayoutExpired
+            );
+        }
+
+        let claimer = ctx.accounts.claimer.key();
+        let auth_handle = EncryptedHandle {
+            handle: payout.employee_auth_handle,
+        };
+        let auth_handle_u128 = handle_to_u128(&auth_handle);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, claimer.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+        require_keys_eq!(
+            *ctx.accounts.employee_id_allowance_account.owner,
+            INCO_LIGHTNING_ID,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let pda_bump = payout.bump;
+        let amount_handle = payout.encrypted_amount.handle.to_vec();
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let nonce_bytes = nonce.to_le_bytes();
+        let seeds: &[&[&[u8]]] = &[&[
+            SHIELDED_PAYOUT_V3_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &nonce_bytes,
+            &[pda_bump],
+        ]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.claimer_token_account.key(),
+            ctx.accounts.shielded_payout_v3.key(),
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            amount_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.claimer_token_account.to_account_info(),
+                ctx.accounts.shielded_payout_v3.to_account_info(),
+                ctx.accounts.inco_token_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            seeds,
+        )?;
+
+        let payout_mut = &mut ctx.accounts.shielded_payout_v3;
+        payout_mut.claimed = true;
+
+        emit!(PayoutClaimed {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v3 payout claimed");
+        Ok(())
+    }
+
+    /// Business authority cancels an expired v3 payout and returns funds to vault.
+    pub fn cancel_expired_payout_v3(
+        ctx: Context<CancelExpiredPayoutV3>,
+        employee_index: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        let master = &ctx.accounts.master_vault_v3;
+        require!(
+            master.authority == ctx.accounts.authority.key(),
+            PayrollError::Unauthorized
+        );
+
+        let payout = &ctx.accounts.shielded_payout_v3;
+        require!(!payout.claimed, PayrollError::PayoutAlreadyClaimed);
+        require!(!payout.cancelled, PayrollError::PayoutAlreadyCancelled);
+
+        let clock = Clock::get()?;
+        require!(
+            payout.expires_at > 0 && clock.unix_timestamp > payout.expires_at,
+            PayrollError::PayoutNotExpired
+        );
+
+        let pda_bump = payout.bump;
+        let payout_key = payout.key();
+        let amount_handle = payout.encrypted_amount.handle.to_vec();
+        let business_key = ctx.accounts.business_v3.key();
+        let employee_index_bytes = employee_index.to_le_bytes();
+        let nonce_bytes = nonce.to_le_bytes();
+        let seeds: &[&[&[u8]]] = &[&[
+            SHIELDED_PAYOUT_V3_SEED,
+            business_key.as_ref(),
+            &employee_index_bytes,
+            &nonce_bytes,
+            &[pda_bump],
+        ]];
+
+        let transfer_ix = build_inco_transfer_ix(
+            ctx.accounts.payout_token_account.key(),
+            ctx.accounts.vault_token_account.key(),
+            payout_key,
+            INCO_LIGHTNING_ID,
+            anchor_lang::solana_program::system_program::ID,
+            amount_handle,
+            0,
+        );
+        invoke_signed(
+            &transfer_ix,
+            &[
+                ctx.accounts.payout_token_account.to_account_info(),
+                ctx.accounts.vault_token_account.to_account_info(),
+                ctx.accounts.shielded_payout_v3.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            seeds,
+        )?;
+        let payout_mut = &mut ctx.accounts.shielded_payout_v3;
+        payout_mut.cancelled = true;
+
+        emit!(PayoutCancelled {
+            timestamp: clock.unix_timestamp,
+        });
+
+        privacy_msg!("✅ v3 payout cancelled");
         Ok(())
     }
 
@@ -107,13 +2384,9 @@ pub mod payroll {
         // Link vault to business
         business.vault = vault.key();
 
-        msg!("✅ Vault initialized");
-        msg!("   Vault PDA: {}", vault.key());
-        msg!("   Token Account: {}", vault.token_account);
+        privacy_msg!("✅ Vault initialized");
 
         emit!(VaultInitialized {
-            business: business.key(),
-            vault: vault.key(),
             timestamp: clock.unix_timestamp,
         });
 
@@ -141,16 +2414,9 @@ pub mod payroll {
         vault.mint = new_mint;
         vault.token_account = ctx.accounts.new_vault_token_account.key();
 
-        msg!("✅ Vault token account rotated");
-        msg!("   Vault PDA: {}", vault.key());
-        msg!("   New Mint: {}", vault.mint);
-        msg!("   New Token Account: {}", vault.token_account);
+        privacy_msg!("✅ Vault token account rotated");
 
         emit!(VaultTokenAccountRotated {
-            business: ctx.accounts.business.key(),
-            vault: vault.key(),
-            mint: vault.mint,
-            token_account: vault.token_account,
             timestamp: Clock::get()?.unix_timestamp,
         });
 
@@ -165,15 +2431,14 @@ pub mod payroll {
     ///
     /// Transfers tokens from depositor's Inco token account to
     /// the vault's Inco token account via CPI.
-    pub fn deposit(
-        ctx: Context<Deposit>,
-        encrypted_amount: Vec<u8>,
-    ) -> Result<()> {
+    pub fn deposit(ctx: Context<Deposit>, encrypted_amount: Vec<u8>) -> Result<()> {
         require!(!encrypted_amount.is_empty(), PayrollError::InvalidAmount);
         require!(
             encrypted_amount.len() <= MAX_CIPHERTEXT_BYTES,
             PayrollError::CiphertextTooLarge
         );
+
+        let balance_ciphertext = encrypted_amount.clone();
 
         // Build CPI instruction to Inco Token Program for transfer
         let transfer_ix = build_inco_transfer_ix(
@@ -197,12 +2462,32 @@ pub mod payroll {
             ],
         )?;
 
-        msg!("✅ Deposit completed");
-        msg!("   Vault: {}", ctx.accounts.vault.key());
-        msg!("   Amount: ENCRYPTED");
+        // Update encrypted vault balance: balance += deposit
+        let vault = &mut ctx.accounts.vault;
+        let signer = ctx.accounts.owner.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let deposit_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            balance_ciphertext,
+            0, None)?;
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let updated_balance = inco_binary_op_u128(
+            &signer,
+            &inco_lightning_program,
+            "e_add",
+            current_balance,
+            deposit_handle,
+            0, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+
+        privacy_msg!("✅ Deposit completed");
 
         emit!(FundsDeposited {
-            business: ctx.accounts.business.key(),
             timestamp: Clock::get()?.unix_timestamp,
         });
 
@@ -234,11 +2519,8 @@ pub mod payroll {
 
         let business_key = ctx.accounts.business.key();
         let bump = ctx.accounts.vault.bump;
-        let seeds: &[&[&[u8]]] = &[&[
-            VAULT_SEED,
-            business_key.as_ref(),
-            &[bump],
-        ]];
+        let balance_ciphertext = encrypted_amount.clone();
+        let seeds: &[&[&[u8]]] = &[&[VAULT_SEED, business_key.as_ref(), &[bump]]];
 
         let transfer_ix = build_inco_transfer_ix(
             ctx.accounts.vault_token_account.key(),
@@ -262,9 +2544,30 @@ pub mod payroll {
             seeds,
         )?;
 
-        msg!("✅ Admin vault withdrawal completed");
-        msg!("   Business: {}", business_key);
-        msg!("   Amount: ENCRYPTED");
+        // Update encrypted vault balance: balance -= withdraw
+        let vault = &mut ctx.accounts.vault;
+        let signer = ctx.accounts.owner.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let withdraw_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            balance_ciphertext,
+            0, None)?;
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let updated_balance = inco_binary_op_u128(
+            &signer,
+            &inco_lightning_program,
+            "e_sub",
+            current_balance,
+            withdraw_handle,
+            0, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+
+        privacy_msg!("✅ Admin vault withdrawal completed");
 
         Ok(())
     }
@@ -293,37 +2596,32 @@ pub mod payroll {
         cfg.pause_reason = PAUSE_REASON_NONE;
         cfg.bump = ctx.bumps.stream_config_v2;
 
-        msg!("✅ v2 stream config initialized");
-        msg!("   Business: {}", cfg.business);
-        msg!("   Keeper: {}", cfg.keeper_pubkey);
-        msg!("   Settle interval: {}s", cfg.settle_interval_secs);
+        privacy_msg!("✅ v2 stream config initialized");
 
         Ok(())
     }
 
     /// Rotate the authorized keeper wallet for v2 stream operations.
-    pub fn update_keeper_v2(
-        ctx: Context<UpdateKeeperV2>,
-        keeper_pubkey: Pubkey,
-    ) -> Result<()> {
+    pub fn update_keeper_v2(ctx: Context<UpdateKeeperV2>, keeper_pubkey: Pubkey) -> Result<()> {
         let cfg = &mut ctx.accounts.stream_config_v2;
         let business = &ctx.accounts.business;
 
         // Either the business owner or the CURRENTLY authorized keeper can rotate.
         // This allows for autonomous "behind-the-scenes" synchronization.
         require!(
-            ctx.accounts.authority.key() == business.owner || 
-            ctx.accounts.authority.key() == cfg.keeper_pubkey, 
+            ctx.accounts.authority.key() == business.owner
+                || ctx.accounts.authority.key() == cfg.keeper_pubkey,
             PayrollError::Unauthorized
         );
 
-        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
+        require!(
+            keeper_pubkey != Pubkey::default(),
+            PayrollError::InvalidKeeper
+        );
 
         cfg.keeper_pubkey = keeper_pubkey;
 
-        msg!("✅ v2 keeper updated by {}", ctx.accounts.authority.key());
-        msg!("   Business: {}", cfg.business);
-        msg!("   New Keeper: {}", cfg.keeper_pubkey);
+        privacy_msg!("✅ v2 keeper updated");
 
         Ok(())
     }
@@ -336,18 +2634,23 @@ pub mod payroll {
         ctx: Context<AddEmployeeStreamV2>,
         employee_auth_hash: [u8; 32],
         employee_token_account: Pubkey,
+        encrypted_employee_id: Vec<u8>,
         encrypted_salary_rate: Vec<u8>,
         period_start: i64,
         period_end: i64,
     ) -> Result<()> {
         require!(
-            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES && !encrypted_salary_rate.is_empty(),
+            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES
+                && !encrypted_salary_rate.is_empty(),
             PayrollError::InvalidCiphertext
         );
         require!(
-            employee_auth_hash != [0u8; 32],
-            PayrollError::InvalidEmployeeAuthHash
+            encrypted_employee_id.len() <= MAX_CIPHERTEXT_BYTES
+                && !encrypted_employee_id.is_empty(),
+            PayrollError::InvalidCiphertext
         );
+        // In privacy mode, we no longer store plaintext auth hashes on-chain.
+        // Keep the input for backwards compatibility, but do not persist it.
         require!(
             !ctx.accounts.stream_config_v2.is_paused,
             PayrollError::StreamPaused
@@ -357,6 +2660,7 @@ pub mod payroll {
             PayrollError::FixedDestinationRouteDisabled
         );
 
+        let business = &mut ctx.accounts.business;
         let cfg = &mut ctx.accounts.stream_config_v2;
         let stream = &mut ctx.accounts.employee_stream_v2;
         let clock = Clock::get()?;
@@ -367,30 +2671,56 @@ pub mod payroll {
             .checked_add(1)
             .ok_or(PayrollError::InvalidAmount)?;
 
-        stream.business = ctx.accounts.business.key();
+        stream.business = business.key();
         stream.stream_index = stream_index;
-        stream.employee_auth_hash = employee_auth_hash;
+        let _ = employee_auth_hash;
+        stream.employee_auth_hash = [0u8; 32];
         stream.destination_route_commitment = employee_token_account.to_bytes();
         // Register the encrypted salary rate with Inco Lightning and store the returned handle.
         // IMPORTANT: Lightning expects a ciphertext payload here (not a handle).
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
         let signer = ctx.accounts.owner.to_account_info();
+
+        let employee_id_handle = inco_new_euint128(
+            &signer,
+            &inco_lightning_program,
+            encrypted_employee_id,
+            0, None)?;	// input_type 0 = hex-encoded ciphertext bytes
+        stream.encrypted_employee_id = u128_to_handle(employee_id_handle);
+
         let salary_rate_handle = inco_new_euint128(
             &signer,
             &inco_lightning_program,
             encrypted_salary_rate,
-            0, // input_type 0 = hex-encoded ciphertext bytes
-        )?;
+            0, None)?;	// input_type 0 = hex-encoded ciphertext bytes
         stream.encrypted_salary_rate = u128_to_handle(salary_rate_handle);
 
         // Initialize accrued to an encrypted zero handle (NOT an uninitialized handle=0).
-        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0)?;
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         stream.encrypted_accrued = u128_to_handle(zero_handle);
         stream.last_accrual_time = clock.unix_timestamp;
         stream.last_settle_time = clock.unix_timestamp;
         stream.is_active = true;
         stream.is_delegated = false;
         stream.bump = ctx.bumps.employee_stream_v2;
+
+        // Increment encrypted employee count (if uninitialized, initialize first).
+        let count_handle = if is_handle_zero(&business.encrypted_employee_count) {
+            let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+            business.encrypted_employee_count = u128_to_handle(zero_handle);
+            zero_handle
+        } else {
+            handle_to_u128(&business.encrypted_employee_count)
+        };
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let updated_count = inco_binary_op_u128(
+            &signer,
+            &inco_lightning_program,
+            "e_add",
+            count_handle,
+            one_handle,
+            0, None)?;
+        business.encrypted_employee_count = u128_to_handle(updated_count);
 
         // Bounded stream: validate and store period timestamps.
         // period_end == 0 means unbounded (legacy behavior).
@@ -406,14 +2736,9 @@ pub mod payroll {
         stream.period_start = period_start;
         stream.period_end = period_end;
 
-        msg!("✅ v2 employee stream created");
-        msg!("   Stream Index: {}", stream.stream_index);
-        msg!("   Destination Route: claim-time only (no fixed on-chain destination)");
-        msg!("   Salary: ENCRYPTED");
+        privacy_msg!("✅ v2 employee stream created");
         if period_end != 0 {
-            msg!("   Period: {} → {}", period_start, period_end);
         } else {
-            msg!("   Period: UNBOUNDED");
         }
 
         Ok(())
@@ -454,14 +2779,19 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
-
-        // Ensure the passed employee wallet matches the auth hash stored in the stream.
-        let expected_hash = Sha256::digest(ctx.accounts.employee_wallet.key().to_bytes());
         require!(
-            employee.employee_auth_hash == expected_hash[..32],
-            PayrollError::InvalidEmployeeSigner
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
         );
+
+        // If legacy auth hash exists, verify it. Otherwise skip (privacy mode).
+        if employee.employee_auth_hash != [0u8; 32] {
+            let expected_hash = Sha256::digest(ctx.accounts.employee_wallet.key().to_bytes());
+            require!(
+                employee.employee_auth_hash == expected_hash[..32],
+                PayrollError::InvalidEmployeeSigner
+            );
+        }
 
         let salary_handle = handle_to_u128(&employee.encrypted_salary_rate);
         let accrued_handle = handle_to_u128(&employee.encrypted_accrued);
@@ -489,6 +2819,19 @@ pub mod payroll {
         require_keys_eq!(
             ctx.accounts.accrued_allowance_account.key(),
             expected_accrued_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let employee_id_handle = handle_to_u128(&employee.encrypted_employee_id);
+        let mut employee_id_handle_buf = [0u8; 16];
+        employee_id_handle_buf.copy_from_slice(&employee_id_handle.to_le_bytes());
+        let (expected_employee_id_allowance, _) = Pubkey::find_program_address(
+            &[&employee_id_handle_buf, allowed.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_employee_id_allowance,
             PayrollError::InvalidIncoAllowanceAccount
         );
 
@@ -532,8 +2875,26 @@ pub mod payroll {
             ],
         )?;
 
-        msg!("✅ v2 employee view access granted");
-        msg!("   Stream: {}", stream_index);
+        let allow_employee_id_ix = build_inco_allow_ix(
+            ctx.accounts.employee_id_allowance_account.key(),
+            ctx.accounts.caller.key(),
+            allowed,
+            anchor_lang::solana_program::system_program::ID,
+            employee_id_handle,
+            true,
+        );
+        invoke(
+            &allow_employee_id_ix,
+            &[
+                ctx.accounts.employee_id_allowance_account.to_account_info(),
+                ctx.accounts.caller.to_account_info(),
+                ctx.accounts.employee_wallet.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+            ],
+        )?;
+
+        privacy_msg!("✅ v2 employee view access granted");
         Ok(())
     }
 
@@ -584,7 +2945,10 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let salary_handle = handle_to_u128(&employee.encrypted_salary_rate);
 
@@ -620,9 +2984,7 @@ pub mod payroll {
             ],
         )?;
 
-        msg!("✅ v2 keeper view access granted");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Keeper: {}", allowed);
+        privacy_msg!("✅ v2 keeper view access granted");
         Ok(())
     }
 
@@ -630,10 +2992,7 @@ pub mod payroll {
     /// This enables "selective disclosure" payslips without revealing all history publicly.
     ///
     /// NOTE: This requires the stream to be owned by this program (not delegated) so we can read it.
-    pub fn init_rate_history_v2(
-        ctx: Context<InitRateHistoryV2>,
-        stream_index: u64,
-    ) -> Result<()> {
+    pub fn init_rate_history_v2(ctx: Context<InitRateHistoryV2>, stream_index: u64) -> Result<()> {
         authorize_keeper_or_owner(
             ctx.accounts.caller.key(),
             ctx.accounts.business.owner,
@@ -657,7 +3016,10 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         // Snapshot the currently configured encrypted salary rate, and anchor it to the last settle time
         // (or last accrual if last settle is zero).
@@ -679,8 +3041,7 @@ pub mod payroll {
             encrypted_salary_rate: employee.encrypted_salary_rate.clone(),
         };
 
-        msg!("✅ v2 rate history initialized");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 rate history initialized");
         Ok(())
     }
 
@@ -694,7 +3055,8 @@ pub mod payroll {
         encrypted_salary_rate: Vec<u8>,
     ) -> Result<()> {
         require!(
-            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES && !encrypted_salary_rate.is_empty(),
+            encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES
+                && !encrypted_salary_rate.is_empty(),
             PayrollError::InvalidCiphertext
         );
 
@@ -725,7 +3087,10 @@ pub mod payroll {
 
         let mut employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let clock = Clock::get()?;
         let signer = ctx.accounts.caller.to_account_info();
@@ -737,7 +3102,8 @@ pub mod payroll {
             .checked_sub(employee.last_accrual_time)
             .ok_or(PayrollError::InvalidTimestamp)?;
         if elapsed > 0 {
-            let elapsed_handle = inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128)?;
+            let elapsed_handle =
+                inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128, None)?;
             let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
             let current_accrued = handle_to_u128(&employee.encrypted_accrued);
             let delta = inco_binary_op_u128(
@@ -746,26 +3112,20 @@ pub mod payroll {
                 "e_mul",
                 salary_rate,
                 elapsed_handle,
-                0,
-            )?;
+                0, None)?;
             let updated_accrued = inco_binary_op_u128(
                 &signer,
                 &inco_lightning_program,
                 "e_add",
                 current_accrued,
                 delta,
-                0,
-            )?;
+                0, None)?;
             employee.encrypted_accrued = u128_to_handle(updated_accrued);
         }
 
         // Register new encrypted salary rate and store handle.
-        let new_rate_handle = inco_new_euint128(
-            &signer,
-            &inco_lightning_program,
-            encrypted_salary_rate,
-            0,
-        )?;
+        let new_rate_handle =
+            inco_new_euint128(&signer, &inco_lightning_program, encrypted_salary_rate, 0, None)?;
         employee.encrypted_salary_rate = u128_to_handle(new_rate_handle);
         employee.last_accrual_time = clock.unix_timestamp;
 
@@ -773,10 +3133,19 @@ pub mod payroll {
 
         // Append to rate history for selective disclosure payslips.
         let history = &mut ctx.accounts.rate_history_v2;
-        require!(history.business == business_key, PayrollError::InvalidRateHistory);
-        require!(history.stream_index == stream_index, PayrollError::InvalidRateHistory);
+        require!(
+            history.business == business_key,
+            PayrollError::InvalidRateHistory
+        );
+        require!(
+            history.stream_index == stream_index,
+            PayrollError::InvalidRateHistory
+        );
         let idx = history.count as usize;
-        require!(idx < RATE_HISTORY_MAX_ENTRIES, PayrollError::RateHistoryFull);
+        require!(
+            idx < RATE_HISTORY_MAX_ENTRIES,
+            PayrollError::RateHistoryFull
+        );
         history.entries[idx] = RateHistoryEntryV2 {
             effective_at: clock.unix_timestamp,
             encrypted_salary_rate: employee.encrypted_salary_rate.clone(),
@@ -786,8 +3155,7 @@ pub mod payroll {
             .checked_add(1)
             .ok_or(PayrollError::InvalidAmount)?;
 
-        msg!("✅ v2 salary rate updated (encrypted)");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 salary rate updated (encrypted)");
         Ok(())
     }
 
@@ -832,7 +3200,10 @@ pub mod payroll {
 
         let mut employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let clock = Clock::get()?;
         let signer = ctx.accounts.caller.to_account_info();
@@ -844,7 +3215,8 @@ pub mod payroll {
             .checked_sub(employee.last_accrual_time)
             .ok_or(PayrollError::InvalidTimestamp)?;
         if elapsed > 0 {
-            let elapsed_handle = inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128)?;
+            let elapsed_handle =
+                inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128, None)?;
             let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
             let current_accrued = handle_to_u128(&employee.encrypted_accrued);
             let delta = inco_binary_op_u128(
@@ -853,20 +3225,18 @@ pub mod payroll {
                 "e_mul",
                 salary_rate,
                 elapsed_handle,
-                0,
-            )?;
+                0, None)?;
             let updated_accrued = inco_binary_op_u128(
                 &signer,
                 &inco_lightning_program,
                 "e_add",
                 current_accrued,
                 delta,
-                0,
-            )?;
+                0, None)?;
             employee.encrypted_accrued = u128_to_handle(updated_accrued);
         }
 
-        let bonus_handle = inco_new_euint128(&signer, &inco_lightning_program, encrypted_bonus, 0)?;
+        let bonus_handle = inco_new_euint128(&signer, &inco_lightning_program, encrypted_bonus, 0, None)?;
         let current_accrued = handle_to_u128(&employee.encrypted_accrued);
         let updated_accrued = inco_binary_op_u128(
             &signer,
@@ -874,23 +3244,18 @@ pub mod payroll {
             "e_add",
             current_accrued,
             bonus_handle,
-            0,
-        )?;
+            0, None)?;
         employee.encrypted_accrued = u128_to_handle(updated_accrued);
         employee.last_accrual_time = clock.unix_timestamp;
 
         save_employee_stream_v2(&ctx.accounts.employee, &employee)?;
 
-        msg!("✅ v2 bonus granted (encrypted)");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 bonus granted (encrypted)");
         Ok(())
     }
 
     /// Delegate v2 stream account to MagicBlock TEE.
-    pub fn delegate_stream_v2(
-        ctx: Context<DelegateStreamV2>,
-        stream_index: u64,
-    ) -> Result<()> {
+    pub fn delegate_stream_v2(ctx: Context<DelegateStreamV2>, stream_index: u64) -> Result<()> {
         authorize_keeper_or_owner(
             ctx.accounts.caller.key(),
             ctx.accounts.business.owner,
@@ -910,18 +3275,19 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee.to_account_info())?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let business_key = ctx.accounts.business.key();
         let stream_index_bytes = stream_index.to_le_bytes();
 
-        let seeds: &[&[u8]] = &[
-            EMPLOYEE_V2_SEED,
-            business_key.as_ref(),
-            &stream_index_bytes,
-        ];
+        let seeds: &[&[u8]] = &[EMPLOYEE_V2_SEED, business_key.as_ref(), &stream_index_bytes];
 
-        let validator_key = ctx.accounts.validator
+        let validator_key = ctx
+            .accounts
+            .validator
             .as_ref()
             .map(|v| v.key())
             .or_else(|| Pubkey::try_from(TEE_VALIDATOR).ok());
@@ -937,8 +3303,7 @@ pub mod payroll {
                 ..Default::default()
             },
         )?;
-        msg!("✅ v2 stream delegated to TEE");
-        msg!("   Stream Index: {}", stream_index);
+        privacy_msg!("✅ v2 stream delegated to TEE");
 
         Ok(())
     }
@@ -955,7 +3320,10 @@ pub mod payroll {
             !ctx.accounts.stream_config_v2.is_paused,
             PayrollError::StreamPaused
         );
-        require!(ctx.accounts.employee.is_active, PayrollError::InactiveEmployee);
+        require!(
+            ctx.accounts.employee.is_active,
+            PayrollError::InactiveEmployee
+        );
         require!(
             ctx.accounts.employee.stream_index == stream_index,
             PayrollError::InvalidStreamIndex
@@ -965,7 +3333,8 @@ pub mod payroll {
         let clock = Clock::get()?;
 
         // Clamp effective time at period_end for bounded streams.
-        let effective_now = if employee.period_end > 0 && clock.unix_timestamp > employee.period_end {
+        let effective_now = if employee.period_end > 0 && clock.unix_timestamp > employee.period_end
+        {
             employee.period_end
         } else {
             clock.unix_timestamp
@@ -988,7 +3357,7 @@ pub mod payroll {
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
 
         // elapsed is public, so use trivial encryption (deterministic) rather than client ciphertext.
-        let elapsed_handle = inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128)?;
+        let elapsed_handle = inco_as_euint128(&signer, &inco_lightning_program, elapsed as u128, None)?;
 
         let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
         let current_accrued = handle_to_u128(&employee.encrypted_accrued);
@@ -999,8 +3368,7 @@ pub mod payroll {
             "e_mul",
             salary_rate,
             elapsed_handle,
-            0,
-        )?;
+            0, None)?;
 
         let updated_accrued = inco_binary_op_u128(
             &signer,
@@ -1008,15 +3376,12 @@ pub mod payroll {
             "e_add",
             current_accrued,
             delta,
-            0,
-        )?;
+            0, None)?;
 
         employee.encrypted_accrued = u128_to_handle(updated_accrued);
         employee.last_accrual_time = effective_now;
 
-        msg!("✅ v2 accrued");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Delta: ENCRYPTED");
+        privacy_msg!("✅ v2 accrued");
         Ok(())
     }
 
@@ -1057,8 +3422,7 @@ pub mod payroll {
             &ctx.accounts.magic_program,
         )?;
 
-        msg!("✅ v2 commit+undelegate scheduled");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 commit+undelegate scheduled");
         Ok(())
     }
 
@@ -1103,7 +3467,10 @@ pub mod payroll {
 
         let mut employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
         if employee.destination_route_commitment != [0u8; 32] {
             let pinned_destination = Pubkey::new_from_array(employee.destination_route_commitment);
             require!(
@@ -1124,11 +3491,7 @@ pub mod payroll {
         // NOTE: We cannot prove "handle is zero" without decryption; keep settlement logic permissive
         // and rely on off-chain policy (keeper) to avoid spamming.
         let bump = ctx.accounts.vault.bump;
-        let seeds: &[&[&[u8]]] = &[&[
-            VAULT_SEED,
-            business_key.as_ref(),
-            &[bump],
-        ]];
+        let seeds: &[&[&[u8]]] = &[&[VAULT_SEED, business_key.as_ref(), &[bump]]];
 
         let transfer_ix = build_inco_transfer_ix(
             ctx.accounts.vault_token_account.key(),
@@ -1155,24 +3518,19 @@ pub mod payroll {
         // Reset accrued to encrypted zero (NOT handle=0).
         let signer = ctx.accounts.caller.to_account_info();
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
-        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0)?;
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         employee.encrypted_accrued = u128_to_handle(zero_handle);
         employee.last_settle_time = clock.unix_timestamp;
         employee.last_accrual_time = clock.unix_timestamp;
         employee.is_delegated = false;
         save_employee_stream_v2(&ctx.accounts.employee, &employee)?;
 
-        msg!("✅ v2 auto-settle completed");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Amount: ENCRYPTED");
+        privacy_msg!("✅ v2 auto-settle completed");
         Ok(())
     }
 
     /// Re-delegate v2 stream after settlement.
-    pub fn redelegate_stream_v2(
-        ctx: Context<RedelegateStreamV2>,
-        stream_index: u64,
-    ) -> Result<()> {
+    pub fn redelegate_stream_v2(ctx: Context<RedelegateStreamV2>, stream_index: u64) -> Result<()> {
         authorize_keeper_or_owner(
             ctx.accounts.caller.key(),
             ctx.accounts.business.owner,
@@ -1189,18 +3547,19 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee.to_account_info())?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let business_key = ctx.accounts.business.key();
         let stream_index_bytes = stream_index.to_le_bytes();
 
-        let seeds: &[&[u8]] = &[
-            EMPLOYEE_V2_SEED,
-            business_key.as_ref(),
-            &stream_index_bytes,
-        ];
+        let seeds: &[&[u8]] = &[EMPLOYEE_V2_SEED, business_key.as_ref(), &stream_index_bytes];
 
-        let validator_key = ctx.accounts.validator
+        let validator_key = ctx
+            .accounts
+            .validator
             .as_ref()
             .map(|v| v.key())
             .or_else(|| Pubkey::try_from(TEE_VALIDATOR).ok());
@@ -1214,8 +3573,7 @@ pub mod payroll {
                 ..Default::default()
             },
         )?;
-        msg!("✅ v2 stream re-delegated");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 stream re-delegated");
         Ok(())
     }
 
@@ -1223,10 +3581,7 @@ pub mod payroll {
     ///
     /// This does not transfer funds immediately. A keeper processes the request
     /// and settles to the registered destination token account.
-    pub fn request_withdraw_v2(
-        ctx: Context<RequestWithdrawV2>,
-        stream_index: u64,
-    ) -> Result<()> {
+    pub fn request_withdraw_v2(ctx: Context<RequestWithdrawV2>, stream_index: u64) -> Result<()> {
         // Derive expected employee stream PDA for the provided stream index.
         let business_key = ctx.accounts.business.key();
         let stream_index_bytes = stream_index.to_le_bytes();
@@ -1246,25 +3601,46 @@ pub mod payroll {
             PayrollError::InvalidStreamIndex
         );
 
-        // Authenticate requester via employee auth hash.
         let requester = ctx.accounts.employee_signer.key();
-        let requester_auth_hash: [u8; 32] = Sha256::digest(requester.as_ref()).into();
-        require!(
-            requester_auth_hash == employee.employee_auth_hash,
-            PayrollError::InvalidEmployeeSigner
-        );
+        let req = &mut ctx.accounts.withdraw_request_v2;
+        let employee_id_handle = handle_to_u128(&employee.encrypted_employee_id);
+        if is_handle_zero(&employee.encrypted_employee_id) {
+            // Legacy mode: auth hash check.
+            let requester_auth_hash: [u8; 32] = Sha256::digest(requester.as_ref()).into();
+            require!(
+                requester_auth_hash == employee.employee_auth_hash,
+                PayrollError::InvalidEmployeeSigner
+            );
+            req.requester_auth_hash = requester_auth_hash;
+        } else {
+            // Privacy mode: require Inco allowance for encrypted employee id handle.
+            let mut employee_id_buf = [0u8; 16];
+            employee_id_buf.copy_from_slice(&employee_id_handle.to_le_bytes());
+            let (expected_allowance, _) = Pubkey::find_program_address(
+                &[&employee_id_buf, requester.as_ref()],
+                &INCO_LIGHTNING_ID,
+            );
+            require_keys_eq!(
+                ctx.accounts.employee_id_allowance_account.key(),
+                expected_allowance,
+                PayrollError::InvalidIncoAllowanceAccount
+            );
+            require_keys_eq!(
+                *ctx.accounts.employee_id_allowance_account.owner,
+                INCO_LIGHTNING_ID,
+                PayrollError::InvalidIncoAllowanceAccount
+            );
+            req.requester_auth_hash = employee.encrypted_employee_id.handle;
+        }
 
         let clock = Clock::get()?;
-        let req = &mut ctx.accounts.withdraw_request_v2;
         req.business = business_key;
         req.stream_index = stream_index;
-        req.requester_auth_hash = requester_auth_hash;
         req.requested_at = clock.unix_timestamp;
         req.is_pending = true;
         req.bump = ctx.bumps.withdraw_request_v2;
 
-        msg!("✅ v2 withdraw requested");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 withdraw requested");
         Ok(())
     }
 
@@ -1299,13 +3675,16 @@ pub mod payroll {
         req.business = business_key;
         req.stream_index = stream_index;
         // Store only auth commitment; do not write worker pubkey on-chain.
-        req.requester_auth_hash = employee.employee_auth_hash;
+        if is_handle_zero(&employee.encrypted_employee_id) {
+            req.requester_auth_hash = employee.employee_auth_hash;
+        } else {
+            req.requester_auth_hash = employee.encrypted_employee_id.handle;
+        }
         req.requested_at = clock.unix_timestamp;
         req.is_pending = true;
         req.bump = ctx.bumps.withdraw_request_v2;
 
-        msg!("✅ v2 withdraw requested by Keeper (Ghost Mode)");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 withdraw requested by Keeper (Ghost Mode)");
         Ok(())
     }
 
@@ -1373,12 +3752,19 @@ pub mod payroll {
             PayrollError::InvalidStreamIndex
         );
 
-        // Ensure the withdraw request is from the correct employee auth commitment.
+        // Ensure the withdraw request is from the correct employee commitment.
         let requester_auth_hash = ctx.accounts.withdraw_request_v2.requester_auth_hash;
-        require!(
-            requester_auth_hash == employee.employee_auth_hash,
-            PayrollError::InvalidWithdrawRequester
-        );
+        if is_handle_zero(&employee.encrypted_employee_id) {
+            require!(
+                requester_auth_hash == employee.employee_auth_hash,
+                PayrollError::InvalidWithdrawRequester
+            );
+        } else {
+            require!(
+                requester_auth_hash == employee.encrypted_employee_id.handle,
+                PayrollError::InvalidWithdrawRequester
+            );
+        }
 
         let clock = Clock::get()?;
 
@@ -1388,10 +3774,7 @@ pub mod payroll {
             .unix_timestamp
             .checked_sub(employee.last_accrual_time)
             .ok_or(PayrollError::InvalidTimestamp)?;
-        require!(
-            accrual_age <= 120,
-            PayrollError::AccrualNotFresh
-        );
+        require!(accrual_age <= 120, PayrollError::AccrualNotFresh);
 
         // Anti-spam cadence guard (shared config).
         let elapsed_since_settle = clock
@@ -1413,7 +3796,11 @@ pub mod payroll {
         payout.business = business_key;
         payout.stream_index = stream_index;
         payout.nonce = nonce;
-        payout.employee_auth_hash = employee.employee_auth_hash;
+        payout.employee_auth_hash = if is_handle_zero(&employee.encrypted_employee_id) {
+            employee.employee_auth_hash
+        } else {
+            employee.encrypted_employee_id.handle
+        };
         payout.encrypted_amount = employee.encrypted_accrued;
         payout.claimed = false;
         payout.cancelled = false;
@@ -1425,11 +3812,7 @@ pub mod payroll {
         // ── Hop 1: Transfer vault → payout_token_account ──
         // Vault PDA signs. Worker identity is NOT in this transaction.
         let vault_bump = ctx.accounts.vault.bump;
-        let seeds: &[&[&[u8]]] = &[&[
-            VAULT_SEED,
-            business_key.as_ref(),
-            &[vault_bump],
-        ]];
+        let seeds: &[&[&[u8]]] = &[&[VAULT_SEED, business_key.as_ref(), &[vault_bump]]];
 
         let transfer_ix = build_inco_transfer_ix(
             ctx.accounts.vault_token_account.key(),
@@ -1453,10 +3836,28 @@ pub mod payroll {
             seeds,
         )?;
 
+        // Update encrypted vault balance: balance -= payout
+        let vault = &mut ctx.accounts.vault;
+        let signer = ctx.accounts.caller.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let updated_balance = inco_binary_op_u128(
+            &signer,
+            &inco_lightning_program,
+            "e_sub",
+            current_balance,
+            accrued_handle_at_settle,
+            0, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+
         // Reset stream accrued state and timestamps.
         let signer = ctx.accounts.caller.to_account_info();
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
-        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0)?;
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         employee.encrypted_accrued = u128_to_handle(zero_handle);
         employee.last_settle_time = clock.unix_timestamp;
         employee.last_accrual_time = clock.unix_timestamp;
@@ -1467,18 +3868,10 @@ pub mod payroll {
         ctx.accounts.withdraw_request_v2.is_pending = false;
 
         emit!(PayoutBuffered {
-            stream_index,
-            nonce,
-            amount_handle: accrued_handle_at_settle,
-            payout_token_account: ctx.accounts.payout_token_account.key(),
-            created_at: clock.unix_timestamp,
-            expires_at,
+            timestamp: clock.unix_timestamp,
         });
 
-        msg!("✅ v2 payout buffered (2-hop shielded)");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Nonce: {}", nonce);
-        msg!("   Expires: {}", expires_at);
+        privacy_msg!("✅ v2 payout buffered (2-hop shielded)");
         Ok(())
     }
 
@@ -1493,7 +3886,7 @@ pub mod payroll {
     /// NO vault or employer accounts in this tx = full metadata break.
     ///
     /// Security:
-    /// - Verifies claimer via SHA-256(claimer.key()) == employee_auth_hash.
+    /// - Verifies claimer via Inco allowance for the encrypted employee id handle.
     /// - One-time claim guard: `claimed` flag prevents double-claim.
     /// - Expiry guard: payout must not be expired.
     /// - Cancel guard: payout must not be cancelled.
@@ -1516,10 +3909,25 @@ pub mod payroll {
         }
 
         let claimer = ctx.accounts.claimer.key();
-        let digest: [u8; 32] = Sha256::digest(claimer.as_ref()).into();
-        require!(
-            digest == payout.employee_auth_hash,
-            PayrollError::UnauthorizedClaimer
+        let auth_handle = EncryptedHandle {
+            handle: payout.employee_auth_hash,
+        };
+        let auth_handle_u128 = handle_to_u128(&auth_handle);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, claimer.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+        require_keys_eq!(
+            *ctx.accounts.employee_id_allowance_account.owner,
+            INCO_LIGHTNING_ID,
+            PayrollError::InvalidIncoAllowanceAccount
         );
 
         // Extract what we need before the CPI so the mutable borrow is clean.
@@ -1564,14 +3972,10 @@ pub mod payroll {
         ctx.accounts.shielded_payout.claimed = true;
 
         emit!(PayoutClaimed {
-            stream_index,
-            nonce,
-            claimed_at: clock.unix_timestamp,
+            timestamp: clock.unix_timestamp,
         });
 
-        msg!("✅ v2 payout claimed (2-hop)");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Nonce: {}", nonce);
+        privacy_msg!("✅ v2 payout claimed (2-hop)");
         Ok(())
     }
 
@@ -1632,17 +4036,32 @@ pub mod payroll {
             seeds,
         )?;
 
+        // Update encrypted vault balance: balance += returned payout
+        let vault = &mut ctx.accounts.vault;
+        let signer = ctx.accounts.owner.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let amount_handle = handle_to_u128(&payout.encrypted_amount);
+        let current_balance = if is_handle_zero(&vault.encrypted_balance) {
+            inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
+        } else {
+            handle_to_u128(&vault.encrypted_balance)
+        };
+        let updated_balance = inco_binary_op_u128(
+            &signer,
+            &inco_lightning_program,
+            "e_add",
+            current_balance,
+            amount_handle,
+            0, None)?;
+        vault.encrypted_balance = u128_to_handle(updated_balance);
+
         ctx.accounts.shielded_payout.cancelled = true;
 
         emit!(PayoutCancelled {
-            stream_index,
-            nonce,
-            cancelled_at: clock.unix_timestamp,
+            timestamp: clock.unix_timestamp,
         });
 
-        msg!("✅ v2 expired payout cancelled");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Nonce: {}", nonce);
+        privacy_msg!("✅ v2 expired payout cancelled");
         Ok(())
     }
 
@@ -1676,10 +4095,14 @@ pub mod payroll {
         );
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee)?;
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let salary_handle = handle_to_u128(&employee.encrypted_salary_rate);
         let accrued_handle = handle_to_u128(&employee.encrypted_accrued);
+        let employee_id_handle = handle_to_u128(&employee.encrypted_employee_id);
         let target = ctx.accounts.target_wallet.key();
 
         // Validate salary allowance PDA
@@ -1705,6 +4128,18 @@ pub mod payroll {
         require_keys_eq!(
             ctx.accounts.accrued_allowance_account.key(),
             expected_accrued_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+
+        let mut employee_id_handle_buf = [0u8; 16];
+        employee_id_handle_buf.copy_from_slice(&employee_id_handle.to_le_bytes());
+        let (expected_employee_id_allowance, _) = Pubkey::find_program_address(
+            &[&employee_id_handle_buf, target.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_employee_id_allowance,
             PayrollError::InvalidIncoAllowanceAccount
         );
 
@@ -1747,9 +4182,26 @@ pub mod payroll {
             ],
         )?;
 
-        msg!("✅ v2 view access revoked");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Revoked from: {}", target);
+        let revoke_employee_id_ix = build_inco_allow_ix(
+            ctx.accounts.employee_id_allowance_account.key(),
+            ctx.accounts.caller.key(),
+            target,
+            anchor_lang::solana_program::system_program::ID,
+            employee_id_handle,
+            false,
+        );
+        invoke(
+            &revoke_employee_id_ix,
+            &[
+                ctx.accounts.employee_id_allowance_account.to_account_info(),
+                ctx.accounts.caller.to_account_info(),
+                ctx.accounts.target_wallet.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.inco_lightning_program.to_account_info(),
+            ],
+        )?;
+
+        privacy_msg!("✅ v2 view access revoked");
         Ok(())
     }
 
@@ -1784,7 +4236,10 @@ pub mod payroll {
 
         let employee = load_employee_stream_v2(&ctx.accounts.employee)?;
         require!(employee.is_active, PayrollError::InactiveEmployee);
-        require!(employee.stream_index == stream_index, PayrollError::InvalidStreamIndex);
+        require!(
+            employee.stream_index == stream_index,
+            PayrollError::InvalidStreamIndex
+        );
 
         let salary_handle = handle_to_u128(&employee.encrypted_salary_rate);
         let accrued_handle = handle_to_u128(&employee.encrypted_accrued);
@@ -1854,9 +4309,7 @@ pub mod payroll {
             ],
         )?;
 
-        msg!("✅ v2 auditor view access granted");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Auditor: {}", auditor);
+        privacy_msg!("✅ v2 auditor view access granted");
         Ok(())
     }
 
@@ -1872,7 +4325,7 @@ pub mod payroll {
     /// Security:
     /// - Verifies caller == configured keeper.
     /// - Verifies Ed25519 signature from `worker_pubkey` over `message`.
-    /// - Verifies SHA-256(worker_pubkey) == employee_auth_hash.
+    /// - Relies on off-chain worker authorization (no plaintext worker hash on-chain).
     /// - Standard payout guards: not claimed, not cancelled, not expired.
     pub fn keeper_claim_on_behalf_v2(
         ctx: Context<KeeperClaimOnBehalfV2>,
@@ -1962,14 +4415,10 @@ pub mod payroll {
         ctx.accounts.shielded_payout.claimed = true;
 
         emit!(PayoutClaimed {
-            stream_index,
-            nonce,
-            claimed_at: clock.unix_timestamp,
+            timestamp: clock.unix_timestamp,
         });
 
-        msg!("✅ v2 payout claimed via keeper relay");
-        msg!("   Stream: {}", stream_index);
-        msg!("   Nonce: {}", nonce);
+        privacy_msg!("✅ v2 payout claimed via keeper relay");
         Ok(())
     }
 
@@ -1977,10 +4426,7 @@ pub mod payroll {
     ///
     /// Owner-only. Sets `is_active = false` on the stream to stop accrual.
     /// Stream must be undelegated (on base layer) before deactivation.
-    pub fn deactivate_stream_v2(
-        ctx: Context<DeactivateStreamV2>,
-        stream_index: u64,
-    ) -> Result<()> {
+    pub fn deactivate_stream_v2(ctx: Context<DeactivateStreamV2>, stream_index: u64) -> Result<()> {
         // Stream must be back on base layer before we can mutate it.
         require!(
             ctx.accounts.employee_stream.owner == &crate::ID,
@@ -2009,11 +4455,9 @@ pub mod payroll {
         employee.is_active = false;
         save_employee_stream_v2(&ctx.accounts.employee_stream, &employee)?;
 
-        msg!("✅ v2 stream deactivated");
-        msg!("   Stream: {}", stream_index);
+        privacy_msg!("✅ v2 stream deactivated");
 
         emit!(StreamDeactivated {
-            stream_index,
             timestamp: Clock::get()?.unix_timestamp,
         });
 
@@ -2036,8 +4480,7 @@ pub mod payroll {
         cfg.is_paused = true;
         cfg.pause_reason = reason;
 
-        msg!("⏸️ v2 streams paused");
-        msg!("   Reason: {}", reason);
+        privacy_msg!("⏸️ v2 streams paused");
         Ok(())
     }
 
@@ -2047,7 +4490,7 @@ pub mod payroll {
         cfg.is_paused = false;
         cfg.pause_reason = PAUSE_REASON_NONE;
 
-        msg!("▶️ v2 streams resumed");
+        privacy_msg!("▶️ v2 streams resumed");
         Ok(())
     }
 }

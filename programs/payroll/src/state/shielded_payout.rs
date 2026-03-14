@@ -25,8 +25,8 @@ pub struct ShieldedPayoutV2 {
     pub stream_index: u64,
     /// One-time nonce to prevent PDA reuse (monotonically increasing per stream).
     pub nonce: u64,
-    /// SHA-256 hash of the employee wallet authorized to claim.
-    /// Same commitment scheme as `employee_auth_hash` in EmployeeStreamV2.
+    /// Encrypted employee identity handle (Inco euint128 handle bytes).
+    /// Used for allowance-based claim authorization.
     pub employee_auth_hash: [u8; 32],
     /// Encrypted amount handle (Inco euint128).
     /// The actual payout amount — only resolvable by Inco TEE.

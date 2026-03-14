@@ -14,6 +14,9 @@ pub enum PayrollError {
     #[msg("Employee is not active")]
     InactiveEmployee,
 
+    #[msg("Business is not active")]
+    InactiveBusiness,
+
 
 
     #[msg("Insufficient funds in vault")]
@@ -78,6 +81,9 @@ pub enum PayrollError {
 
     #[msg("Invalid Inco allowance account")]
     InvalidIncoAllowanceAccount,
+
+    #[msg("Invalid permission account")]
+    InvalidPermissionAccount,
 
     #[msg("Invalid period bounds: end must be after start")]
     InvalidPeriodBounds,
