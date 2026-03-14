@@ -1,4 +1,4 @@
-import EmployerV4Page from './employer-v4';
+import EmployerV4Page from './employer';
 
 export default function EmployeesPage() {
   return <EmployerV4Page mode="employees" />;

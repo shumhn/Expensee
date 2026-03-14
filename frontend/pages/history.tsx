@@ -1,4 +1,4 @@
-import EmployerV4Page from './employer-v4';
+import EmployerV4Page from './employer';
 
 export default function HistoryPage() {
   return <EmployerV4Page mode="history" />;
