@@ -76,3 +76,15 @@ bun.lock
 .env*.local
 .env.production
 keys/
+# Test Logs & Scripts
+frontend/*.txt
+frontend/scripts/*.txt
+frontend/scripts/*v2*
+frontend/scripts/*v3*
+frontend/crank_e2e_log.txt
+frontend/er_logs.txt
+frontend/final_verification*.txt
+frontend/manual_invoke.txt
+frontend/manual_verify*.txt
+frontend/seeding_log*.txt
+frontend/seed_v7.txt

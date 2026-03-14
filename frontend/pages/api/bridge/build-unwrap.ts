@@ -8,6 +8,7 @@ import {
   TransactionInstruction,
 } from '@solana/web3.js';
 import fs from 'fs';
+import path from 'path';
 
 type Ok = {
   ok: true;
@@ -33,13 +34,30 @@ function requiredEnv(name: string): string {
   return v;
 }
 
+function resolveKeypairPath(pathOrJson: string): string {
+  const trimmed = pathOrJson.trim();
+  if (!trimmed || trimmed.startsWith('[')) return trimmed;
+  if (path.isAbsolute(trimmed)) return trimmed;
+
+  const candidates = [
+    path.resolve(process.cwd(), trimmed),
+    path.resolve(process.cwd(), '..', trimmed),
+    path.resolve(process.cwd(), '..', '..', trimmed),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return trimmed;
+}
+
 function loadKeypairFromPath(pathOrJson: string): Keypair {
   // Support inline JSON array (for Vercel where filesystem isn't available)
   const trimmed = pathOrJson.trim();
   if (trimmed.startsWith('[')) {
     return Keypair.fromSecretKey(new Uint8Array(JSON.parse(trimmed)));
   }
-  const raw = fs.readFileSync(trimmed, 'utf-8');
+  const resolved = resolveKeypairPath(trimmed);
+  const raw = fs.readFileSync(resolved, 'utf-8');
   const arr = JSON.parse(raw);
   return Keypair.fromSecretKey(new Uint8Array(arr));
 }

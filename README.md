@@ -39,6 +39,14 @@ A 2-hop shielded architecture with stealth routing makes employer-to-employee pa
 
 > *Expensee: AI-assisted, private, real-time payroll for the global workforce.*
 
+## Production Readiness
+
+See [docs/production-readiness.md](docs/production-readiness.md) for the current checklist and launch requirements.
+
+### Keeper Health Check
+
+Use `npm run keeper:health` to assert the keeper is healthy (exits non-zero if unhealthy).
+
 ---
 
 ## Why Expensee?
