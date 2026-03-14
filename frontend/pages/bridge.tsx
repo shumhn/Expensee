@@ -20,12 +20,12 @@ function formatActionError(e: any): string {
   const objectFallback =
     e && typeof e === 'object'
       ? (() => {
-          try {
-            return JSON.stringify(e);
-          } catch {
-            return '';
-          }
-        })()
+        try {
+          return JSON.stringify(e);
+        } catch {
+          return '';
+        }
+      })()
       : '';
   const primary =
     e?.message ||
@@ -316,9 +316,13 @@ export default function BridgePage() {
                 onClick={() =>
                   run('Create confidential token account', async () => {
                     if (!wallet.publicKey) throw new Error('Wallet not connected');
-                    const mint = new PublicKey(process.env.NEXT_PUBLIC_PAYUSD_MINT || '');
+                    const mint = new PublicKey(
+                      process.env.NEXT_PUBLIC_CONFIDENTIAL_USDC_MINT ||
+                      process.env.NEXT_PUBLIC_PAYUSD_MINT ||
+                      ''
+                    );
                     if (mint.equals(new PublicKey('11111111111111111111111111111111'))) {
-                      throw new Error('NEXT_PUBLIC_PAYUSD_MINT not configured');
+                      throw new Error('NEXT_PUBLIC_CONFIDENTIAL_USDC_MINT not configured');
                     }
                     const { txid, tokenAccount } = await createIncoTokenAccount(connection as Connection, wallet as any, wallet.publicKey, mint);
                     setConfidentialTokenAccount(tokenAccount.toBase58());
