@@ -18,13 +18,21 @@
     "lint": "cd frontend && npm run lint",
     "deploy": "anchor deploy",
     "keeper:dev": "set -a && . backend/keeper/.env && set +a && npx ts-node --prefer-ts-exts -P backend/keeper/tsconfig.json backend/keeper/src/index.ts",
+    "keeper:health": "node scripts/keeper-healthcheck.cjs",
+    "dev:all": "node scripts/dev-all.cjs",
     "umbra:relay:dev": "node services/umbra-relay/server.cjs",
     "umbra:relay:self-test": "node services/umbra-relay/self-test.cjs",
-    "privacy:purge": "node frontend/scripts/purge-v2-privacy.cjs"
+    "privacy:purge": "node frontend/scripts/purge-v2-privacy.cjs",
+    "setup:stream": "node frontend/scripts/setup-stream.cjs",
+    "withdraw:flow": "node frontend/scripts/withdraw-flow.cjs",
+    "withdraw:request": "node frontend/scripts/request-withdraw.cjs",
+    "withdraw:claim": "node frontend/scripts/claim-payout.cjs",
+    "flow:v4": "node frontend/scripts/run-v4-flow.cjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
     "@magicblock-labs/ephemeral-rollups-sdk": "^0.8.3",
+    "@noble/curves": "^1.6.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/wallet-adapter-base": "^0.9.23",
     "@solana/wallet-adapter-react": "^0.15.35",

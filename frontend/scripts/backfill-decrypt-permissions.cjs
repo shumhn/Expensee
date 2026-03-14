@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+if (!process.env.ALLOW_V2) {
+  console.warn('[disabled] backfill-decrypt-permissions.cjs is legacy. Set ALLOW_V2=1 to enable.');
+  process.exit(1);
+}
+
 /**
  * Backfill Inco decrypt permissions for all v2 streams.
  *
