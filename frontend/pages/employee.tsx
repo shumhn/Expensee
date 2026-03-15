@@ -664,6 +664,26 @@ export default function EmployeeV4Page() {
     [signKeeperRevealV4]
   );
 
+  const refreshEmployeeViewAccess = useCallback(async () => {
+    if (!businessPda || employeeIndex === null) {
+      throw new Error('Business and employee index are required.');
+    }
+    return grantEmployeeViewAccessV4(connection, wallet, businessPda, employeeIndex);
+  }, [businessPda, connection, employeeIndex, wallet]);
+
+  const decryptHandlesLocal = useCallback(
+    async (handles: string[]) => {
+      if (!wallet.publicKey) throw new Error('Wallet not connected');
+      if (!wallet.signMessage) throw new Error('Wallet does not support message signing');
+      const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+      return decrypt(handles, {
+        address: wallet.publicKey,
+        signMessage: wallet.signMessage,
+      });
+    },
+    [wallet.publicKey, wallet.signMessage]
+  );
+
   const revealLiveEarnings = useCallback(async () => {
     if (!wallet.publicKey) {
       setError('Connect wallet first.');
@@ -682,11 +702,7 @@ export default function EmployeeV4Page() {
     setError('');
     try {
       const handles = getEmployeeV4DecryptHandles(employee);
-      const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-      const result = await decrypt([handles.salaryHandle, handles.accruedHandle], {
-        address: wallet.publicKey,
-        signMessage: wallet.signMessage,
-      });
+      const result = await decryptHandlesLocal([handles.salaryHandle, handles.accruedHandle]);
       const salary = BigInt(result?.plaintexts?.[0] || '0');
       const accrued = BigInt(result?.plaintexts?.[1] || '0');
       const checkpointTime = employee.lastAccrualTime > 0 ? employee.lastAccrualTime : employee.lastSettleTime;
@@ -700,29 +716,57 @@ export default function EmployeeV4Page() {
     } catch (e: any) {
       const msg = e?.message || 'Failed to reveal live earnings';
       const keeperFallbackEnabled = process.env.NEXT_PUBLIC_KEEPER_SERVER_DECRYPT === 'true';
-      if (keeperFallbackEnabled && isPermissionError(msg)) {
+      if (isPermissionError(msg)) {
         try {
-          const revealed = await revealViaKeeperRelayV4();
-          const salary = BigInt(revealed?.salaryLamportsPerSec || '0');
-          const accrued = BigInt(revealed?.accruedLamportsCheckpoint || '0');
-          const checkpointTime = Number(revealed?.checkpointTime || 0);
+          await refreshEmployeeViewAccess();
+          const handles = getEmployeeV4DecryptHandles(employee);
+          const retried = await decryptHandlesLocal([handles.salaryHandle, handles.accruedHandle]);
+          const salary = BigInt(retried?.plaintexts?.[0] || '0');
+          const accrued = BigInt(retried?.plaintexts?.[1] || '0');
+          const checkpointTime = employee.lastAccrualTime > 0 ? employee.lastAccrualTime : employee.lastSettleTime;
           setRevealed({
             salaryLamportsPerSec: salary,
             accruedLamportsCheckpoint: accrued,
             checkpointTime,
             revealedAt: Math.floor(Date.now() / 1000),
           });
-          setMessage('Live earnings revealed via keeper relay.');
-        } catch (keeperErr: any) {
-          setError(keeperErr?.message || msg);
+          setMessage('View access refreshed.');
+          return;
+        } catch (retryErr: any) {
+          if (keeperFallbackEnabled) {
+            try {
+              const revealed = await revealViaKeeperRelayV4();
+              const salary = BigInt(revealed?.salaryLamportsPerSec || '0');
+              const accrued = BigInt(revealed?.accruedLamportsCheckpoint || '0');
+              const checkpointTime = Number(revealed?.checkpointTime || 0);
+              setRevealed({
+                salaryLamportsPerSec: salary,
+                accruedLamportsCheckpoint: accrued,
+                checkpointTime,
+                revealedAt: Math.floor(Date.now() / 1000),
+              });
+              setMessage('Live earnings revealed via keeper relay.');
+              return;
+            } catch (keeperErr: any) {
+              setError(keeperErr?.message || msg);
+              return;
+            }
+          }
+          setError(retryErr?.message || msg);
+          return;
         }
-      } else {
-        setError(msg);
       }
+      setError(msg);
     } finally {
       setRevealLoading(false);
     }
-  }, [employee, revealViaKeeperRelayV4, wallet.publicKey, wallet.signMessage]);
+  }, [
+    decryptHandlesLocal,
+    employee,
+    refreshEmployeeViewAccess,
+    revealViaKeeperRelayV4,
+    wallet.publicKey,
+  ]);
 
   const generatePayslip = useCallback(async () => {
     if (!wallet.publicKey || !wallet.signMessage) {
@@ -782,19 +826,25 @@ export default function EmployeeV4Page() {
       };
 
       try {
-        const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-        const result = await decrypt(uniqueHandles, {
-          address: wallet.publicKey,
-          signMessage: wallet.signMessage,
-        });
+        const result = await decryptHandlesLocal(uniqueHandles);
         decodePlaintexts(result?.plaintexts || []);
       } catch (e: any) {
         const msg = e?.message || 'Failed to decrypt salary handles';
         const keeperFallbackEnabled = process.env.NEXT_PUBLIC_KEEPER_SERVER_DECRYPT === 'true';
-        if (keeperFallbackEnabled && isPermissionError(msg)) {
-          const keeperRes = await revealHandlesViaKeeperRelayV4(uniqueHandles);
-          decodePlaintexts(keeperRes?.plaintexts || []);
-          note = `${note} (keeper relay)`;
+        if (isPermissionError(msg)) {
+          try {
+            await refreshEmployeeViewAccess();
+            const retried = await decryptHandlesLocal(uniqueHandles);
+            decodePlaintexts(retried?.plaintexts || []);
+          } catch (retryErr: any) {
+            if (keeperFallbackEnabled) {
+              const keeperRes = await revealHandlesViaKeeperRelayV4(uniqueHandles);
+              decodePlaintexts(keeperRes?.plaintexts || []);
+              note = `${note} (keeper relay)`;
+            } else {
+              throw retryErr;
+            }
+          }
         } else {
           throw e;
         }
@@ -1558,6 +1608,9 @@ export default function EmployeeV4Page() {
                     {revealed ? formatTokenAmount(earnedLamportsNow) : '—'}{' '}
                     <span className="text-sm text-gray-600">USDC (confidential)</span>
                   </div>
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    Live estimate · updates every second from last on-chain snapshot
+                  </div>
                   <div className="mt-2 grid gap-1">
                     <div>
                       Rate:{' '}
@@ -1570,16 +1623,18 @@ export default function EmployeeV4Page() {
                         : '—'}
                     </div>
                     <div>
-                      Last settle:{' '}
-                      {employee?.lastSettleTime
-                        ? new Date(employee.lastSettleTime * 1000).toLocaleString()
+                      On-chain snapshot:{' '}
+                      {employee?.lastAccrualTime || employee?.lastSettleTime
+                        ? new Date(
+                            (employee.lastAccrualTime || employee.lastSettleTime) * 1000
+                          ).toLocaleString()
                         : '—'}
                     </div>
                   </div>
                 </div>
                 <div className="text-xs text-gray-500">
-                  If reveal fails, grant view access and try again. Keeper access is optional and enables server
-                  fallback if configured.
+                  If reveal fails, we auto-refresh your access and retry. Keeper access is optional and enables
+                  server fallback if configured.
                 </div>
                 <div className="text-xs text-gray-500">
                   Keeper: {streamConfig?.keeperPubkey ? streamConfig.keeperPubkey.toBase58() : '—'}
