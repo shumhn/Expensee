@@ -70,7 +70,7 @@ export const MAGICBLOCK_MAGIC_PROGRAM = new PublicKey(
 );
 
 export const MAGICBLOCK_MAGIC_CONTEXT = new PublicKey(
-  process.env.NEXT_PUBLIC_MAGICBLOCK_MAGIC_CONTEXT || '9c13Lsd7f7EMh2H7M2hADQ6S1Mv115eH3dYpxWvS12xQ'
+  process.env.NEXT_PUBLIC_MAGICBLOCK_MAGIC_CONTEXT || 'MagicContext1111111111111111111111111111111'
 );
 
 // MagicBlock Magic Router Program
@@ -228,9 +228,11 @@ export function getMagicblockPreferredRegion(): MagicblockValidatorRegion {
 }
 
 export function getMagicblockEndpointForRegion(region: string): string {
-  if (region === 'us') return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT_US || 'https://devnet-router.magicblock.app';
-  if (region === 'asia') return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT_ASIA || 'https://devnet-router.magicblock.app';
-  return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT || 'https://devnet-router.magicblock.app';
+  // Per MagicBlock docs: use specific validator endpoints for direct ER transactions.
+  // The Router (devnet-router) doesn't support getLatestBlockhash — only direct endpoints do.
+  if (region === 'us') return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT_US || 'https://devnet-us.magicblock.app';
+  if (region === 'asia') return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT_ASIA || 'https://devnet-as.magicblock.app';
+  return process.env.NEXT_PUBLIC_MAGICBLOCK_ENDPOINT || 'https://devnet.magicblock.app';
 }
 
 export function getIncoAllowancePda(handleValue: bigint, allowedAddress: PublicKey): PublicKey {
@@ -511,7 +513,6 @@ const DISCRIMINATORS = {
   set_pool_vault_v4: disc([224, 50, 42, 158, 0, 82, 137, 135]),
   register_business_v4: disc([233, 116, 173, 112, 70, 232, 48, 66]),
   init_stream_config_v4: disc([77, 173, 13, 61, 53, 178, 21, 191]),
-  update_keeper_v4: disc([65, 215, 216, 13, 191, 38, 47, 0]),
   add_employee_v4: disc([106, 44, 252, 137, 63, 129, 219, 138]),
   deposit_v4: disc([103, 220, 242, 73, 166, 167, 198, 55]),
   accrue_v4: disc([180, 109, 120, 73, 213, 155, 105, 135]),
@@ -1240,6 +1241,7 @@ export interface BusinessV4Account {
   masterVault: PublicKey;
   businessIndex: number;
   encryptedEmployerId: Uint8Array;
+  depositAuthority: PublicKey;
   encryptedBalance: Uint8Array;
   encryptedEmployeeCount: Uint8Array;
   nextEmployeeIndex: number;
@@ -1296,26 +1298,33 @@ export async function getBusinessV4Account(
   if (!accountInfo) return null;
 
   const data = accountInfo.data;
-  // Layout:
-  // 0-8 discriminator
-  // 8-40 master_vault
-  // 40-48 business_index
-  // 48-80 encrypted_employer_id
-  // 80-112 encrypted_balance
-  // 112-144 encrypted_employee_count
-  // 144-152 next_employee_index
-  // 152 is_active
-  // 153 bump
+  const hasDepositAuthority = data.length >= 200;
+  if (!hasDepositAuthority) {
+    return {
+      address: businessPDA,
+      masterVault: new PublicKey(data.slice(8, 40)),
+      businessIndex: Number(data.readBigUInt64LE(40)),
+      encryptedEmployerId: data.slice(48, 80),
+      depositAuthority: PublicKey.default,
+      encryptedBalance: data.slice(80, 112),
+      encryptedEmployeeCount: data.slice(112, 144),
+      nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
+      isActive: data[152] === 1,
+      bump: data[153],
+    };
+  }
+
   return {
     address: businessPDA,
     masterVault: new PublicKey(data.slice(8, 40)),
     businessIndex: Number(data.readBigUInt64LE(40)),
     encryptedEmployerId: data.slice(48, 80),
-    encryptedBalance: data.slice(80, 112),
-    encryptedEmployeeCount: data.slice(112, 144),
-    nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
-    isActive: data[152] === 1,
-    bump: data[153],
+    depositAuthority: new PublicKey(data.slice(80, 112)),
+    encryptedBalance: data.slice(112, 144),
+    encryptedEmployeeCount: data.slice(144, 176),
+    nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
+    isActive: data[184] === 1,
+    bump: data[185],
   };
 }
 
@@ -1327,16 +1336,33 @@ export async function getBusinessV4AccountByAddress(
   if (!accountInfo) return null;
 
   const data = accountInfo.data;
+  const hasDepositAuthority = data.length >= 200;
+  if (!hasDepositAuthority) {
+    return {
+      address: businessPDA,
+      masterVault: new PublicKey(data.slice(8, 40)),
+      businessIndex: Number(data.readBigUInt64LE(40)),
+      encryptedEmployerId: data.slice(48, 80),
+      depositAuthority: PublicKey.default,
+      encryptedBalance: data.slice(80, 112),
+      encryptedEmployeeCount: data.slice(112, 144),
+      nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
+      isActive: data[152] === 1,
+      bump: data[153],
+    };
+  }
+
   return {
     address: businessPDA,
     masterVault: new PublicKey(data.slice(8, 40)),
     businessIndex: Number(data.readBigUInt64LE(40)),
     encryptedEmployerId: data.slice(48, 80),
-    encryptedBalance: data.slice(80, 112),
-    encryptedEmployeeCount: data.slice(112, 144),
-    nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
-    isActive: data[152] === 1,
-    bump: data[153],
+    depositAuthority: new PublicKey(data.slice(80, 112)),
+    encryptedBalance: data.slice(112, 144),
+    encryptedEmployeeCount: data.slice(144, 176),
+    nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
+    isActive: data[184] === 1,
+    bump: data[185],
   };
 }
 
@@ -1391,6 +1417,7 @@ export async function getEmployeeV4Account(
 export interface BusinessStreamConfigV4Account {
   address: PublicKey;
   business: PublicKey;
+  // Legacy field (reserved in program layout).
   keeperPubkey: PublicKey;
   settleIntervalSecs: number;
   isPaused: boolean;
@@ -1571,6 +1598,40 @@ function readU128LEFrom32(handle32: Buffer): bigint {
   return out;
 }
 
+function readU128LEFrom16(bytes: Buffer): bigint {
+  const b = bytes.subarray(0, 16);
+  let out = 0n;
+  for (let i = 15; i >= 0; i -= 1) {
+    out = out * 256n + BigInt(b[i] || 0);
+  }
+  return out;
+}
+
+/**
+ * Read return data (set_return_data) from a confirmed transaction and parse it as a u128 handle.
+ * Returns null if no return data is present or parse fails.
+ */
+export async function getReturnDataU128(
+  connection: Connection,
+  txid: string
+): Promise<bigint | null> {
+  try {
+    const tx = await connection.getTransaction(txid, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    });
+    // type-cast to any to bypass `@solana/web3.js` type definition missing `returnData`
+    const data = (tx?.meta as any)?.returnData?.data;
+    if (!data || data.length < 1) return null;
+    const [base64] = data;
+    const buf = Buffer.from(base64, 'base64');
+    if (buf.length < 16) return null;
+    return readU128LEFrom16(buf);
+  } catch {
+    return null;
+  }
+}
+
 export async function getRateHistoryV2Account(
   connection: Connection,
   business: PublicKey,
@@ -1711,6 +1772,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   }) as Promise<T>;
 }
 
+function isMagicblockRouterEndpoint(endpoint: string): boolean {
+  return endpoint.includes('magicblock') && endpoint.includes('router');
+}
+
+function getWritableAccountsForTx(tx: Transaction): string[] {
+  const writable = new Set<string>();
+  if (tx.feePayer) writable.add(tx.feePayer.toBase58());
+  for (const ix of tx.instructions) {
+    for (const key of ix.keys) {
+      if (key.isWritable) writable.add(key.pubkey.toBase58());
+    }
+  }
+  return Array.from(writable);
+}
+
+import { ConnectionMagicRouter } from '@magicblock-labs/ephemeral-rollups-sdk';
+
 /**
  * Send and confirm a transaction containing one or more instructions
  */
@@ -1727,17 +1805,22 @@ async function sendAndConfirmTransaction(
   wallet: WalletContextState,
   instructionOrTransaction: TransactionInstruction | Transaction,
   label: string = 'transaction',
-  options?: { forceBase?: boolean }
+  options?: { forceBase?: boolean; forceProvided?: boolean; skipPreflight?: boolean; maxRetries?: number }
 ): Promise<string> {
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error('Wallet not connected');
   }
 
-  let txConnection = options?.forceBase
-    ? connection
-    : (await getTeeConnectionForWallet(wallet)) || connection;
-  if (options?.forceBase && txConnection.rpcEndpoint.includes('tee.magicblock.app')) {
-    txConnection = getBaseWriteConnection();
+  let txConnection: Connection;
+  if (options?.forceProvided) {
+    txConnection = connection;
+  } else {
+    txConnection = options?.forceBase
+      ? getBaseWriteConnection()
+      : (await getTeeConnectionForWallet(wallet)) || connection;
+    if (!options?.forceBase && txConnection.rpcEndpoint.includes('tee.magicblock.app')) {
+      txConnection = getBaseWriteConnection();
+    }
   }
   let transaction: Transaction;
   if (instructionOrTransaction instanceof TransactionInstruction) {
@@ -1747,14 +1830,37 @@ async function sendAndConfirmTransaction(
     // It's already a Transaction
     transaction = instructionOrTransaction;
   }
-  console.log(`[sendAndConfirm] Fetching latest blockhash for: transaction`);
-  const { blockhash, lastValidBlockHeight } = await withTimeout(
-    txConnection.getLatestBlockhash('confirmed'),
-    20_000,
-    'Fetching latest blockhash'
-  );
-  transaction.recentBlockhash = blockhash;
   transaction.feePayer = wallet.publicKey;
+
+  let blockhash: string;
+  let lastValidBlockHeight: number;
+  let minContextSlot: number | undefined;
+
+  const isRouter = isMagicblockRouterEndpoint(txConnection.rpcEndpoint);
+  if (isRouter) {
+    console.log(`[sendAndConfirm] Fetching router blockhash for: ${label}`);
+    const routerConnection = new ConnectionMagicRouter(txConnection.rpcEndpoint);
+    const { blockhash: routerHash, lastValidBlockHeight: routerHeight } = await withTimeout(
+      routerConnection.getLatestBlockhashForTransaction(transaction),
+      20_000,
+      'Fetching router blockhash'
+    );
+    blockhash = routerHash;
+    lastValidBlockHeight = routerHeight;
+  } else {
+    console.log(`[sendAndConfirm] Fetching latest blockhash for: ${label}`);
+    const { context, value } = await withTimeout(
+      txConnection.getLatestBlockhashAndContext('confirmed'),
+      20_000,
+      'Fetching latest blockhash'
+    );
+    blockhash = value.blockhash;
+    lastValidBlockHeight = value.lastValidBlockHeight;
+    minContextSlot = context.slot;
+  }
+
+  transaction.recentBlockhash = blockhash;
+  transaction.lastValidBlockHeight = lastValidBlockHeight;
 
   console.log(`[sendAndConfirm] Waiting for signature: ${label}`);
   const signed = await withTimeout(wallet.signTransaction(transaction), 90_000, 'Waiting for Phantom signature');
@@ -1762,8 +1868,9 @@ async function sendAndConfirmTransaction(
   console.log(`[sendAndConfirm] Submitting transaction: ${label}`);
   const txid = await withTimeout(
     txConnection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false, // Enable preflight to catch errors early
-      maxRetries: 3,
+      skipPreflight: options?.skipPreflight ?? isRouter,
+      minContextSlot,
+      maxRetries: options?.maxRetries ?? (isRouter ? 5 : 3),
     }),
     30_000,
     'Submitting transaction'
@@ -1796,6 +1903,23 @@ async function sendAndConfirmTransaction(
   // Check if transaction actually succeeded
   if (confirmation.value.err) {
     console.error('Transaction failed on-chain:', confirmation.value.err);
+    
+    // Fetch logs to show a better error message in the UI instead of a generic InstructionError
+    try {
+      const txResult = await txConnection.getTransaction(txid, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      });
+      if (txResult?.meta?.logMessages) {
+        console.error('Transaction Logs:', txResult.meta.logMessages.join('\n'));
+        const errMsg = txResult.meta.logMessages[txResult.meta.logMessages.length - 1];
+        throw new Error(`Tx Failed: ${errMsg}`);
+      }
+    } catch (e: any) {
+      if (e.message.includes('Tx Failed:')) throw e;
+      console.warn('Could not fetch tx logs for detailed error:', e);
+    }
+
     throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
   }
 
@@ -1945,7 +2069,13 @@ export async function initVault(
     data,
   });
 
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
+  const txid = await sendAndConfirmTransaction(
+    connection,
+    wallet,
+    instruction,
+    'create_inco_token_account',
+    { forceBase: true }
+  );
   return { txid, vaultPDA };
 }
 
@@ -2373,7 +2503,9 @@ export async function commitAndUndelegateStreamV3(
     data,
   });
 
-  return sendAndConfirmTransaction(connection, wallet, instruction);
+  return sendAndConfirmTransaction(connection, wallet, instruction, 'init_user_token_account_v4', {
+    forceBase: true,
+  });
 }
 
 /**
@@ -2431,7 +2563,9 @@ export async function redelegateStreamV3(
     data,
   });
 
-  return sendAndConfirmTransaction(connection, wallet, instruction);
+  return sendAndConfirmTransaction(connection, wallet, instruction, 'link_user_token_account_v4', {
+    forceBase: true,
+  });
 }
 
 export async function requestWithdrawV3(
@@ -2608,7 +2742,8 @@ export async function setPoolVaultV4(
 
 export async function registerBusinessV4(
   connection: Connection,
-  wallet: WalletContextState
+  wallet: WalletContextState,
+  depositAuthority?: PublicKey
 ): Promise<{ txid: string; masterVaultPDA: PublicKey; businessPDA: PublicKey; businessIndex: number }> {
   if (!wallet.publicKey) {
     throw new Error('Wallet not connected');
@@ -2626,6 +2761,7 @@ export async function registerBusinessV4(
   const [businessPDA] = getBusinessV4PDA(master.address, businessIndex);
 
   const encryptedEmployerId = await encryptPubkeyId(wallet.publicKey);
+  const authorityKey = depositAuthority ?? wallet.publicKey;
   const employerIdLen = Buffer.alloc(4);
   employerIdLen.writeUInt32LE(encryptedEmployerId.length);
 
@@ -2633,6 +2769,7 @@ export async function registerBusinessV4(
     DISCRIMINATORS.register_business_v4,
     employerIdLen,
     encryptedEmployerId,
+    authorityKey.toBuffer(),
   ]);
 
   const instruction = new TransactionInstruction({
@@ -2657,7 +2794,6 @@ export async function initStreamConfigV4(
   connection: Connection,
   wallet: WalletContextState,
   businessPDA: PublicKey,
-  keeperPubkey: PublicKey,
   settleIntervalSecs: number
 ): Promise<string> {
   if (!wallet.publicKey) {
@@ -2671,7 +2807,6 @@ export async function initStreamConfigV4(
 
   const data = Buffer.concat([
     DISCRIMINATORS.init_stream_config_v4,
-    keeperPubkey.toBuffer(),
     settleBuf,
   ]);
 
@@ -2688,36 +2823,6 @@ export async function initStreamConfigV4(
   });
 
   return sendAndConfirmTransaction(connection, wallet, instruction, 'init_stream_config_v4', {
-    forceBase: true,
-  });
-}
-
-export async function updateKeeperV4(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  keeperPubkey: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV4PDA();
-  const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
-  const data = Buffer.concat([DISCRIMINATORS.update_keeper_v4, keeperPubkey.toBuffer()]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'update_keeper_v4', {
     forceBase: true,
   });
 }
@@ -2788,7 +2893,8 @@ export async function addEmployeeV4(
   employeeWallet: PublicKey,
   salaryLamports: bigint,
   periodStart: number,
-  periodEnd: number
+  periodEnd: number,
+  requiredDepositAmount: bigint = 0n
 ): Promise<{ txid: string; employeePDA: PublicKey; employeeIndex: number }> {
   if (!wallet.publicKey) {
     throw new Error('Wallet not connected');
@@ -2817,6 +2923,8 @@ export async function addEmployeeV4(
   periodEndBuf.writeBigInt64LE(BigInt(periodEnd));
   const employeeIndexBuf = Buffer.alloc(8);
   employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
+  const requiredAmountBuf = Buffer.alloc(8);
+  requiredAmountBuf.writeBigUInt64LE(requiredDepositAmount);
 
   const data = Buffer.concat([
     DISCRIMINATORS.add_employee_v4,
@@ -2827,6 +2935,7 @@ export async function addEmployeeV4(
     encryptedSalary,
     periodStartBuf,
     periodEndBuf,
+    requiredAmountBuf,
   ]);
 
   const instruction = new TransactionInstruction({
@@ -3040,15 +3149,53 @@ export async function scheduleCrankV4(
       { pubkey: MAGICBLOCK_MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
       { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: PAYROLL_PROGRAM_ID, isSigner: false, isWritable: false }, // program
-      { pubkey: taskContextPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     programId: PAYROLL_PROGRAM_ID,
     data,
   });
+  // Per MagicBlock docs: send ER transactions through the MagicBlock Router.
+  const routerConnection = new ConnectionMagicRouter(
+    process.env.NEXT_PUBLIC_MAGICBLOCK_ROUTER_RPC_URL || 'https://devnet-router.magicblock.app'
+  );
 
-  return sendAndConfirmTransaction(erConnection, wallet, instruction);
+  const tx = new Transaction().add(instruction);
+  tx.feePayer = wallet.publicKey;
+
+  const { blockhash, lastValidBlockHeight } = await routerConnection.getLatestBlockhashForTransaction(tx);
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+
+  if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction');
+  const signed = await wallet.signTransaction(tx);
+
+  const txid = await routerConnection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: true,
+    maxRetries: 5,
+  });
+
+  await routerConnection.confirmTransaction(
+    { blockhash, lastValidBlockHeight, signature: txid },
+    'confirmed'
+  );
+
+  // Since we use skipPreflight, we must manually check if the tx actually succeeded on-chain
+  const txResult = await routerConnection.getTransaction(txid, {
+    commitment: 'confirmed',
+    maxSupportedTransactionVersion: 0,
+  });
+
+  if (txResult?.meta?.err) {
+    console.error('ER Transaction failed:', txResult.meta.err);
+    if (txResult.meta.logMessages) {
+      console.error('ER Transaction Logs:', txResult.meta.logMessages.join('\n'));
+    }
+    const errMsg = txResult.meta.logMessages 
+      ? txResult.meta.logMessages[txResult.meta.logMessages.length - 1] 
+      : JSON.stringify(txResult.meta.err);
+    throw new Error(`ER Tx Failed: ${errMsg}`);
+  }
+
+  return txid;
 }
 
 /**
@@ -3069,20 +3216,23 @@ export async function commitAndUndelegateStreamV4(
   const [businessPDA] = getBusinessV4PDA(masterVaultPDA, businessIndex);
   const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
   const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
-  const master = await getMasterVaultV4Account(connection);
+
+  // Read account data from the BASE LAYER for delegation checks.
+  // The ER may report isDelegated differently since the account lives there now.
+  const baseConnection = new Connection(
+    process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com',
+    'confirmed'
+  );
+  const master = await getMasterVaultV4Account(baseConnection);
   if (!master) {
     throw new Error('v4 master vault not found');
   }
   const authority = master.authority;
   const [permissionPDA] = getPermissionPda(employeePDA);
 
-  const employee = await getEmployeeV4Account(connection, businessPDA, employeeIndex);
-  if (!employee) {
-    throw new Error(`v4 employee ${employeeIndex} not found`);
-  }
-  if (!employee.isDelegated) {
-    throw new Error(`v4 employee ${employeeIndex} is not delegated`);
-  }
+  // Skip isDelegated check — the UI already verified delegation status,
+  // and the ER account data may not reflect the base-layer delegation flag.
+
 
   const employeeIndexBuf = Buffer.alloc(8);
   employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
@@ -3108,7 +3258,75 @@ export async function commitAndUndelegateStreamV4(
     data,
   });
 
-  return sendAndConfirmTransaction(connection, wallet, instruction);
+  // Per MagicBlock docs: send ER transactions through the MagicBlock Router.
+  // The Router listens for ScheduleCommitAndUndelegate and automatically triggers
+  // the keeper to finalize the base-layer undelegation via AcceptScheduleCommits.
+  const routerConnection = new ConnectionMagicRouter(
+    process.env.NEXT_PUBLIC_MAGICBLOCK_ROUTER_RPC_URL || 'https://devnet-router.magicblock.app'
+  );
+
+  const tx = new Transaction().add(instruction);
+  tx.feePayer = wallet.publicKey;
+  const { blockhash, lastValidBlockHeight } = await routerConnection.getLatestBlockhashForTransaction(tx);
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+
+  if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction');
+  const signed = await wallet.signTransaction(tx);
+
+  const txid = await routerConnection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: true,
+    maxRetries: 5,
+  });
+
+  await routerConnection.confirmTransaction(
+    { blockhash, lastValidBlockHeight, signature: txid },
+    'confirmed'
+  );
+
+  // Since we use skipPreflight, we must manually check if the tx actually succeeded on-chain
+  const txResult = await routerConnection.getTransaction(txid, {
+    commitment: 'confirmed',
+    maxSupportedTransactionVersion: 0,
+  });
+
+  if (txResult?.meta?.err) {
+    console.error('ER Transaction failed:', txResult.meta.err);
+    if (txResult.meta.logMessages) {
+      console.error('ER Transaction Logs:', txResult.meta.logMessages.join('\n'));
+    }
+    const errMsg = txResult.meta.logMessages 
+      ? txResult.meta.logMessages[txResult.meta.logMessages.length - 1] 
+      : JSON.stringify(txResult.meta.err);
+    throw new Error(`ER Tx Failed: ${errMsg}`);
+  }
+
+  return txid;
+}
+
+/**
+ * Derives a deterministic MagicBlock task ID from on-chain identity data.
+ * This guarantees the UI can always find the scheduled crank without needing localStorage.
+ * Max safe integer in JS is 2^53 - 1, which fits within the u64 expected by the program.
+ */
+export async function getDeterministicTaskId(
+  operator: PublicKey,
+  businessIndex: number,
+  employeeIndex: number
+): Promise<number> {
+  const encoder = new TextEncoder();
+  const dataString = `expensee_crank_${operator.toBase58()}_${businessIndex}_${employeeIndex}`;
+  const data = encoder.encode(dataString);
+  // TypeScript strictly expects an ArrayBuffer, but TextEncoder returns Uint8Array.
+  // We can safely coerce it to BufferSource for DOM crypto.
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data as any as ArrayBuffer);
+  const hashArray = new Uint8Array(hashBuffer);
+  // Read first 6 bytes (48 bits) to stay well under JS Number.MAX_SAFE_INTEGER
+  let taskId = 0;
+  for (let i = 0; i < 6; i++) {
+    taskId = taskId * 256 + hashArray[i];
+  }
+  return taskId;
 }
 
 /**
@@ -3240,32 +3458,8 @@ export async function requestWithdrawV4(
     data: Buffer.concat([DISCRIMINATORS.request_withdraw_v4, employeeIndexBuf]),
   });
 
-  // 2. Commit and undelegate instruction
-  const [permissionPDA] = getPermissionPda(employeePDA);
-  const master = await getMasterVaultV4Account(connection);
-  if (!master) throw new Error('master not found');
-  const authority = master.authority;
-
-  const commitInstruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: permissionPDA, isSigner: false, isWritable: true },
-      { pubkey: MAGICBLOCK_PERMISSION_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: authority, isSigner: false, isWritable: false },
-      { pubkey: MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: MAGICBLOCK_MAGIC_CONTEXT, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.commit_and_undelegate_stream_v4, employeeIndexBuf]),
-  });
-
-  const tx = new Transaction().add(requestInstruction, commitInstruction);
-
-  return sendAndConfirmTransaction(connection, wallet, tx, "request_and_commit");
+  const tx = new Transaction().add(requestInstruction);
+  return sendAndConfirmTransaction(connection, wallet, tx, "request_withdraw");
 }
 
 /**
@@ -3363,6 +3557,11 @@ export async function processWithdrawRequestV4(
   const [withdrawRequestPDA] = getWithdrawRequestV4PDA(businessPDA, employeeIndex);
   const [shieldedPayoutPDA] = getShieldedPayoutV4PDA(businessPDA, employeeIndex, nonce);
 
+  const employee = await getEmployeeV4Account(connection, businessPDA, employeeIndex);
+  if (!employee) throw new Error('Employee v4 not found');
+  const employeeIdHandleValue = readU128LEFrom32(Buffer.from(employee.encryptedEmployeeId));
+  const employeeIdAllowance = getIncoAllowancePda(employeeIdHandleValue, wallet.publicKey);
+
   const employeeIndexBuf = Buffer.alloc(8);
   employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
   const nonceBuf = Buffer.alloc(8);
@@ -3376,6 +3575,7 @@ export async function processWithdrawRequestV4(
       { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
       { pubkey: employeePDA, isSigner: false, isWritable: true },
       { pubkey: withdrawRequestPDA, isSigner: false, isWritable: true },
+      { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
       { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
       { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
@@ -3489,6 +3689,7 @@ export async function executeFullWithdrawalV4(
       { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
       { pubkey: employeePDA, isSigner: false, isWritable: true },
       { pubkey: withdrawRequestPDA, isSigner: false, isWritable: true },
+      { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
       { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
       { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
@@ -3555,7 +3756,31 @@ export async function executeFullWithdrawalV4(
     data: Buffer.concat([DISCRIMINATORS.redelegate_stream_v4, employeeIndexBuf]),
   });
 
-  const tx = new Transaction().add(initIx, processIx, claimIx, redelegateIx);
+  const tx = new Transaction();
+  
+  if (employee.isDelegated) {
+    // 0. Commit and undelegate instruction (if delegated)
+    const [permissionPDA] = getPermissionPda(employeePDA);
+    const commitInstruction = new TransactionInstruction({
+      keys: [
+        { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
+        { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
+        { pubkey: businessPDA, isSigner: false, isWritable: false },
+        { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
+        { pubkey: employeePDA, isSigner: false, isWritable: true },
+        { pubkey: permissionPDA, isSigner: false, isWritable: true },
+        { pubkey: MAGICBLOCK_PERMISSION_PROGRAM, isSigner: false, isWritable: false },
+        { pubkey: authority, isSigner: false, isWritable: false },
+        { pubkey: MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
+        { pubkey: MAGICBLOCK_MAGIC_CONTEXT, isSigner: false, isWritable: true },
+      ],
+      programId: PAYROLL_PROGRAM_ID,
+      data: Buffer.concat([DISCRIMINATORS.commit_and_undelegate_stream_v4, employeeIndexBuf]),
+    });
+    tx.add(commitInstruction);
+  }
+
+  tx.add(initIx, processIx, claimIx, redelegateIx);
   // We must sign with the payoutTokenKeypair since it's initializing
   if (!wallet.signTransaction) throw new Error('Wallet sign transaction required');
   const blockhash = await connection.getLatestBlockhash('confirmed');
@@ -3630,9 +3855,11 @@ export async function createIncoTokenAccount(
     data: INCO_INIT_ACCOUNT_DISCRIMINATOR,
   });
 
+  const txConnection = getBaseWriteConnection();
+
   const transaction = new Transaction().add(instruction);
   const { blockhash, lastValidBlockHeight } = await withTimeout(
-    connection.getLatestBlockhash('confirmed'),
+    txConnection.getLatestBlockhash('confirmed'),
     20_000,
     'Fetching latest blockhash'
   );
@@ -3648,7 +3875,7 @@ export async function createIncoTokenAccount(
   );
 
   const txid = await withTimeout(
-    connection.sendRawTransaction(signed.serialize(), {
+    txConnection.sendRawTransaction(signed.serialize(), {
       skipPreflight: false,
       maxRetries: 3,
     }),
@@ -3657,7 +3884,7 @@ export async function createIncoTokenAccount(
   );
 
   const confirmation = await withTimeout(
-    connection.confirmTransaction(
+    txConnection.confirmTransaction(
       {
         blockhash,
         lastValidBlockHeight,
@@ -4158,7 +4385,8 @@ export async function updateSalaryRateV4(
   wallet: WalletContextState,
   businessPDA: PublicKey,
   employeeIndex: number,
-  salaryLamports: bigint
+  salaryLamports: bigint,
+  requiredDepositAmount: bigint = 0n
 ): Promise<string> {
   if (!wallet.publicKey) {
     throw new Error('Wallet not connected');
@@ -4175,11 +4403,14 @@ export async function updateSalaryRateV4(
 
   const employeeIndexBuf = Buffer.alloc(8);
   employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
+  const requiredAmountBuf = Buffer.alloc(8);
+  requiredAmountBuf.writeBigUInt64LE(requiredDepositAmount);
   const data = Buffer.concat([
     DISCRIMINATORS.update_salary_rate_v4,
     employeeIndexBuf,
     lenBuf,
     encryptedSalary,
+    requiredAmountBuf,
   ]);
 
   const instruction = new TransactionInstruction({

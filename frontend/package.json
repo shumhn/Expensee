@@ -13,7 +13,8 @@
   "dependencies": {
     "@inco/solana-sdk": "^0.0.2",
     "@magicblock-console/core": "^0.1.7",
-    "@magicblock-labs/ephemeral-rollups-sdk": "^0.8.5",
+    "@magicblock-labs/ephemeral-rollups-kit": "^0.8.8",
+    "@magicblock-labs/ephemeral-rollups-sdk": "^0.8.8",
     "@phosphor-icons/react": "^2.1.10",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",
