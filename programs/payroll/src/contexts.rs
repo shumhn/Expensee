@@ -603,35 +603,6 @@ pub struct InitStreamConfigV4<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UpdateKeeperV4<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    #[account(
-        seeds = [MASTER_VAULT_V4_SEED],
-        bump = master_vault_v4.bump
-    )]
-    pub master_vault_v4: Account<'info, MasterVaultV4>,
-
-    #[account(
-        seeds = [
-            BUSINESS_V4_SEED,
-            master_vault_v4.key().as_ref(),
-            &business_v4.business_index.to_le_bytes()
-        ],
-        bump = business_v4.bump
-    )]
-    pub business_v4: Account<'info, BusinessEntryV4>,
-
-    #[account(
-        mut,
-        seeds = [STREAM_CONFIG_V4_SEED, business_v4.key().as_ref()],
-        bump = stream_config_v4.bump
-    )]
-    pub stream_config_v4: Account<'info, BusinessStreamConfigV4>,
-}
-
-#[derive(Accounts)]
 #[instruction(employee_index: u64)]
 pub struct AddEmployeeV4<'info> {
     #[account(mut)]
@@ -992,6 +963,9 @@ pub struct ProcessWithdrawRequestV4<'info> {
         bump = withdraw_request_v4.bump
     )]
     pub withdraw_request_v4: Account<'info, WithdrawRequestV4>,
+
+    /// CHECK: Inco allowance PDA for employee auth handle (required when caller is not keeper).
+    pub employee_id_allowance_account: AccountInfo<'info>,
 
     #[account(
         init,
@@ -1382,15 +1356,6 @@ pub struct ScheduleCrankV4<'info> {
     /// CHECK: AccountInfo to avoid Anchor re-serializing stale data after CPI
     #[account(mut)]
     pub employee_stream: AccountInfo<'info>,
-
-    /// CHECK: used for CPI for the crank target instruction
-    pub program: AccountInfo<'info>,
-
-    /// CHECK: MagicBlock task context PDA (derived from task_id)
-    #[account(mut)]
-    pub task_context: AccountInfo<'info>,
-
-    pub system_program: Program<'info, System>,
 }
 
 // ============================================================

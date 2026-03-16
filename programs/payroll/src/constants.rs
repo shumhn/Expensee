@@ -26,6 +26,9 @@ pub const TEE_VALIDATOR: &str = "MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e";
 /// MagicBlock Permission Program (ACL) - Devnet
 pub const MAGICBLOCK_PERMISSION_PROGRAM: &str = "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1";
 
+/// MagicBlock Delegation Program - Devnet
+pub const MAGICBLOCK_DELEGATION_PROGRAM: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
+
 /// MagicBlock Magic Router Program
 pub use ephemeral_rollups_sdk::consts::MAGIC_PROGRAM_ID;
 

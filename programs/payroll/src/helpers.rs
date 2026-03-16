@@ -108,6 +108,9 @@ pub fn inco_sighash(name: &str) -> Result<[u8; 8]> {
         "e_mul" => Ok([0xe5, 0x99, 0xf5, 0x11, 0x5f, 0x94, 0x3d, 0xf7]),
         "e_add" => Ok([0x14, 0x53, 0x12, 0xa7, 0x78, 0x21, 0xd1, 0xee]),
         "e_sub" => Ok([0xbb, 0x0b, 0x91, 0x1e, 0x32, 0x36, 0x3a, 0xe4]),
+        "e_ge"  => Ok([0x81, 0xc4, 0x77, 0x65, 0x51, 0x6c, 0x45, 0xce]),
+        "e_lt"  => Ok([0xb9, 0xcd, 0x51, 0xb0, 0x8b, 0x1d, 0xf5, 0x1e]),
+        "e_select" => Ok([0xb3, 0xf5, 0x86, 0x85, 0xae, 0xb1, 0xcb, 0xfd]),
         _ => Err(PayrollError::InvalidCiphertext.into()),
     }
 }
@@ -233,6 +236,79 @@ pub fn inco_mul_u128<'info>(
     signer_seeds: Option<&[&[&[u8]]]>,
 ) -> Result<u128> {
     inco_binary_op_u128(signer, inco_lightning_program, "e_mul", lhs, rhs, 0, signer_seeds)
+}
+
+/// Invoke an Inco Lightning comparison operation (e_ge, e_lt, etc.)
+/// Returns an encrypted boolean handle (u128).
+pub fn inco_comparison_op_u128<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    op_name: &str,
+    lhs: u128,
+    rhs: u128,
+    scalar_byte: u8,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    let mut data = Vec::with_capacity(8 + 16 + 16 + 1);
+    data.extend_from_slice(&inco_sighash(op_name)?);
+    data.extend_from_slice(&lhs.to_le_bytes());
+    data.extend_from_slice(&rhs.to_le_bytes());
+    data.push(scalar_byte);
+
+    let ix = Instruction {
+        program_id: INCO_LIGHTNING_ID,
+        accounts: vec![AccountMeta::new(signer.key(), true)],
+        data,
+    };
+
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&ix, &[signer.clone(), inco_lightning_program.clone()], seeds)?,
+        None => invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?,
+    }
+    read_inco_u128_return()
+}
+
+/// e_ge: encrypted greater-than-or-equal comparison.
+/// Returns an ebool handle (stored as u128).
+pub fn inco_e_ge<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    lhs: u128,
+    rhs: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    inco_comparison_op_u128(signer, inco_lightning_program, "e_ge", lhs, rhs, 0, signer_seeds)
+}
+
+/// e_select: encrypted conditional select.
+/// Returns if_true when condition is true, if_false otherwise.
+/// condition is an ebool handle, if_true/if_false are euint128 handles.
+pub fn inco_e_select<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    condition: u128,
+    if_true: u128,
+    if_false: u128,
+    signer_seeds: Option<&[&[&[u8]]]>,
+) -> Result<u128> {
+    let mut data = Vec::with_capacity(8 + 16 + 16 + 16 + 1);
+    data.extend_from_slice(&inco_sighash("e_select")?);
+    data.extend_from_slice(&condition.to_le_bytes());
+    data.extend_from_slice(&if_true.to_le_bytes());
+    data.extend_from_slice(&if_false.to_le_bytes());
+    data.push(0); // scalar_byte
+
+    let ix = Instruction {
+        program_id: INCO_LIGHTNING_ID,
+        accounts: vec![AccountMeta::new(signer.key(), true)],
+        data,
+    };
+
+    match signer_seeds {
+        Some(seeds) => invoke_signed(&ix, &[signer.clone(), inco_lightning_program.clone()], seeds)?,
+        None => invoke(&ix, &[signer.clone(), inco_lightning_program.clone()])?,
+    }
+    read_inco_u128_return()
 }
 
 // ============================================================

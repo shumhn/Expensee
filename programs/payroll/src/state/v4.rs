@@ -65,6 +65,9 @@ pub struct BusinessEntryV4 {
     /// ENCRYPTED employer ID (hash of pubkey).
     pub encrypted_employer_id: EncryptedHandle,
 
+    /// Authority allowed to manage this business (deposit, config, add employee).
+    pub deposit_authority: Pubkey,
+
     /// ENCRYPTED business balance (pooled ledger entry).
     pub encrypted_balance: EncryptedHandle,
 
@@ -86,6 +89,7 @@ impl BusinessEntryV4 {
         32 +                     // master_vault
         8 +                      // business_index
         32 +                     // encrypted_employer_id
+        32 +                     // deposit_authority
         32 +                     // encrypted_balance
         32 +                     // encrypted_employee_count
         8 +                      // next_employee_index
@@ -184,8 +188,8 @@ impl RateHistoryV4 {
 pub struct BusinessStreamConfigV4 {
     /// Parent business entry.
     pub business: Pubkey,
-    /// Authorized keeper for accrual/settlement operations.
-    pub keeper_pubkey: Pubkey,
+    /// Reserved legacy field (was keeper pubkey in earlier versions).
+    pub reserved_authority: [u8; 32],
     /// Auto-settlement cadence in seconds.
     pub settle_interval_secs: u64,
     /// Global pause flag.
@@ -199,7 +203,7 @@ pub struct BusinessStreamConfigV4 {
 impl BusinessStreamConfigV4 {
     pub const LEN: usize = 8 +  // discriminator
         32 +                     // business
-        32 +                     // keeper_pubkey
+        32 +                     // reserved_authority
         8 +                      // settle_interval_secs
         1 +                      // is_paused
         1 +                      // pause_reason

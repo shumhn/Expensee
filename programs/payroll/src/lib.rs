@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 
 // MagicBlock Ephemeral Rollups SDK
 use ephemeral_rollups_sdk::anchor::ephemeral;
+use anchor_lang::solana_program::instruction::{Instruction, AccountMeta};
+use magicblock_magic_program_api::instruction::MagicBlockInstruction;
 use ephemeral_rollups_sdk::access_control::instructions::{
     CommitAndUndelegatePermissionCpiBuilder,
     CreatePermissionCpiBuilder,
@@ -77,6 +79,10 @@ macro_rules! privacy_emit {
 
 fn magicblock_permission_program() -> Pubkey {
     Pubkey::try_from(MAGICBLOCK_PERMISSION_PROGRAM).unwrap_or(Pubkey::default())
+}
+
+fn magicblock_delegation_program() -> Pubkey {
+    Pubkey::try_from(MAGICBLOCK_DELEGATION_PROGRAM).unwrap_or(Pubkey::default())
 }
 
 fn derive_permission_pda(permissioned_account: &Pubkey) -> (Pubkey, u8) {
@@ -282,10 +288,17 @@ pub mod payroll {
     pub fn register_business_v4(
         ctx: Context<RegisterBusinessV4>,
         encrypted_employer_id: Vec<u8>,
+        deposit_authority: Pubkey,
     ) -> Result<()> {
         require!(
             !encrypted_employer_id.is_empty() && encrypted_employer_id.len() <= MAX_CIPHERTEXT_BYTES,
             PayrollError::InvalidCiphertext
+        );
+        require!(deposit_authority != Pubkey::default(), PayrollError::Unauthorized);
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            deposit_authority,
+            PayrollError::Unauthorized
         );
 
         let master = &mut ctx.accounts.master_vault_v4;
@@ -307,6 +320,7 @@ pub mod payroll {
         business.next_employee_index = 0;
         business.is_active = true;
         business.bump = ctx.bumps.business_v4;
+        business.deposit_authority = deposit_authority;
 
         let employer_handle = inco_new_euint128(
             &signer,
@@ -335,24 +349,27 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Initialize v4 stream config (keeper + cadence).
+    /// Initialize v4 stream config (withdrawal cooldown).
     pub fn init_stream_config_v4(
         ctx: Context<InitStreamConfigV4>,
-        keeper_pubkey: Pubkey,
         settle_interval_secs: u64,
     ) -> Result<()> {
         require!(
             settle_interval_secs >= MIN_SETTLE_INTERVAL_SECS,
             PayrollError::InvalidSettleInterval
         );
-        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
 
         let master = &ctx.accounts.master_vault_v4;
         require!(master.is_active, PayrollError::Unauthorized);
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            ctx.accounts.business_v4.deposit_authority,
+            PayrollError::Unauthorized
+        );
 
         let config = &mut ctx.accounts.stream_config_v4;
         config.business = ctx.accounts.business_v4.key();
-        config.keeper_pubkey = keeper_pubkey;
+        config.reserved_authority = [0u8; 32];
         config.settle_interval_secs = settle_interval_secs;
         config.is_paused = false;
         config.pause_reason = PAUSE_REASON_NONE;
@@ -362,23 +379,19 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Update v4 keeper public key.
-    pub fn update_keeper_v4(
-        ctx: Context<UpdateKeeperV4>,
-        keeper_pubkey: Pubkey,
-    ) -> Result<()> {
-        let master = &ctx.accounts.master_vault_v4;
-        require!(master.is_active, PayrollError::Unauthorized);
-        require!(keeper_pubkey != Pubkey::default(), PayrollError::InvalidKeeper);
-
-        let config = &mut ctx.accounts.stream_config_v4;
-        config.keeper_pubkey = keeper_pubkey;
-
-        privacy_msg!("✅ v4 keeper updated");
-        Ok(())
-    }
-
-    /// Add a v4 employee (pooled vault ledger).
+    /// Add a v4 employee (pooled vault ledger) with private solvency check.
+    ///
+    /// The `required_deposit_amount` parameter specifies the minimum balance the
+    /// business vault must hold (e.g. salary × contract duration). The check is
+    /// performed entirely on encrypted values using Inco Lightning's `e_ge` and
+    /// `e_select` — the actual balance is never revealed.
+    ///
+    /// If `balance >= required`: the employee is created with the requested salary.
+    /// If `balance < required`:  the employee is created but salary is set to 0
+    ///                           (effectively a no-op stream until more funds arrive).
+    ///
+    /// The encrypted boolean result (ebool handle) is returned via `set_return_data`
+    /// so the frontend can optionally decrypt it for UI feedback.
     pub fn add_employee_v4(
         ctx: Context<AddEmployeeV4>,
         employee_index: u64,
@@ -386,6 +399,7 @@ pub mod payroll {
         encrypted_salary_rate: Vec<u8>,
         period_start: i64,
         period_end: i64,
+        required_deposit_amount: u64,
     ) -> Result<()> {
         require!(
             !encrypted_employee_id.is_empty() && encrypted_employee_id.len() <= MAX_CIPHERTEXT_BYTES,
@@ -402,6 +416,11 @@ pub mod payroll {
 
         let master = &mut ctx.accounts.master_vault_v4;
         require!(master.is_active, PayrollError::Unauthorized);
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            ctx.accounts.business_v4.deposit_authority,
+            PayrollError::Unauthorized
+        );
 
         let business = &mut ctx.accounts.business_v4;
         require!(
@@ -435,12 +454,46 @@ pub mod payroll {
             0, None)?;
         employee.encrypted_employee_id = u128_to_handle(employee_id_handle);
 
+        // Register the requested salary as an encrypted handle.
         let salary_handle = inco_new_euint128(
             &signer,
             &inco_lightning_program,
             encrypted_salary_rate,
             0, None)?;
-        employee.encrypted_salary_rate = u128_to_handle(salary_handle);
+
+        // ── Private solvency check (Inco Lightning FHE) ──────────────
+        // 1. Encrypt the required deposit amount as a euint128.
+        let required_handle = inco_as_euint128(
+            &signer,
+            &inco_lightning_program,
+            required_deposit_amount as u128,
+            None,
+        )?;
+
+        // 2. Compare: is_solvent = e_ge(business.encrypted_balance, required)
+        let balance_handle = handle_to_u128(&business.encrypted_balance);
+        let is_solvent = inco_e_ge(
+            &signer,
+            &inco_lightning_program,
+            balance_handle,
+            required_handle,
+            None,
+        )?;
+
+        // 3. Gate: final_salary = e_select(is_solvent, salary, 0)
+        //    If solvent → use the requested salary.
+        //    If insolvent → salary becomes encrypted 0 (no-op stream).
+        let zero_salary = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        let final_salary = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            is_solvent,
+            salary_handle,
+            zero_salary,
+            None,
+        )?;
+        employee.encrypted_salary_rate = u128_to_handle(final_salary);
+        // ── End solvency check ───────────────────────────────────────
 
         let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         employee.encrypted_accrued = u128_to_handle(zero_handle);
@@ -461,7 +514,10 @@ pub mod payroll {
             one_handle2, None)?;
         master.encrypted_employee_count = u128_to_handle(updated_total_employee_count);
 
-        privacy_msg!("✅ v4 employee added");
+        // Return the encrypted boolean handle so the UI can decrypt for feedback.
+        anchor_lang::solana_program::program::set_return_data(&is_solvent.to_le_bytes());
+
+        privacy_msg!("✅ v4 employee added (solvency-gated)");
         Ok(())
     }
 
@@ -516,14 +572,18 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Update v4 salary rate privately (encrypted). Intended for raises.
+    /// Update v4 salary rate privately (encrypted) with solvency check.
     ///
     /// For safety and simplicity on devnet demos, this requires the stream to be undelegated
     /// (owned by this program). If delegated, undelegate first and retry.
+    ///
+    /// The `required_deposit_amount` is the minimum balance the business vault must hold
+    /// for the new rate to take effect. If insolvent, the new rate is set to encrypted 0.
     pub fn update_salary_rate_v4(
         ctx: Context<UpdateSalaryRateV4>,
         employee_index: u64,
         encrypted_salary_rate: Vec<u8>,
+        required_deposit_amount: u64,
     ) -> Result<()> {
         require!(
             encrypted_salary_rate.len() <= MAX_CIPHERTEXT_BYTES
@@ -592,10 +652,27 @@ pub mod payroll {
             employee.encrypted_accrued = u128_to_handle(updated_accrued);
         }
 
-        // Register new encrypted salary rate and store handle.
+        // Register new encrypted salary rate handle.
         let new_rate_handle =
             inco_new_euint128(&signer, &inco_lightning_program, encrypted_salary_rate, 0, None)?;
-        employee.encrypted_salary_rate = u128_to_handle(new_rate_handle);
+
+        // ── Private solvency check (Inco Lightning FHE) ──────────────
+        let required_handle = inco_as_euint128(
+            &signer, &inco_lightning_program,
+            required_deposit_amount as u128, None,
+        )?;
+        let balance_handle = handle_to_u128(&ctx.accounts.business_v4.encrypted_balance);
+        let is_solvent = inco_e_ge(
+            &signer, &inco_lightning_program,
+            balance_handle, required_handle, None,
+        )?;
+        let zero_rate = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        let final_rate = inco_e_select(
+            &signer, &inco_lightning_program,
+            is_solvent, new_rate_handle, zero_rate, None,
+        )?;
+        employee.encrypted_salary_rate = u128_to_handle(final_rate);
+        // ── End solvency check ───────────────────────────────────────
 
         if effective_to > employee.last_accrual_time {
             employee.last_accrual_time = effective_to;
@@ -626,7 +703,10 @@ pub mod payroll {
             .checked_add(1)
             .ok_or(PayrollError::InvalidAmount)?;
 
-        privacy_msg!("✅ v4 salary rate updated (encrypted)");
+        // Return the encrypted solvency boolean for optional UI feedback.
+        anchor_lang::solana_program::program::set_return_data(&is_solvent.to_le_bytes());
+
+        privacy_msg!("✅ v4 salary rate updated (solvency-gated)");
         Ok(())
     }
 
@@ -695,6 +775,11 @@ pub mod payroll {
 
         let master = &mut ctx.accounts.master_vault_v4;
         require!(master.is_active, PayrollError::Unauthorized);
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            ctx.accounts.business_v4.deposit_authority,
+            PayrollError::Unauthorized
+        );
         require!(
             master.vault_token_account == ctx.accounts.vault_token_account.key(),
             PayrollError::InvalidIncoTokenAccount
@@ -754,10 +839,11 @@ pub mod payroll {
 
     /// Accrue v4 salary using homomorphic operations.
     pub fn accrue_v4(ctx: Context<AccrueV4>, employee_index: u64) -> Result<()> {
-        authorize_keeper_only(
+        require_keys_eq!(
             ctx.accounts.caller.key(),
-            ctx.accounts.stream_config_v4.keeper_pubkey,
-        )?;
+            ctx.accounts.business_v4.deposit_authority,
+            PayrollError::Unauthorized
+        );
         require!(
             !ctx.accounts.stream_config_v4.is_paused,
             PayrollError::StreamPaused
@@ -959,20 +1045,23 @@ pub mod payroll {
             permission_info.data_len() > 0,
             PayrollError::InvalidPermissionAccount
         );
-        require_keys_eq!(
-            *permission_info.owner,
-            magicblock_permission_program(),
+        let permission_owner = *permission_info.owner;
+        require!(
+            permission_owner == magicblock_permission_program() || permission_owner == magicblock_delegation_program(),
             PayrollError::InvalidPermissionAccount
         );
 
         // On ER, delegated accounts can appear owned by the original program.
         // Do not gate commit/undelegate scheduling on AccountInfo.owner.
-        commit_and_undelegate_accounts(
-            &ctx.accounts.caller,
-            vec![&ctx.accounts.employee_v4],
-            &ctx.accounts.magic_context,
-            &ctx.accounts.magic_program,
-        )?;
+        
+        privacy_msg!("🚀 Scheduling employee commit+undelegate...");
+        ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder::new(
+            ctx.accounts.caller.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.employee_v4.to_account_info()])
+        .build_and_invoke()?;
 
         let employee_signer_seeds: &[&[u8]] = &[
             EMPLOYEE_V4_SEED,
@@ -980,6 +1069,8 @@ pub mod payroll {
             &employee_index_bytes,
             &[employee_bump],
         ];
+        
+        privacy_msg!("🚀 Scheduling permission commit+undelegate...");
         CommitAndUndelegatePermissionCpiBuilder::new(&ctx.accounts.permission_program.to_account_info())
             .authority(&ctx.accounts.authority.to_account_info(), false)
             .permissioned_account(&ctx.accounts.employee_v4.to_account_info(), true)
@@ -1023,28 +1114,21 @@ pub mod payroll {
             PayrollError::InvalidWithdrawRequest
         })?;
 
+        // Per MagicBlock docs: only pass payer + the delegated target account to ScheduleTask CPI
         let schedule_ix = anchor_lang::solana_program::instruction::Instruction::new_with_bytes(
             crate::constants::MAGIC_PROGRAM_ID,
             &ix_data,
             vec![
                 AccountMeta::new(ctx.accounts.payer.key(), true),
-                AccountMeta::new(ctx.accounts.task_context.key(), false),
-                AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
-                AccountMeta::new_readonly(ctx.accounts.program.key(), false),
                 AccountMeta::new(ctx.accounts.employee_stream.key(), false),
             ],
         );
 
-        // Invoke CPI without PDA seeds (as per official magicblock docs)
         invoke_signed(
             &schedule_ix,
             &[
                 ctx.accounts.payer.to_account_info(),
-                ctx.accounts.task_context.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-                ctx.accounts.program.to_account_info(),
                 ctx.accounts.employee_stream.to_account_info(),
-                ctx.accounts.magic_program.to_account_info(),
             ],
             &[],
         )?;
@@ -1236,7 +1320,7 @@ pub mod payroll {
         Ok(())
     }
 
-    /// Keeper processes a pending v4 withdrawal request (pooled vault).
+    /// Keeper or employee processes a pending v4 withdrawal request (pooled vault).
     pub fn process_withdraw_request_v4(
         ctx: Context<ProcessWithdrawRequestV4>,
         employee_index: u64,
@@ -1289,6 +1373,25 @@ pub mod payroll {
         require!(
             ctx.accounts.withdraw_request_v4.requester_auth_handle == employee.encrypted_employee_id.handle,
             PayrollError::InvalidWithdrawRequester
+        );
+
+        let caller = ctx.accounts.payer.key();
+        let auth_handle_u128 = handle_to_u128(&employee.encrypted_employee_id);
+        let mut handle_buf = [0u8; 16];
+        handle_buf.copy_from_slice(&auth_handle_u128.to_le_bytes());
+        let (expected_allowance, _) = Pubkey::find_program_address(
+            &[&handle_buf, caller.as_ref()],
+            &INCO_LIGHTNING_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.employee_id_allowance_account.key(),
+            expected_allowance,
+            PayrollError::InvalidIncoAllowanceAccount
+        );
+        require_keys_eq!(
+            *ctx.accounts.employee_id_allowance_account.owner,
+            INCO_LIGHTNING_ID,
+            PayrollError::InvalidIncoAllowanceAccount
         );
 
         let clock = Clock::get()?;
