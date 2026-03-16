@@ -222,11 +222,11 @@ function parseMasterVaultV4(data) {
 }
 
 function parseBusinessV4(data) {
-  if (!data || data.length < 170) return null;
+  if (!data || data.length < 186) return null;
   return {
     businessIndex: Number(data.readBigUInt64LE(40)),
-    nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
-    isActive: data[152] === 1,
+    nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
+    isActive: data[184] === 1,
   };
 }
 
@@ -376,10 +376,6 @@ async function main() {
   const mint = envPublicKey('PAYUSD_MINT', process.env.NEXT_PUBLIC_PAYUSD_MINT);
 
   const keypairPath = envString('SETUP_KEYPAIR_PATH', 'keys/payroll-authority.json');
-  const keeperPubkey = envPublicKey(
-    'SETUP_KEEPER_PUBKEY',
-    process.env.NEXT_PUBLIC_KEEPER_PUBKEY || process.env.NEXT_PUBLIC_DEFAULT_KEEPER_PUBKEY || ''
-  );
   const employeeKeypairPath = envString(
     'SETUP_EMPLOYEE_KEYPAIR_PATH',
     path.join(__dirname, '..', '..', 'services', 'keeper', 'demo-employee-keypair.json')
@@ -487,6 +483,7 @@ async function main() {
       DISCRIMINATORS.register_business_v4,
       u32LE(encryptedEmployerId.length),
       encryptedEmployerId,
+      payer.publicKey.toBuffer(),
     ]);
     const ix = new TransactionInstruction({
       programId,
@@ -523,6 +520,10 @@ async function main() {
   if (!employeeInfo) {
     const encryptedEmployeeId = await encryptPubkeyId(employeeWallet);
     const encryptedSalary = await encryptForInco(salaryLamportsPerSec);
+    // Calculate required deposit for private solvency check:
+    // salary × duration for bounded contracts, 0 for open-ended.
+    const duration = periodEnd > periodStart ? BigInt(periodEnd - periodStart) : 0n;
+    const requiredDeposit = duration > 0n ? salaryLamportsPerSec * duration : 0n;
     const data = Buffer.concat([
       DISCRIMINATORS.add_employee_v4,
       u64LE(employeeIndex),
@@ -532,6 +533,7 @@ async function main() {
       encryptedSalary,
       Buffer.from(new BigInt64Array([BigInt(periodStart)]).buffer),
       Buffer.from(new BigInt64Array([BigInt(periodEnd)]).buffer),
+      u64LE(requiredDeposit),
     ]);
     const ix = new TransactionInstruction({
       programId,
@@ -556,7 +558,7 @@ async function main() {
   if (!streamConfigInfo) {
     const intervalBuf = Buffer.alloc(8);
     intervalBuf.writeBigUInt64LE(BigInt(settleIntervalSecs));
-    const data = Buffer.concat([DISCRIMINATORS.init_stream_config_v4, keeperPubkey.toBuffer(), intervalBuf]);
+    const data = Buffer.concat([DISCRIMINATORS.init_stream_config_v4, intervalBuf]);
     const ix = new TransactionInstruction({
       programId,
       keys: [
@@ -676,7 +678,6 @@ async function main() {
     masterVault: masterVaultPda.toBase58(),
     poolVaultTokenAccount: master.vaultTokenAccount.toBase58(),
     depositorTokenAccount,
-    keeperPubkey: keeperPubkey.toBase58(),
     employeeWallet: employeeWallet.toBase58(),
     userTokenRegistry: userTokenRegistryPda ? userTokenRegistryPda.toBase58() : undefined,
   });

@@ -601,6 +601,7 @@ async function main() {
       { pubkey: streamConfigPda, isSigner: false, isWritable: true },
       { pubkey: employeePda, isSigner: false, isWritable: true },
       { pubkey: withdrawRequestPda, isSigner: false, isWritable: true },
+      { pubkey: allowancePda, isSigner: false, isWritable: false },
       { pubkey: payoutPda, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
       { pubkey: payoutTokenKeypair.publicKey, isSigner: false, isWritable: true },

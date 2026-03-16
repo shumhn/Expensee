@@ -38,12 +38,11 @@ async function run() {
   }
 
   console.log('2. Registering Business...');
-  const { businessPDA, businessIndex } = await registerBusinessV4(connection, mockWallet);
+  const { businessPDA, businessIndex } = await registerBusinessV4(connection, mockWallet, mockWallet.publicKey);
   console.log(`   Business ${businessIndex}: ${businessPDA.toBase58()}`);
 
   console.log('3. Init Stream Config...');
-  const keeperPubkey = new PublicKey(process.env.NEXT_PUBLIC_DEFAULT_KEEPER_PUBKEY || mockWallet.publicKey!);
-  await initStreamConfigV4(connection, mockWallet, businessPDA, keeperPubkey, 30);
+  await initStreamConfigV4(connection, mockWallet, businessPDA, 30);
   console.log('   Stream config established.');
 
   console.log('4. Adding Employee...');
