@@ -22,7 +22,6 @@ type ChatAction = {
         salaryPerSecond?: string;
         boundPresetPeriod?: boolean;
         autoGrantDecrypt?: boolean;
-        autoGrantKeeperDecrypt?: boolean;
         streamIndex?: number;
         bonusAmount?: string;
         depositAmount?: string;
@@ -134,9 +133,9 @@ Rules:
 - Keep responses short and action-focused.
 - If the user asks to pay or fund, ask for an amount if missing.
 - If the user asks to add a worker, ask for the employee wallet if missing.
-- If the user asks to enable high-speed mode, confirm it is optional.
+- If the user asks to enable high-speed mode, confirm it is required.
 - If the context block lists **MISSING INPUTS**, ask for those before telling the user to run a step.
-- If the next step is optional, clearly say it is optional and ask if they want to proceed.
+- If the next step is optional, clearly say it is optional and ask if they want to proceed. (Rare)
 - Never mention internal phase names or system fields to the user.
 
 RESPONSE FORMAT (MANDATORY)

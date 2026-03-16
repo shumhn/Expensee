@@ -34,8 +34,8 @@ export const COPY = {
       description: 'Create a private payroll record and set the earning plan.',
     },
     step4: {
-      title: 'Enable high-speed mode (optional)',
-      description: 'Use MagicBlock delegation for faster execution while keeping Inco amounts encrypted.',
+      title: 'Enable high-speed mode (required)',
+      description: 'MagicBlock delegation is required for real-time payroll while keeping Inco amounts encrypted.',
     },
     step5: {
       title: 'Go live and monitor',

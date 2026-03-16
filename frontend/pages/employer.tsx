@@ -21,6 +21,7 @@ import {
   delegateStreamV4,
   scheduleCrankV4,
   depositV4,
+  getDeterministicTaskId,
   getMagicblockValidatorForRegion,
   getMagicblockEndpointForRegion,
   getMagicblockPreferredRegion,
@@ -31,13 +32,14 @@ import {
   getEmployeeV4PDA,
   getMasterVaultV4Account,
   getMasterVaultV4PDA,
+  getReturnDataU128,
   getRateHistoryV4Account,
   getStreamConfigV4PDA,
+  getTaskContextPDA,
   getUserTokenAccountV4,
   grantIncoDecryptAccessForHandle,
   ensureTeeAuthToken,
   initRateHistoryV4,
-  grantKeeperViewAccessV4,
   isMagicblockValidatorRegionAvailable,
   isMagicblockTeeModeEnabled,
   isStoredTeeTokenValid,
@@ -51,13 +53,8 @@ import {
   setMagicblockTeeModeEnabled,
   setPoolVaultV4,
   updateSalaryRateV4,
-  updateKeeperV4,
 } from '../lib/payroll-client';
 
-const DEFAULT_KEEPER =
-  process.env.NEXT_PUBLIC_DEFAULT_KEEPER_PUBKEY?.trim() ||
-  process.env.NEXT_PUBLIC_KEEPER_PUBKEY?.trim() ||
-  '';
 
 type TxResult = { label: string; sig: string } | null;
 
@@ -138,6 +135,15 @@ function extractIncoTokenHandle(data: Buffer): bigint {
   return result;
 }
 
+function extractHandleFromCiphertext32(data: Uint8Array | Buffer): bigint {
+  const bytes = Buffer.from(data).subarray(0, 16);
+  let result = 0n;
+  for (let i = 15; i >= 0; i -= 1) {
+    result = result * 256n + BigInt(bytes[i] || 0);
+  }
+  return result;
+}
+
 function formatAddress(value: string, chars = 4): string {
   if (!value) return '—';
   if (value.length <= chars * 2) return value;
@@ -178,6 +184,13 @@ function fromDateTimeLocal(value: string): string {
   return String(Math.floor(ts / 1000));
 }
 
+const CRANK_REGION_STORAGE_KEY = 'expensee.crank_region_v1';
+
+function normalizeMagicblockRegion(value: string | null): MagicblockValidatorRegion | null {
+  if (value === 'eu' || value === 'us' || value === 'asia') return value;
+  return null;
+}
+
 type EmployerV4Mode =
   | 'dashboard'
   | 'setup'
@@ -206,7 +219,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
 
   const [businessIndexInput, setBusinessIndexInput] = useState('');
   const [employeeIndexInput, setEmployeeIndexInput] = useState('');
-  const [keeperPubkey, setKeeperPubkey] = useState(DEFAULT_KEEPER);
   const [settleIntervalSecs, setSettleIntervalSecs] = useState('10');
   const [employeeWallet, setEmployeeWallet] = useState('');
   const [salaryPerSecond, setSalaryPerSecond] = useState('0.0001');
@@ -222,6 +234,14 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const [depositBalanceLoading, setDepositBalanceLoading] = useState(false);
   const [depositBalanceDecrypting, setDepositBalanceDecrypting] = useState(false);
   const [depositBalanceError, setDepositBalanceError] = useState('');
+  const [vaultHandle, setVaultHandle] = useState<bigint | null>(null);
+  const [vaultBalance, setVaultBalance] = useState<bigint | null>(null);
+  const [vaultBalanceLoading, setVaultBalanceLoading] = useState(false);
+  const [vaultBalanceDecrypting, setVaultBalanceDecrypting] = useState(false);
+  const [vaultBalanceError, setVaultBalanceError] = useState('');
+  const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
+  const [autoConfigBusy, setAutoConfigBusy] = useState(false);
+  const [autoConfigError, setAutoConfigError] = useState('');
   const [showBalancePanel, setShowBalancePanel] = useState(false);
   const [mintAmount, setMintAmount] = useState('100');
   const [lastMintAmount, setLastMintAmount] = useState<number | null>(null);
@@ -235,10 +255,32 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const [userTokenRegistry, setUserTokenRegistry] = useState<Awaited<ReturnType<typeof getUserTokenAccountV4>>>(null);
   const [userTokenRegistryLoading, setUserTokenRegistryLoading] = useState(false);
 
-  const [delegateRegion, setDelegateRegion] = useState<MagicblockValidatorRegion>(() => getMagicblockPreferredRegion());
+  const [delegateRegion, setDelegateRegion] = useState<MagicblockValidatorRegion>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = normalizeMagicblockRegion(window.localStorage.getItem(CRANK_REGION_STORAGE_KEY));
+      if (stored && isMagicblockValidatorRegionAvailable(stored)) return stored;
+    }
+    return getMagicblockPreferredRegion();
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CRANK_REGION_STORAGE_KEY, delegateRegion);
+  }, [delegateRegion]);
+
   const [isDelegated, setIsDelegated] = useState<boolean | null>(null);
-  const [autoEnableHighSpeedOnCreate, setAutoEnableHighSpeedOnCreate] = useState(true);
-  const [crankScheduleInfo, setCrankScheduleInfo] = useState<{ taskId: number; scheduledAt: string } | null>(null);
+  const [crankScheduleInfo, setCrankScheduleInfo] = useState<{
+    taskId: number;
+    scheduledAt: string;
+    region: MagicblockValidatorRegion;
+    payer: string;
+  } | null>(null);
+  const [crankScheduleStatus, setCrankScheduleStatus] = useState<'unknown' | 'yes' | 'no'>('unknown');
+  const [lastCrankTx, setLastCrankTx] = useState<string | null>(null);
+  const [delegationStatusMsg, setDelegationStatusMsg] = useState('');
+  const [lastDelegateTx, setLastDelegateTx] = useState<string | null>(null);
+  const [lastUndelegateTx, setLastUndelegateTx] = useState<string | null>(null);
+  const [lastRedelegateTx, setLastRedelegateTx] = useState<string | null>(null);
 
   const [masterVault, setMasterVault] = useState<Awaited<ReturnType<typeof getMasterVaultV4Account>>>(null);
   const [business, setBusiness] = useState<Awaited<ReturnType<typeof getBusinessV4AccountByAddress>>>(null);
@@ -254,11 +296,14 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const [agentEnableHighSpeed, setAgentEnableHighSpeed] = useState(true);
   const [agentApprovalMode, setAgentApprovalMode] = useState<AgentApprovalMode>('high_risk_only');
   const [agentRunHydrated, setAgentRunHydrated] = useState(false);
-  const [autoGrantKeeperDecrypt, setAutoGrantKeeperDecrypt] = useState(true);
   const [boundPresetPeriod, setBoundPresetPeriod] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
   const runIdRef = useRef(0);
+  const businessIndexPrefilledRef = useRef(false);
+  const employeeIndexPrefilledRef = useRef(false);
+  const businessIndex = useMemo(() => parseIndex(businessIndexInput), [businessIndexInput]);
+  const employeeIndex = useMemo(() => parseIndex(employeeIndexInput), [employeeIndexInput]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -269,10 +314,152 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   }, []);
 
   useEffect(() => {
-    if (isDelegated === false) {
-      setCrankScheduleInfo(null);
+    if (typeof window === 'undefined') return;
+    if (!businessIndexInput && !businessIndexPrefilledRef.current) {
+      const stored = window.localStorage.getItem('expensee.businessIndex');
+      if (stored) {
+        setBusinessIndexInput(stored);
+        businessIndexPrefilledRef.current = true;
+      }
     }
-  }, [isDelegated]);
+  }, [businessIndexInput]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (businessIndexInput) {
+      window.localStorage.setItem('expensee.businessIndex', businessIndexInput);
+    }
+  }, [businessIndexInput]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!employeeIndexInput && !employeeIndexPrefilledRef.current) {
+      const stored = window.localStorage.getItem('expensee.employeeIndex');
+      if (stored) {
+        setEmployeeIndexInput(stored);
+        employeeIndexPrefilledRef.current = true;
+      }
+    }
+  }, [employeeIndexInput]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (employeeIndexInput) {
+      window.localStorage.setItem('expensee.employeeIndex', employeeIndexInput);
+    }
+  }, [employeeIndexInput]);
+
+  const waitForErAccount = useCallback(
+    async (erConnection: Connection, pubkey: PublicKey, attempts = 12, delayMs = 2000) => {
+      for (let i = 0; i < attempts; i += 1) {
+        const info = await erConnection.getAccountInfo(pubkey, 'confirmed').catch(() => null);
+        if (info) return true;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      return false;
+    },
+    []
+  );
+
+  const scheduleCrankOnEr = useCallback(
+    async (region: MagicblockValidatorRegion, targetBusinessIndex: number, targetEmployeeIndex: number) => {
+      if (!wallet.publicKey) throw new Error('Wallet not connected');
+      const taskId = await getDeterministicTaskId(wallet.publicKey, targetBusinessIndex, targetEmployeeIndex);
+      const [masterVaultPda] = getMasterVaultV4PDA();
+      const [businessPda] = getBusinessV4PDA(masterVaultPda, targetBusinessIndex);
+      const [employeePda] = getEmployeeV4PDA(businessPda, targetEmployeeIndex);
+      const availableRegions: MagicblockValidatorRegion[] = ['eu'];
+      if (isMagicblockValidatorRegionAvailable('us')) availableRegions.push('us');
+      if (isMagicblockValidatorRegionAvailable('asia')) availableRegions.push('asia');
+      const orderedRegions = [region, ...availableRegions.filter((entry) => entry !== region)];
+
+      let lastError: unknown = null;
+      for (const entry of orderedRegions) {
+        try {
+          const erUrl = getMagicblockEndpointForRegion(entry);
+          const erConnection = new Connection(erUrl, 'confirmed');
+          const visible = await waitForErAccount(erConnection, employeePda);
+          if (!visible) {
+            throw new Error('ER has not received the delegated account yet. Please retry in a few seconds.');
+          }
+          const crankTx = await scheduleCrankV4(
+            erConnection,
+            wallet,
+            targetBusinessIndex,
+            targetEmployeeIndex,
+            taskId
+          );
+          setLastCrankTx(crankTx);
+          setCrankScheduleInfo({
+            taskId,
+            scheduledAt: new Date().toLocaleString(),
+            region: entry,
+            payer: wallet.publicKey.toBase58(),
+          });
+          setCrankScheduleStatus('yes');
+          if (entry !== delegateRegion) {
+            setDelegateRegion(entry);
+          }
+          return crankTx;
+        } catch (err: any) {
+          lastError = err;
+          const message = String(err?.message || err || '');
+          const retryable =
+            message.includes('InvalidWritableAccount') ||
+            message.includes('Blockhash not found') ||
+            message.includes('Unsupported program id');
+          if (!retryable) {
+            break;
+          }
+        }
+      }
+      throw lastError;
+    },
+    [wallet, wallet.publicKey, waitForErAccount, delegateRegion]
+  );
+
+  // Deterministic crank check — no localStorage needed.
+  // Derives the taskId from wallet + businessIndex + employeeIndex, then queries the ER RPC.
+  const checkCrankScheduled = useCallback(
+    async () => {
+      if (!wallet.publicKey || businessIndex === null || employeeIndex === null) {
+        setCrankScheduleStatus('unknown');
+        return;
+      }
+      setCrankScheduleStatus('unknown');
+      try {
+        const taskId = await getDeterministicTaskId(wallet.publicKey, businessIndex, employeeIndex);
+        const [taskContextPda] = getTaskContextPDA(wallet.publicKey, taskId);
+        const regions: MagicblockValidatorRegion[] = ['eu'];
+        if (isMagicblockValidatorRegionAvailable('us')) regions.push('us');
+        if (isMagicblockValidatorRegionAvailable('asia')) regions.push('asia');
+        const orderedRegions = [delegateRegion, ...regions.filter((region) => region !== delegateRegion)];
+        for (const region of orderedRegions) {
+          const erUrl = getMagicblockEndpointForRegion(region);
+          const erConnection = new Connection(erUrl);
+          const acct = await erConnection.getAccountInfo(taskContextPda, 'confirmed').catch(() => null);
+          if (acct) {
+            setCrankScheduleStatus('yes');
+            return;
+          }
+        }
+        setCrankScheduleStatus('no');
+      } catch {
+        setCrankScheduleStatus('unknown');
+      }
+    },
+    [wallet.publicKey, businessIndex, employeeIndex, delegateRegion]
+  );
+
+  // Re-check crank status whenever the employee/business changes or delegation state changes.
+  useEffect(() => {
+    if (isDelegated) {
+      void checkCrankScheduled();
+    } else if (isDelegated === false) {
+      setCrankScheduleInfo(null);
+      setCrankScheduleStatus('no');
+    }
+  }, [isDelegated, checkCrankScheduled]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -284,9 +471,9 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const [rateHistoryExists, setRateHistoryExists] = useState(false);
   const [rateHistoryLoading, setRateHistoryLoading] = useState(false);
   const [salaryUpdateInput, setSalaryUpdateInput] = useState('');
-
-  const businessIndex = useMemo(() => parseIndex(businessIndexInput), [businessIndexInput]);
-  const employeeIndex = useMemo(() => parseIndex(employeeIndexInput), [employeeIndexInput]);
+  const [solvencyStatus, setSolvencyStatus] = useState<'unknown' | 'solvent' | 'insolvent'>('unknown');
+  const [solvencyMessage, setSolvencyMessage] = useState('');
+  const [solvencyChecking, setSolvencyChecking] = useState(false);
 
   const [masterVaultPda] = useMemo(() => getMasterVaultV4PDA(), []);
   const businessPda = useMemo(() => {
@@ -307,11 +494,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     masterVault && masterVault.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY
   );
   const configExists = !!streamConfig;
-  const keeperMismatch = Boolean(
-    streamConfig &&
-    keeperPubkey &&
-    streamConfig.keeperPubkey.toBase58() !== keeperPubkey.trim()
-  );
   const payPresetLabel: Record<PayPreset, string> = {
     per_second: 'Per second',
     hourly: 'Per hour',
@@ -457,11 +639,13 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     refreshTeeStatus();
   }, [refreshTeeStatus, teeModeEnabled]);
 
-  const loadState = useCallback(async () => {
+  const loadState = useCallback(async (silent = false) => {
     if (!wallet.connected) return;
-    setBusy(true);
-    setMessage('');
-    setError('');
+    if (!silent) {
+      setBusy(true);
+      setMessage('');
+      setError('');
+    }
     try {
       const master = await getMasterVaultV4Account(connection);
       setMasterVault(master);
@@ -515,11 +699,44 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
         setUserTokenRegistry(null);
       }
     } catch (e: any) {
-      setError(e?.message || 'Failed to refresh state');
+      if (!silent) {
+        setError(e?.message || 'Failed to refresh state');
+      } else {
+        console.warn(e);
+      }
     } finally {
-      setBusy(false);
+      if (!silent) {
+        setBusy(false);
+      }
     }
   }, [businessPda, connection, depositorTokenAccount, employeeIndex, employeePda, streamConfigPda, wallet.connected, wallet.publicKey]);
+
+  const resolveSolvencyFromTx = useCallback(
+    async (txid: string): Promise<boolean | null> => {
+      if (!wallet.publicKey || !wallet.signMessage) return null;
+      setSolvencyChecking(true);
+      try {
+        const handle = await getReturnDataU128(connection, txid);
+        if (!handle || handle === 0n) return null;
+        const stale = await checkAllowanceStale(connection, handle, wallet.publicKey);
+        if (stale) {
+          await grantIncoDecryptAccessForHandle(connection, wallet, handle);
+        }
+        const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+        const result = await decrypt([handle.toString()], {
+          address: wallet.publicKey,
+          signMessage: wallet.signMessage,
+        });
+        const value = BigInt(result?.plaintexts?.[0] || '0');
+        return value !== 0n;
+      } catch {
+        return null;
+      } finally {
+        setSolvencyChecking(false);
+      }
+    },
+    [connection, wallet, wallet.publicKey, wallet.signMessage]
+  );
 
   const buildAgentExecutionQueue = useCallback((): AgentExecutionStep[] => {
     const steps: AgentExecutionStep[] = [];
@@ -573,20 +790,11 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
 
     if (!streamConfig) {
       steps.push({
-        key: 'init-automation',
-        label: 'Initialize automation (keeper + cadence)',
+        key: 'init-stream-config',
+        label: 'Initialize stream config (auto cooldown)',
         status: 'pending',
         required: true,
         risk: 'high_risk',
-        requiresSignature: true,
-      });
-    } else if (keeperMismatch) {
-      steps.push({
-        key: 'update-keeper',
-        label: 'Update automation keeper wallet',
-        status: 'pending',
-        required: true,
-        risk: 'review',
         requiresSignature: true,
       });
     }
@@ -600,16 +808,14 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       requiresSignature: true,
     });
 
-    if (agentEnableHighSpeed) {
-      steps.push({
-        key: 'enable-high-speed',
-        label: 'Enable high-speed mode (MagicBlock delegation)',
-        status: isDelegated ? 'done' : 'pending',
-        required: false,
-        risk: 'review',
-        requiresSignature: true,
-      });
-    }
+    steps.push({
+      key: 'enable-high-speed',
+      label: 'Enable high-speed mode (MagicBlock delegation, required)',
+      status: isDelegated ? 'done' : 'pending',
+      required: true,
+      risk: 'review',
+      requiresSignature: true,
+    });
 
     steps.push({
       key: 'create-depositor-token',
@@ -636,7 +842,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     depositorTokenAccount,
     employee,
     isDelegated,
-    keeperMismatch,
     masterVault,
     poolVaultTokenAccount,
     streamConfig,
@@ -665,6 +870,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       let overrideBusinessPda: PublicKey | null = businessPda;
       let overrideBusinessIndex: number | null = businessIndex;
       let overrideEmployeeIndex: number | null = employeeIndex;
+      let lastSolvency: boolean | null = null;
 
       const updateStep = (key: string, patch: Partial<AgentExecutionStep>) => {
         setAgentQueue((prev) =>
@@ -738,18 +944,12 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                 const businessAccount = await getBusinessV4AccountByAddress(connection, res.businessPDA);
                 setBusiness(businessAccount);
               }
-            } else if (step.key === 'init-automation') {
+            } else if (step.key === 'init-stream-config') {
               const targetBusinessPda = overrideBusinessPda || businessPda;
               if (!targetBusinessPda) throw new Error('Business index required.');
-              const keeper = mustPubkey('keeper', keeperPubkey);
               const interval = Number(settleIntervalSecs);
               if (!Number.isFinite(interval) || interval <= 0) throw new Error('Invalid settle interval');
-              txid = await initStreamConfigV4(connection, wallet, targetBusinessPda, keeper, interval);
-            } else if (step.key === 'update-keeper') {
-              const targetBusinessPda = overrideBusinessPda || businessPda;
-              if (!targetBusinessPda) throw new Error('Business index required.');
-              const keeper = mustPubkey('keeper', keeperPubkey);
-              txid = await updateKeeperV4(connection, wallet, targetBusinessPda, keeper);
+              txid = await initStreamConfigV4(connection, wallet, targetBusinessPda, interval);
             } else if (step.key === 'create-worker-record') {
               const targetBusinessPda = overrideBusinessPda || businessPda;
               if (!targetBusinessPda) throw new Error('Business index required.');
@@ -757,6 +957,10 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
               const salaryLamports = parseUiAmount('salary per second', salaryPerSecond);
               const periodStartValue = Number(periodStart || '0') || 0;
               const periodEndValue = Number(periodEnd || '0') || 0;
+              // Calculate required deposit for private solvency check:
+              // salary × duration for bounded contracts, 0 for open-ended.
+              const duration = periodEndValue > periodStartValue ? BigInt(periodEndValue - periodStartValue) : 0n;
+              const requiredDeposit = duration > 0n ? salaryLamports * duration : 0n;
               const res = await addEmployeeV4(
                 connection,
                 wallet,
@@ -764,14 +968,30 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                 mustPubkey('employee wallet', employeeWallet),
                 salaryLamports,
                 periodStartValue,
-                periodEndValue
+                periodEndValue,
+                requiredDeposit
               );
               txid = res.txid;
               if (res.employeeIndex !== undefined) {
                 setEmployeeIndexInput(String(res.employeeIndex));
                 overrideEmployeeIndex = res.employeeIndex;
               }
+              setSolvencyStatus('unknown');
+              setSolvencyMessage('');
+              const solvency = await resolveSolvencyFromTx(res.txid);
+              lastSolvency = solvency;
+              if (solvency === false) {
+                setSolvencyStatus('insolvent');
+                setSolvencyMessage(
+                  'Insufficient funds — employee created but salary is paused. Deposit funds and update salary rate to activate.'
+                );
+              } else if (solvency === true) {
+                setSolvencyStatus('solvent');
+              }
             } else if (step.key === 'enable-high-speed') {
+              if (lastSolvency === false || solvencyStatus === 'insolvent') {
+                throw new Error('Insufficient funds — stream is paused. Deposit funds and update salary rate to activate.');
+              }
               const targetBusinessIndex = overrideBusinessIndex ?? businessIndex;
               const targetEmployeeIndex = overrideEmployeeIndex ?? employeeIndex;
               if (targetBusinessIndex === null || targetEmployeeIndex === null) {
@@ -786,10 +1006,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                 mustPubkey('employee wallet', employeeWallet),
                 validator
               ).then(async (sig) => {
-                const taskId = Number(Date.now() % 1000000);
-                const erConnection = new Connection(getMagicblockEndpointForRegion(delegateRegion));
-                await scheduleCrankV4(erConnection, wallet, targetBusinessIndex, targetEmployeeIndex, taskId);
-                setCrankScheduleInfo({ taskId, scheduledAt: new Date().toLocaleString() });
+                await scheduleCrankOnEr(delegateRegion, targetBusinessIndex, targetEmployeeIndex);
                 return sig;
               });
             } else if (step.key === 'create-depositor-token') {
@@ -866,7 +1083,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       depositorTokenAccount,
       employeeIndex,
       employeeWallet,
-      keeperPubkey,
       loadState,
       masterVaultPda,
       masterVault,
@@ -875,6 +1091,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       periodStart,
       salaryPerSecond,
       settleIntervalSecs,
+      resolveSolvencyFromTx,
+      solvencyStatus,
       wallet,
     ]
   );
@@ -961,7 +1179,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     }
     let alive = true;
     setAgentRunHydrated(false);
-    void loadState().finally(() => {
+    void loadState(true).finally(() => {
       if (!alive) return;
       setAgentRunHydrated(true);
     });
@@ -995,7 +1213,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       setUserTokenRegistry(null);
       setUserTokenRegistryLoading(false);
       setAgentRunHydrated(false);
-      void loadState();
+      void loadState(true);
     }
     prevWalletRef.current = nextWallet;
   }, [loadState, wallet.publicKey]);
@@ -1022,7 +1240,19 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     setAgentQueue(merged);
   }, [agentExecuteBusy, buildAgentExecutionQueue, wallet.connected, agentRunHydrated, agentQueue]);
 
-  const refreshMaster = useCallback(async () => {
+  const refreshMaster = useCallback(async (silent = false) => {
+    if (silent) {
+      try {
+        const account = await getMasterVaultV4Account(connection);
+        setMasterVault(account);
+        if (account?.vaultTokenAccount) {
+          setPoolVaultTokenAccount((prev) => prev || account.vaultTokenAccount.toBase58());
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+      return;
+    }
     await runAction('Refresh master vault', async () => {
       const account = await getMasterVaultV4Account(connection);
       setMasterVault(account);
@@ -1035,7 +1265,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
 
   useEffect(() => {
     if (!wallet.publicKey) return;
-    void refreshMaster();
+    void refreshMaster(true);
   }, [wallet.publicKey, refreshMaster]);
 
   const masterInactive = !!masterVault && !masterVault.isActive;
@@ -1057,7 +1287,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
 
   const isPoolVaultReady = Boolean(
     masterVault?.vaultTokenAccount &&
-      masterVault.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY
+    masterVault.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY
   );
 
   const ensurePoolVaultSetup = useCallback(async () => {
@@ -1106,6 +1336,9 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       await runAction('Refresh business', async () => {
         const account = await getBusinessV4AccountByAddress(connection, targetPda);
         setBusiness(account);
+        if (account?.businessIndex !== undefined && account?.businessIndex !== null) {
+          setBusinessIndexInput(String(account.businessIndex));
+        }
         return account;
       });
     },
@@ -1178,6 +1411,37 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       return info;
     });
   }, [connection, employeePda, runAction]);
+
+  const waitForDelegationStatus = useCallback(
+    async (targetDelegated: boolean, label: string) => {
+      if (!employeePda) return false;
+      setDelegationStatusMsg(`${label}... waiting for base-layer confirmation.`);
+      let attempts = 0;
+      while (attempts < 12) {
+        attempts += 1;
+        const info = await connection.getAccountInfo(employeePda, 'confirmed');
+        if (info) {
+          const delegatedNow = info.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
+          setIsDelegated(delegatedNow);
+          if (delegatedNow === targetDelegated) {
+            setDelegationStatusMsg(
+              targetDelegated
+                ? 'Delegation confirmed on base layer.'
+                : 'Undelegate confirmed on base layer.'
+            );
+            return true;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      setDelegationStatusMsg('Status is still pending. Click “Refresh Status” to re-check.');
+      return false;
+    },
+    [connection, employeePda]
+  );
+
+  // getCrankStorageKey, storeCrankInfo, clearCrankInfo, checkCrankScheduled
+  // are now defined earlier in the file (before the useEffect that references them).
 
   const refreshPublicUsdcBalance = useCallback(async () => {
     if (!wallet.publicKey) {
@@ -1290,11 +1554,122 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     }
   }, [connection, depositHandle, wallet, wallet.publicKey, wallet.signMessage]);
 
+  const refreshVaultBalance = useCallback(async () => {
+    if (!business) {
+      setVaultHandle(null);
+      setVaultBalance(null);
+      return;
+    }
+    setVaultBalanceLoading(true);
+    setVaultBalanceError('');
+    setVaultBalance(null);
+    try {
+      const handle = extractHandleFromCiphertext32(business.encryptedBalance);
+      setVaultHandle(handle);
+      if (handle === 0n) {
+        setVaultBalance(null);
+      }
+    } catch (e: any) {
+      setVaultBalanceError(e?.message || 'Failed to load vault balance handle');
+    } finally {
+      setVaultBalanceLoading(false);
+    }
+  }, [business]);
+
+  const decryptVaultBalance = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signMessage) {
+      setVaultBalanceError('Connect a wallet that supports signMessage.');
+      return;
+    }
+    if (!vaultHandle || vaultHandle === 0n) {
+      setVaultBalanceError('No encrypted vault balance handle found yet.');
+      return;
+    }
+    setVaultBalanceDecrypting(true);
+    setVaultBalanceError('');
+    try {
+      const stale = await checkAllowanceStale(connection, vaultHandle, wallet.publicKey);
+      if (stale) {
+        await grantIncoDecryptAccessForHandle(connection, wallet, vaultHandle);
+      }
+      const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+      const result = await decrypt([vaultHandle.toString()], {
+        address: wallet.publicKey,
+        signMessage: wallet.signMessage,
+      });
+      const value = BigInt(result?.plaintexts?.[0] || '0');
+      setVaultBalance(value);
+    } catch (e: any) {
+      setVaultBalanceError(e?.message || 'Failed to decrypt vault balance');
+    } finally {
+      setVaultBalanceDecrypting(false);
+    }
+  }, [connection, vaultHandle, wallet, wallet.publicKey, wallet.signMessage]);
+
+  const attemptAutoConfig = useCallback(
+    async (force = false) => {
+      if (autoConfigBusy) return;
+      const targetBusinessPda = business?.address || businessPda;
+      if (!targetBusinessPda || !wallet.publicKey) return;
+      if (!force && (streamConfig || autoConfigAttempted)) return;
+      setAutoConfigAttempted(true);
+      setAutoConfigBusy(true);
+      setAutoConfigError('');
+      try {
+        const interval = Number(settleIntervalSecs || '10');
+        if (!Number.isFinite(interval) || interval <= 0) {
+          throw new Error('Invalid cooldown interval');
+        }
+        const result = await runAction('Init payroll settings', () =>
+          initStreamConfigV4(connection, wallet, targetBusinessPda, interval)
+        );
+        if (!result) {
+          setAutoConfigError('Auto-setup failed. Check your business index and retry.');
+          return;
+        }
+        await refreshConfig();
+      } catch (e: any) {
+        setAutoConfigError(e?.message || 'Auto-setup failed. Check your business index and retry.');
+      } finally {
+        setAutoConfigBusy(false);
+      }
+    },
+    [
+      autoConfigAttempted,
+      autoConfigBusy,
+      business,
+      businessPda,
+      connection,
+      initStreamConfigV4,
+      refreshConfig,
+      runAction,
+      settleIntervalSecs,
+      streamConfig,
+      wallet,
+      wallet.publicKey,
+    ]
+  );
+
   useEffect(() => {
     if (depositorTokenAccount) {
       void refreshDepositorBalance();
     }
   }, [depositorTokenAccount, refreshDepositorBalance]);
+
+  useEffect(() => {
+    if (business) {
+      void refreshVaultBalance();
+    } else {
+      setVaultHandle(null);
+      setVaultBalance(null);
+    }
+  }, [business, refreshVaultBalance]);
+
+  useEffect(() => {
+    if (!wallet.connected) return;
+    if (!businessPda || streamConfig) return;
+    void attemptAutoConfig();
+  }, [attemptAutoConfig, businessPda, streamConfig, wallet.connected]);
 
   const loadDevnetState = useCallback(async () => {
     setBusy(true);
@@ -1320,9 +1695,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
       if (data?.depositorTokenAccount) {
         setDepositorTokenAccount(String(data.depositorTokenAccount));
       }
-      if (data?.keeperPubkey) {
-        setKeeperPubkey(String(data.keeperPubkey));
-      }
       if (data?.employeeWallet) {
         setEmployeeWallet(String(data.employeeWallet));
       }
@@ -1345,8 +1717,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const step3State: StepState = business
     ? (vaultFundingObserved ? 'done' : 'active')
     : 'locked';
-  const step4State: StepState = business ? (streamConfig ? 'done' : 'active') : 'locked';
-  const step5State: StepState = streamConfig ? (employee ? 'done' : 'active') : 'locked';
+  const step4State: StepState = business ? (employee ? 'done' : 'active') : 'locked';
   const totalEmployees = business ? business.nextEmployeeIndex : null;
   const payrollStatus = streamConfig ? (streamConfig.isPaused ? 'Paused' : 'Active') : 'Not configured';
   const lastSettleLabel =
@@ -1357,10 +1728,9 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
     if (!masterVault) return 1;
     if (!business) return 2;
     if (!vaultFundingObserved) return 3;
-    if (!streamConfig) return 4;
-    if (!employee) return 5;
-    return 5;
-  }, [masterVault, business, vaultFundingObserved, streamConfig, employee]);
+    if (!employee) return 4;
+    return 4;
+  }, [masterVault, business, vaultFundingObserved, employee]);
   const [setupStep, setSetupStep] = useState<number>(suggestedSetupStep);
 
   useEffect(() => {
@@ -1389,17 +1759,14 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const showStep2 = setupOnly ? setupStep === 2 : mode === 'all';
   const showStep3 = setupOnly ? setupStep === 3 : mode === 'payments' || mode === 'all';
   const showStep4 = setupOnly ? setupStep === 4 : mode === 'all';
-  const showStep5 = setupOnly ? setupStep === 5 : mode === 'all';
-  const completedSteps = [step1State, step2State, step3State, step4State, step5State].filter(
+  const completedSteps = [step1State, step2State, step3State, step4State].filter(
     (step) => step === 'done'
   ).length;
-  const setupSteps = [1, 2, 3, 4, 5];
-  const stepNumberMap: Record<number, number> = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 };
+  const setupSteps = [1, 2, 3, 4];
+  const stepNumberMap: Record<number, number> = { 1: 1, 2: 2, 3: 3, 4: 4 };
   const currentSetupIndex = Math.max(0, setupSteps.indexOf(setupStep));
   const canGoBack = currentSetupIndex > 0;
   const canGoNext = currentSetupIndex < setupSteps.length - 1;
-  const isDefaultKeeper =
-    !!DEFAULT_KEEPER && !!keeperPubkey && keeperPubkey.trim() === DEFAULT_KEEPER.trim();
   const schedulePresets = ['10', '30', '60', '300', '900', '3600'];
   const schedulePresetLabel: Record<string, string> = {
     '10': 'Every 10 seconds',
@@ -1413,9 +1780,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
   const nextStepLabel = [
     'Master vault',
     'Register business',
-    'Payroll settings',
-    'Add employee',
     'Fund vault',
+    'Add employee',
   ][suggestedSetupStep - 1];
 
   return (
@@ -1478,6 +1844,50 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
             {depositBalanceError ? (
               <div className="expensee-sub text-rose-300">{depositBalanceError}</div>
             ) : null}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-[var(--app-border)] pt-4">
+              <div>
+                <h4>Total deposited (vault balance)</h4>
+                <div className="expensee-stat">
+                  {vaultBalance !== null ? `${formatTokenAmount(vaultBalance)} USDC` : 'Encrypted'}
+                </div>
+                <div className="expensee-sub">
+                  Business index: {businessIndex !== null ? businessIndex : '—'}
+                </div>
+                <div className="expensee-sub">
+                  Encrypted status: {vaultHandle && vaultHandle !== 0n ? 'ready' : 'not available'}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void refreshVaultBalance()}
+                  disabled={vaultBalanceLoading || !business}
+                  className="premium-btn premium-btn-secondary disabled:opacity-50"
+                >
+                  {vaultBalanceLoading ? 'Refreshing…' : 'Refresh'}
+                </button>
+                <button
+                  onClick={() => void decryptVaultBalance()}
+                  disabled={vaultBalanceDecrypting || !vaultHandle || vaultHandle === 0n}
+                  className="premium-btn premium-btn-secondary disabled:opacity-50"
+                >
+                  {vaultBalanceDecrypting ? 'Decrypting…' : 'Decrypt'}
+                </button>
+              </div>
+            </div>
+            {vaultBalanceError ? (
+              <div className="expensee-sub text-rose-300">{vaultBalanceError}</div>
+            ) : null}
+            <div className="mt-4 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-alt)] p-3 text-xs text-[var(--app-muted)]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-[var(--app-ink)]">Business identity</span>
+                <span>Index: {businessIndex !== null ? businessIndex : '—'}</span>
+              </div>
+              <div className="mt-2 break-all">Business PDA: {businessPda ? businessPda.toBase58() : '—'}</div>
+              <div className="mt-1 break-all">Master PDA: {masterVaultPda.toBase58()}</div>
+              <div className="mt-1 break-all">
+                Pool vault token: {masterVault?.vaultTokenAccount?.toBase58?.() || poolVaultTokenAccount || '—'}
+              </div>
+            </div>
           </section>
         ) : null}
 
@@ -1530,10 +1940,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
               <div className="expensee-kv">
                 <span>Payroll settings</span>
                 <span className="value">{streamConfig ? 'Ready' : 'Not configured'}</span>
-              </div>
-              <div className="expensee-kv">
-                <span>Payroll operator</span>
-                <span className="value mono">{keeperPubkey || '—'}</span>
               </div>
               <div className="expensee-kv">
                 <span>Update schedule</span>
@@ -1883,6 +2289,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                               return depositV4(connection, wallet, businessPda, depositor, poolToken, amount);
                             });
                             setVaultFundingObserved(true);
+                            await refreshBusiness();
+                            await refreshVaultBalance();
                           }}
                           disabled={busy || !businessPda}
                           className="premium-btn premium-btn-secondary disabled:opacity-50"
@@ -1920,7 +2328,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                   vaultExists={vaultExists}
                   configExists={configExists}
                   depositorBalance={null}
-                  vaultBalance={null}
+                  vaultBalance={vaultBalance !== null ? String(vaultBalance) : null}
                   depositorTokenAccount={depositorTokenAccount}
                   employeeWallet={employeeWallet}
                   payPreset={payPreset}
@@ -1945,8 +2353,6 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                     setAgentQueue([]);
                     setAgentPhase('greeting');
                   }}
-                  autoGrantKeeperDecrypt={autoGrantKeeperDecrypt}
-                  setAutoGrantKeeperDecrypt={setAutoGrantKeeperDecrypt}
                   boundPresetPeriod={boundPresetPeriod}
                   setBoundPresetPeriod={setBoundPresetPeriod}
                   scope="employer"
@@ -2072,7 +2478,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showStep1 || showStep2 || showStep3 || showStep4 || showStep5 ? (
+        {showStep1 || showStep2 || showStep3 || showStep4 ? (
           <section id="setup" className="expensee-steps">
             {setupOnly ? (
               <div className="expensee-setup-nav">
@@ -2322,157 +2728,12 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
             ) : null}
 
             {showStep4 ? (
-              <div className="expensee-step-wrap">
-                <StepCard
-                  number={stepNumberMap[4] ?? 4}
-                  title="Payroll settings"
-                  description="Choose who runs payroll updates and how often they run."
-                  state={step4State}
-                  collapsible={!setupOnly}
-                >
-                  <div className="panel-card">
-                    <h2 className="text-lg font-semibold text-[var(--app-ink)]">Payroll operator + schedule</h2>
-                    <p className="mt-1 text-sm text-[var(--app-muted)]">
-                      The operator wallet runs payroll updates. The schedule controls how often updates happen.
-                    </p>
-                    {step4State === 'locked' ? (
-                      <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                        Step 4 is locked until your business is registered. Go back to Step 2, click Register Business, then Refresh.
-                      </div>
-                    ) : null}
-                    <div className="mt-4 space-y-3">
-                      {!advancedEnabled ? (
-                        <div className="rounded-lg border border-[var(--app-border)] bg-black/20 px-3 py-3 text-sm">
-                          <div className="text-xs uppercase tracking-wide text-[var(--app-muted)]">Payroll operator</div>
-                          <div className="mt-1 text-base text-[var(--app-ink)]">
-                            {isDefaultKeeper ? 'Expensee Managed (recommended)' : 'Custom operator'}
-                          </div>
-                          <div className="mt-4 text-xs uppercase tracking-wide text-[var(--app-muted)]">
-                            Update schedule
-                          </div>
-                          <div className="mt-2 grid gap-2">
-                            <select
-                              value={isCustomSchedule ? 'custom' : (settleIntervalSecs || '10')}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                if (value === 'custom') {
-                                  setSettleIntervalSecs('');
-                                  return;
-                                }
-                                setSettleIntervalSecs(value);
-                              }}
-                              className="w-full rounded-lg border border-[var(--app-border)] bg-transparent px-3 py-2 text-sm"
-                            >
-                              {schedulePresets.map((value) => (
-                                <option key={value} value={value}>
-                                  {schedulePresetLabel[value]}
-                                </option>
-                              ))}
-                              <option value="custom">Custom…</option>
-                            </select>
-                            {isCustomSchedule ? (
-                              <input
-                                value={settleIntervalSecs}
-                                onChange={(e) => setSettleIntervalSecs(e.target.value)}
-                                placeholder="Custom seconds (e.g. 120)"
-                                className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
-                              />
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <input
-                            value={keeperPubkey}
-                            onChange={(e) => setKeeperPubkey(e.target.value)}
-                            placeholder="Payroll operator wallet address"
-                            className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
-                          />
-                          <input
-                            value={settleIntervalSecs}
-                            onChange={(e) => setSettleIntervalSecs(e.target.value)}
-                            placeholder="Update every (seconds)"
-                            className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
-                          />
-                        </>
-                      )}
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={async () => {
-                            if (!businessPda) {
-                              setError('Business index is required.');
-                              return;
-                            }
-                            await runAction('Init stream config', () => {
-                              const keeper = mustPubkey('keeper pubkey', keeperPubkey);
-                              const interval = Number(settleIntervalSecs || '0');
-                              return initStreamConfigV4(connection, wallet, businessPda, keeper, interval);
-                            });
-                            await refreshConfig();
-                          }}
-                          disabled={busy || !businessPda}
-                          className="premium-btn premium-btn-primary disabled:opacity-50"
-                        >
-                          Save Payroll Settings
-                        </button>
-                        {advancedEnabled ? (
-                          <>
-                            <button
-                              onClick={async () => {
-                                if (!businessPda) {
-                                  setError('Business index is required.');
-                                  return;
-                                }
-                                await runAction('Update keeper', () => {
-                                  const keeper = mustPubkey('keeper pubkey', keeperPubkey);
-                                  return updateKeeperV4(connection, wallet, businessPda, keeper);
-                                });
-                                await refreshConfig();
-                              }}
-                              disabled={busy || !businessPda}
-                              className="premium-btn premium-btn-secondary disabled:opacity-50"
-                            >
-                              Change Payroll Operator
-                            </button>
-                            <button
-                              onClick={() => void refreshConfig()}
-                              disabled={busy || !businessPda}
-                              className="premium-btn premium-btn-secondary disabled:opacity-50"
-                            >
-                              Refresh Settings
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
-                      {streamConfig ? (
-                        advancedEnabled ? (
-                          <div className="text-xs text-[var(--app-muted)]">
-                            Operator: {streamConfig.keeperPubkey.toBase58()} · Every: {streamConfig.settleIntervalSecs}s
-                          </div>
-                        ) : (
-                          <div className="text-xs text-[var(--app-muted)]">Payroll settings saved.</div>
-                        )
-                      ) : null}
-                      {advancedEnabled ? (
-                        <AdvancedDetails title="Technical details">
-                          <div className="text-xs text-[var(--app-muted)] break-all">
-                            Payroll settings ID: {streamConfigPda ? streamConfigPda.toBase58() : '—'}
-                          </div>
-                        </AdvancedDetails>
-                      ) : null}
-                    </div>
-                  </div>
-                </StepCard>
-              </div>
-            ) : null}
-
-            {showStep5 ? (
               <div id="setup-employee" className="expensee-step-wrap">
                 <StepCard
-                  number={stepNumberMap[5] ?? 5}
+                  number={stepNumberMap[4] ?? 4}
                   title="Add employee"
                   description="Set who gets paid, how much, and (optionally) the contract window."
-                  state={step5State}
+                  state={step4State}
                   collapsible={!setupOnly}
                 >
                   <div className="panel-card">
@@ -2481,6 +2742,24 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                       Pay is calculated linearly over time: <span className="font-semibold">rate × elapsed</span>. If you set a
                       contract window, pay only accrues within that time range.
                     </p>
+                    {!streamConfig ? (
+                      <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                        Payroll settings are auto‑configuring. {autoConfigBusy ? 'Setting up now…' : 'Waiting for setup.'}
+                        {autoConfigError ? (
+                          <div className="mt-2 text-amber-200">{autoConfigError}</div>
+                        ) : null}
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={() => void attemptAutoConfig(true)}
+                            disabled={autoConfigBusy || !businessPda}
+                            className="premium-btn premium-btn-secondary disabled:opacity-50"
+                          >
+                            Retry Auto‑Setup
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="mt-4 space-y-3">
                       <input
                         value={employeeIndexInput}
@@ -2491,9 +2770,12 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                       <input
                         value={employeeWallet}
                         onChange={(e) => setEmployeeWallet(e.target.value)}
-                        placeholder="Employee wallet (payout address)"
+                        placeholder="Employee wallet (identity)"
                         className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
                       />
+                      <div className="text-xs text-[var(--app-muted)]">
+                        This is the employee’s identity wallet. The payout destination is chosen by the employee at claim time.
+                      </div>
                       <div className="grid gap-3 md:grid-cols-2">
                         <div className="flex flex-wrap gap-2">
                           {(['per_second', 'hourly', 'weekly', 'biweekly', 'monthly'] as PayPreset[]).map((preset) => (
@@ -2577,12 +2859,18 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                               : wallet.publicKey;
                             if (!walletKey) throw new Error('Connect wallet or enter employee wallet');
                             const result = await runAction('Add employee', () => {
+                              if (!streamConfig) {
+                                throw new Error('Payroll settings not initialized yet. Please retry in a moment.');
+                              }
                               const perSecond = resolvedPerSecond || salaryPerSecond;
                               if (!perSecond) throw new Error('Pay rate is required.');
                               const salary = parseUiAmount('salary per second', perSecond);
                               const start = Number(periodStart || '0');
                               const end = Number(periodEnd || '0');
-                              return addEmployeeV4(connection, wallet, businessPda, walletKey, salary, start, end);
+                              // Calculate required deposit for private solvency check
+                              const dur = end > start ? BigInt(end - start) : 0n;
+                              const reqDeposit = dur > 0n ? salary * dur : 0n;
+                              return addEmployeeV4(connection, wallet, businessPda, walletKey, salary, start, end, reqDeposit);
                             });
                             const createdIndex =
                               result && typeof result === 'object' && 'employeeIndex' in result
@@ -2595,39 +2883,50 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                               const origin = typeof window !== 'undefined' ? window.location.origin : '';
                               setInviteLink(`${origin}/employee?bi=${biVal}&ei=${createdIndex}`);
                             }
-                            if (autoGrantKeeperDecrypt && businessPda && createdIndex !== null) {
-                              try {
-                                const keeper =
-                                  streamConfig?.keeperPubkey ||
-                                  (keeperPubkey ? mustPubkey('keeper pubkey', keeperPubkey) : null);
-                                if (keeper) {
-                                  await runAction('Grant keeper decrypt', () =>
-                                    grantKeeperViewAccessV4(connection, wallet, businessPda, createdIndex, keeper)
-                                  );
-                                }
-                              } catch (e: any) {
-                                setError(e?.message || 'Failed to grant keeper decrypt');
+                            const addTxid =
+                              result && typeof result === 'object' && 'txid' in result
+                                ? String((result as any).txid)
+                                : '';
+                            let solvency: boolean | null = null;
+                            if (addTxid) {
+                              setSolvencyStatus('unknown');
+                              setSolvencyMessage('');
+                              solvency = await resolveSolvencyFromTx(addTxid);
+                              if (solvency === false) {
+                                setSolvencyStatus('insolvent');
+                                setSolvencyMessage(
+                                  'Insufficient funds — employee created but salary is paused. Deposit funds and update salary rate to activate.'
+                                );
+                              } else if (solvency === true) {
+                                setSolvencyStatus('solvent');
                               }
                             }
-                            if (autoEnableHighSpeedOnCreate && businessIndex !== null && createdIndex !== null) {
-                              await runAction('Auto-enable high-speed mode', () => {
+                            if (businessIndex !== null && createdIndex !== null) {
+                              if (solvency === false) {
+                                await refreshEmployee();
+                                return;
+                              }
+                              const delegationResult = await runAction('Auto-enable high-speed mode', () => {
                                 const validator = getMagicblockValidatorForRegion(delegateRegion);
-                                return delegateStreamV4(
-                                  connection,
-                                  wallet,
-                                  businessIndex,
-                                  createdIndex,
-                                  walletKey,
-                                  validator
-                                ).then(async (sig) => {
-                                  const erUrl = getMagicblockEndpointForRegion(delegateRegion);
-                                  const taskId = Number(Date.now() % 1000000);
-                                  await scheduleCrankV4(new Connection(erUrl), wallet, businessIndex, createdIndex, taskId);
-                                  setCrankScheduleInfo({ taskId, scheduledAt: new Date().toLocaleString() });
-                                  return sig;
-                                });
+                              return delegateStreamV4(
+                                connection,
+                                wallet,
+                                businessIndex,
+                                createdIndex,
+                                walletKey,
+                                validator
+                              ).then(async (sig) => {
+                                await scheduleCrankOnEr(delegateRegion, businessIndex, createdIndex);
+                                return sig;
                               });
-                              await refreshDelegation();
+                            });
+                              if (!delegationResult) {
+                                setError('⚠️ MagicBlock delegation failed. Stream is NOT real-time. Please retry delegation manually.');
+                                await refreshDelegation();
+                                await refreshEmployee();
+                                return;
+                              }
+                              await waitForDelegationStatus(true, 'Delegating stream');
                             }
                             if (businessPda && createdIndex !== null) {
                               try {
@@ -2650,6 +2949,20 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                         >
                           Add Employee
                         </button>
+                        {solvencyChecking ? (
+                          <div className="w-full text-xs text-[var(--app-muted)]">Checking solvency…</div>
+                        ) : null}
+                        {solvencyStatus === 'solvent' ? (
+                          <div className="w-full text-xs text-emerald-400">
+                            Solvency check: OK — stream is active.
+                          </div>
+                        ) : null}
+                        {solvencyStatus === 'insolvent' ? (
+                          <div className="w-full text-xs text-amber-400">
+                            {solvencyMessage ||
+                              'Insufficient funds — employee created but salary is paused. Deposit funds and update salary rate to activate.'}
+                          </div>
+                        ) : null}
                         {(inviteLink || (businessIndex !== null && employeeIndex !== null && employee)) && (
                           <div className="w-full mt-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] p-4">
                             <div className="text-xs font-semibold uppercase tracking-widest text-emerald-400 mb-2">Employee Invite Link</div>
@@ -2714,7 +3027,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                             </button>
                             <button
                               onClick={async () => {
-                                if (!businessPda || employeeIndex === null) {
+                                if (!businessPda || employeeIndex === null || businessIndex === null) {
                                   setError('Business and employee index are required.');
                                   return;
                                 }
@@ -2722,17 +3035,86 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                                   setError('Enter a new salary per second.');
                                   return;
                                 }
+                                // Step 1: If currently delegated, commit+undelegate first so base layer can write
+                                const wasDelegate = isDelegated;
+                                if (wasDelegate) {
+                                  const commitResult = await runAction('Commit stream (required for rate update)', () =>
+                                    commitAndUndelegateStreamV4(
+                                      new Connection(getMagicblockEndpointForRegion(delegateRegion)),
+                                      wallet,
+                                      businessIndex,
+                                      employeeIndex
+                                    )
+                                  );
+                                  if (!commitResult) {
+                                    setError('⚠️ Failed to commit stream. Cannot update salary rate while delegated.');
+                                    return;
+                                  }
+                                  await refreshDelegation();
+                                }
+                                // Step 2: Init rate history if missing
                                 if (!rateHistoryExists) {
                                   await runAction('Init rate history', () =>
                                     initRateHistoryV4(connection, wallet, businessPda, employeeIndex)
                                   );
                                 }
+                                // Step 3: Update salary rate on base layer
                                 const salaryLamports = parseUiAmount('salary update', salaryUpdateInput);
-                                await runAction('Update salary rate', () =>
-                                  updateSalaryRateV4(connection, wallet, businessPda, employeeIndex, salaryLamports)
+                                // Calculate required deposit for solvency check
+                                const pEnd = Number(periodEnd || '0');
+                                const now = Math.floor(Date.now() / 1000);
+                                const remaining = pEnd > now ? BigInt(pEnd - now) : 0n;
+                                const reqDep = remaining > 0n ? salaryLamports * remaining : 0n;
+                                const updateResult = await runAction('Update salary rate', () =>
+                                  updateSalaryRateV4(connection, wallet, businessPda, employeeIndex, salaryLamports, reqDep)
                                 );
+                                if (!updateResult) {
+                                  await refreshEmployee();
+                                  return;
+                                }
+                                setSolvencyStatus('unknown');
+                                setSolvencyMessage('');
+                                const solvency = await resolveSolvencyFromTx(String(updateResult));
+                                if (solvency === false) {
+                                  setSolvencyStatus('insolvent');
+                                  setSolvencyMessage(
+                                    'Insufficient funds — salary update parked. Deposit funds and retry to activate.'
+                                  );
+                                  await refreshEmployee();
+                                  await refreshRateHistory();
+                                  await refreshDelegation();
+                                  return;
+                                }
+                                if (solvency === true) {
+                                  setSolvencyStatus('solvent');
+                                }
+                                // Step 4: Re-delegate immediately so real-time streaming resumes
+                                if (wasDelegate && employeeWallet.trim()) {
+                                  const validator = getMagicblockValidatorForRegion(delegateRegion);
+                                const redelegateResult = await runAction('Re-delegate stream (resume real-time)', () =>
+                                  delegateStreamV4(
+                                    connection,
+                                    wallet,
+                                    businessIndex,
+                                    employeeIndex,
+                                      mustPubkey('employee wallet', employeeWallet),
+                                      validator
+                                    ).then(async (sig) => {
+                                      await scheduleCrankOnEr(delegateRegion, businessIndex, employeeIndex);
+                                      return sig;
+                                    })
+                                  );
+                                  if (!redelegateResult) {
+                                    setError('⚠️ Salary rate updated but re-delegation failed. Please redelegate manually.');
+                                  }
+                                }
                                 await refreshEmployee();
                                 await refreshRateHistory();
+                                if (wasDelegate) {
+                                  await waitForDelegationStatus(true, 'Re-delegating stream');
+                                } else {
+                                  await refreshDelegation();
+                                }
                               }}
                               disabled={busy || !businessPda || employeeIndex === null}
                               className="premium-btn premium-btn-primary disabled:opacity-50"
@@ -2760,185 +3142,256 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                     </div>
                   </div>
 
-                  {advancedEnabled ? (
-                    <AdvancedDetails title="High-speed mode (optional)">
-                      <div className="panel-card">
-                        <h2 className="text-lg font-semibold text-[var(--app-ink)]">High-Speed Mode (MagicBlock)</h2>
-                        <p className="mt-1 text-sm text-[var(--app-muted)]">
-                          Delegate a v4 stream to MagicBlock ER for faster execution. Keeper will commit+undelegate on withdraw.
-                        </p>
-                        <div className="mt-4 space-y-3">
-                          <label className="flex items-center gap-2 text-xs text-[var(--app-muted)]">
-                            <input
-                              type="checkbox"
-                              checked={autoEnableHighSpeedOnCreate}
-                              onChange={(e) => setAutoEnableHighSpeedOnCreate(e.target.checked)}
-                            />
-                            <span>Auto-enable high-speed mode after employee creation (optional).</span>
-                          </label>
-                          <AdvancedDetails title="High-speed controls">
-                            <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--app-muted)]">
-                              <span className="uppercase tracking-wider text-[10px] font-semibold text-[var(--app-muted)]">Execution mode</span>
-                              <StatusPill tone={executionTone}>{executionLabel}</StatusPill>
-                              <span className="text-[var(--app-muted)]">Validator:</span>
-                              <span className="font-mono text-[var(--app-ink)]">{selectedValidator.toBase58()}</span>
-                            </div>
-                            <div className="grid gap-3 sm:grid-cols-3">
-                              <select
-                                value={delegateRegion}
-                                onChange={(e) => setDelegateRegion(e.target.value as MagicblockValidatorRegion)}
-                                className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
-                              >
-                                <option value="eu">EU Validator (default)</option>
-                                <option value="us" disabled={!usValidatorAvailable}>
-                                  US Validator {usValidatorAvailable ? '' : '(set env)'}
-                                </option>
-                                <option value="asia" disabled={!asiaValidatorAvailable}>
-                                  Asia Validator {asiaValidatorAvailable ? '' : '(set env)'}
-                                </option>
-                              </select>
-                              <div className="text-xs text-[var(--app-muted)] flex items-center">
-                                Delegated: {isDelegated === null ? 'unknown' : isDelegated ? 'yes' : 'no'}
-                              </div>
-                              <div className="text-xs text-[var(--app-muted)] flex items-center">
-                                Crank scheduled: {crankScheduleInfo ? 'yes' : 'no'}
-                              </div>
-                            </div>
-                            {crankScheduleInfo ? (
-                              <div className="text-xs text-[var(--app-muted)]">
-                                Last scheduled: {crankScheduleInfo.scheduledAt} · Task ID: {crankScheduleInfo.taskId}
-                              </div>
-                            ) : null}
-                            <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--app-muted)]">
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={teeModeEnabled}
-                                  onChange={async (e) => {
-                                    const enabled = e.target.checked;
-                                    setMagicblockTeeModeEnabled(enabled);
-                                    setTeeModeEnabled(enabled);
-                                    if (enabled) {
-                                      await runAction('Authorize TEE', () => ensureTeeAuthToken(wallet));
-                                    }
-                                    refreshTeeStatus();
-                                  }}
-                                />
-                                <span>Use TEE RPC for signed transactions</span>
-                              </label>
-                              <span className="text-[var(--app-muted)]">TEE token:</span>
-                              <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
-                                {teeStatus === 'ready' ? 'ready' : 'missing'}
-                              </span>
-                              <button
-                                onClick={async () => {
-                                  await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
-                                  refreshTeeStatus();
-                                }}
-                                disabled={busy || !wallet.publicKey}
-                                className="premium-btn premium-btn-secondary disabled:opacity-50"
-                              >
-                                Refresh TEE Auth
-                              </button>
-                            </div>
-                            <div className="text-xs text-[var(--app-muted)]">
-                              Default ER region: {preferredRegion.toUpperCase()} (set{' '}
-                              <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_REGION</span> to override).
-                            </div>
-                            {(!usValidatorAvailable || !asiaValidatorAvailable) ? (
-                              <div className="text-xs text-[var(--app-muted)]">
-                                Enable additional ER regions by setting{' '}
-                                <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_US</span> and/or{' '}
-                                <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_ASIA</span>.
-                              </div>
-                            ) : null}
-                            {isTeeValidator ? (
-                              <div className="text-xs text-amber-600">
-                                Selected validator points to the TEE identity (token-gated on devnet). Prefer an ER validator for
-                                general use.
-                              </div>
-                            ) : null}
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                onClick={async () => {
-                                  if (businessIndex === null || employeeIndex === null) {
-                                    setError('Business index + employee index are required.');
-                                    return;
-                                  }
-                                  if (!employeeWallet.trim()) {
-                                    setError('Employee wallet is required for permission membership.');
-                                    return;
-                                  }
-                                  const validator = getMagicblockValidatorForRegion(delegateRegion);
-                                  await runAction('Delegate v4 stream', () =>
-                                    delegateStreamV4(
-                                      connection,
-                                      wallet,
-                                      businessIndex,
-                                      employeeIndex,
-                                      mustPubkey('employee wallet', employeeWallet),
-                                      validator
-                                    ).then(async (sig) => {
-                                      const erUrl = getMagicblockEndpointForRegion(delegateRegion);
-                                      const taskId = Number(Date.now() % 1000000);
-                                      await scheduleCrankV4(new Connection(erUrl), wallet, businessIndex, employeeIndex, taskId);
-                                      setCrankScheduleInfo({ taskId, scheduledAt: new Date().toLocaleString() });
-                                      return sig;
-                                    })
-                                  );
-                                  await refreshDelegation();
-                                }}
-                                disabled={busy || businessIndex === null || employeeIndex === null}
-                                className="premium-btn premium-btn-primary disabled:opacity-50"
-                              >
-                                Delegate
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  if (businessIndex === null || employeeIndex === null) {
-                                    setError('Business index + employee index are required.');
-                                    return;
-                                  }
-                                  await runAction('Commit + Undelegate', () =>
-                                    commitAndUndelegateStreamV4(connection, wallet, businessIndex, employeeIndex)
-                                  );
-                                  await refreshDelegation();
-                                }}
-                                disabled={busy || businessIndex === null || employeeIndex === null}
-                                className="premium-btn premium-btn-secondary disabled:opacity-50"
-                              >
-                                Commit + Undelegate
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  if (businessIndex === null || employeeIndex === null) {
-                                    setError('Business index + employee index are required.');
-                                    return;
-                                  }
-                                  const validator = getMagicblockValidatorForRegion(delegateRegion);
-                                  await runAction('Redelegate v4 stream', () =>
-                                    redelegateStreamV4(connection, wallet, businessIndex, employeeIndex, validator)
-                                  );
-                                  await refreshDelegation();
-                                }}
-                                disabled={busy || businessIndex === null || employeeIndex === null}
-                                className="premium-btn premium-btn-secondary disabled:opacity-50"
-                              >
-                                Redelegate
-                              </button>
-                              <button
-                                onClick={() => void refreshDelegation()}
-                                disabled={busy || !employeePda}
-                                className="premium-btn premium-btn-secondary disabled:opacity-50"
-                              >
-                                Refresh Status
-                              </button>
-                            </div>
-                          </AdvancedDetails>
+                  <div className="mt-6 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-alt)] p-4">
+                    <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--app-muted)]">High-Speed Mode (MagicBlock — Required)</h2>
+                    <p className="mt-1 text-sm text-[var(--app-muted)]">
+                      Delegation to MagicBlock ER is required for real-time streaming. Withdrawals are employee-triggered.
+                    </p>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--app-muted)]">
+                        <span className="uppercase tracking-wider text-[10px] font-semibold text-[var(--app-muted)]">Execution mode</span>
+                        <StatusPill tone={executionTone}>{executionLabel}</StatusPill>
+                        <span className="text-[var(--app-muted)]">Validator:</span>
+                        <span className="font-mono text-[var(--app-ink)]">{selectedValidator.toBase58()}</span>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <select
+                          value={delegateRegion}
+                          onChange={(e) => setDelegateRegion(e.target.value as MagicblockValidatorRegion)}
+                          className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
+                        >
+                          <option value="eu">EU Validator (default)</option>
+                          <option value="us" disabled={!usValidatorAvailable}>
+                            US Validator {usValidatorAvailable ? '' : '(set env)'}
+                          </option>
+                          <option value="asia" disabled={!asiaValidatorAvailable}>
+                            Asia Validator {asiaValidatorAvailable ? '' : '(set env)'}
+                          </option>
+                        </select>
+                        <div className="text-xs text-[var(--app-muted)] flex items-center">
+                          Delegated: {isDelegated === null ? 'unknown' : isDelegated ? 'yes' : 'no'}
+                        </div>
+                        <div className="text-xs text-[var(--app-muted)] flex items-center">
+                          Crank scheduled: {crankScheduleStatus === 'yes' ? 'yes' : crankScheduleStatus === 'no' ? 'no' : 'unknown'}
                         </div>
                       </div>
-                    </AdvancedDetails>
-                  ) : null}
+                      {crankScheduleInfo ? (
+                        <div className="text-xs text-[var(--app-muted)]">
+                          Last scheduled: {crankScheduleInfo.scheduledAt} · Task ID: {crankScheduleInfo.taskId}
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--app-muted)]">
+                        <span className="text-[var(--app-muted)]">TEE token:</span>
+                        <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
+                          {teeStatus === 'ready' ? 'ready' : 'missing'}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
+                            refreshTeeStatus();
+                          }}
+                          disabled={busy || !wallet.publicKey}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          {teeStatus === 'ready' ? 'Refresh auth' : 'Authorize TEE'}
+                        </button>
+                      </div>
+                      <div className="text-xs text-[var(--app-muted)]">
+                        Default ER region: {preferredRegion.toUpperCase()} (set{' '}
+                        <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_REGION</span> to override).
+                      </div>
+                      {(!usValidatorAvailable || !asiaValidatorAvailable) ? (
+                        <div className="text-xs text-[var(--app-muted)]">
+                          Enable additional ER regions by setting{' '}
+                          <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_US</span> and/or{' '}
+                          <span className="font-mono">NEXT_PUBLIC_MAGICBLOCK_VALIDATOR_ASIA</span>.
+                        </div>
+                      ) : null}
+                      {isTeeValidator ? (
+                        <div className="text-xs text-amber-600">
+                          Selected validator points to the TEE identity (token-gated on devnet). Prefer an ER validator for general use.
+                        </div>
+                      ) : null}
+                      {delegationStatusMsg ? (
+                        <div className="text-xs text-[var(--app-muted)]">{delegationStatusMsg}</div>
+                      ) : null}
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={async () => {
+                            if (businessIndex === null || employeeIndex === null) {
+                              setError('Business index + employee index are required.');
+                              return;
+                            }
+                            if (!employeeWallet.trim()) {
+                              setError('Employee wallet is required for permission membership.');
+                              return;
+                            }
+                            const validator = getMagicblockValidatorForRegion(delegateRegion);
+                            const delegateTx = await runAction('Delegate v4 stream', () =>
+                              delegateStreamV4(
+                                connection,
+                                wallet,
+                                businessIndex,
+                                employeeIndex,
+                                mustPubkey('employee wallet', employeeWallet),
+                                validator
+                              ).then(async (sig) => {
+                                await scheduleCrankOnEr(delegateRegion, businessIndex, employeeIndex);
+                                return sig;
+                              })
+                            );
+                            if (delegateTx) {
+                              if (typeof delegateTx === 'string') setLastDelegateTx(delegateTx);
+                              await waitForDelegationStatus(true, 'Delegating stream');
+                            }
+                          }}
+                          disabled={busy || businessIndex === null || employeeIndex === null || isDelegated === true}
+                          className="premium-btn premium-btn-primary disabled:opacity-50"
+                        >
+                          Delegate
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (businessIndex === null || employeeIndex === null) {
+                              setError('Business index + employee index are required.');
+                              return;
+                            }
+                            const undelegateTx = await runAction('Commit + Undelegate', () =>
+                              commitAndUndelegateStreamV4(
+                                new Connection(getMagicblockEndpointForRegion(delegateRegion)),
+                                wallet,
+                                businessIndex,
+                                employeeIndex
+                              )
+                            );
+                            if (undelegateTx) {
+                              if (typeof undelegateTx === 'string') setLastUndelegateTx(undelegateTx);
+                              setCrankScheduleInfo(null);
+                              setCrankScheduleStatus('no');
+                              await waitForDelegationStatus(false, 'Committing and undelegating');
+                            }
+                          }}
+                          disabled={busy || businessIndex === null || employeeIndex === null}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Commit + Undelegate
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (businessIndex === null || employeeIndex === null) {
+                              setError('Business index + employee index are required.');
+                              return;
+                            }
+                            const validator = getMagicblockValidatorForRegion(delegateRegion);
+                            const redelegateTx = await runAction('Redelegate v4 stream', () =>
+                              redelegateStreamV4(connection, wallet, businessIndex, employeeIndex, validator).then(async (sig) => {
+                                await scheduleCrankOnEr(delegateRegion, businessIndex, employeeIndex);
+                                return sig;
+                              })
+                            );
+                            if (redelegateTx) {
+                              if (typeof redelegateTx === 'string') setLastRedelegateTx(redelegateTx);
+                              await waitForDelegationStatus(true, 'Re-delegating stream');
+                            }
+                          }}
+                          disabled={busy || businessIndex === null || employeeIndex === null}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Redelegate
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (businessIndex === null || employeeIndex === null) {
+                              setError('Business index + employee index are required.');
+                              return;
+                            }
+                            if (!isDelegated) {
+                              setError('Stream must be delegated before scheduling the crank.');
+                              return;
+                            }
+                            await runAction('Schedule crank', () =>
+                              scheduleCrankOnEr(delegateRegion, businessIndex, employeeIndex)
+                            );
+                          }}
+                          disabled={
+                            busy ||
+                            businessIndex === null ||
+                            employeeIndex === null ||
+                            !isDelegated
+                          }
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Schedule Crank
+                        </button>
+                        <button
+                          onClick={() => {
+                            void refreshDelegation();
+                            void checkCrankScheduled();
+                          }}
+                          disabled={busy || !employeePda}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Refresh Status
+                        </button>
+                      </div>
+                      {(lastDelegateTx || lastUndelegateTx || lastRedelegateTx || lastCrankTx) ? (
+                        <div className="mt-3 text-xs text-[var(--app-muted)] space-y-1">
+                          {lastCrankTx ? (
+                            <div>
+                              Last crank tx:{' '}
+                              <a
+                                href={`https://explorer.solana.com/tx/${lastCrankTx}?cluster=devnet`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-purple-400 underline"
+                              >
+                                {lastCrankTx.slice(0, 8)}…{lastCrankTx.slice(-6)}
+                              </a>
+                            </div>
+                          ) : null}
+                          {lastDelegateTx ? (
+                            <div>
+                              Last delegate tx:{' '}
+                              <a
+                                href={`https://explorer.solana.com/tx/${lastDelegateTx}?cluster=devnet`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-emerald-400 underline"
+                              >
+                                {lastDelegateTx.slice(0, 8)}…{lastDelegateTx.slice(-6)}
+                              </a>
+                            </div>
+                          ) : null}
+                          {lastUndelegateTx ? (
+                            <div>
+                              Last undelegate tx:{' '}
+                              <a
+                                href={`https://explorer.solana.com/tx/${lastUndelegateTx}?cluster=devnet`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-amber-400 underline"
+                              >
+                                {lastUndelegateTx.slice(0, 8)}…{lastUndelegateTx.slice(-6)}
+                              </a>
+                            </div>
+                          ) : null}
+                          {lastRedelegateTx ? (
+                            <div>
+                              Last redelegate tx:{' '}
+                              <a
+                                href={`https://explorer.solana.com/tx/${lastRedelegateTx}?cluster=devnet`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sky-400 underline"
+                              >
+                                {lastRedelegateTx.slice(0, 8)}…{lastRedelegateTx.slice(-6)}
+                              </a>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
                 </StepCard>
               </div>
             ) : null}

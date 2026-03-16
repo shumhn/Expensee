@@ -82,8 +82,6 @@ type AgentChatProps = {
     hydrated: boolean;
     onCancelBusy?: () => void;
     onClearChat?: () => void;
-    autoGrantKeeperDecrypt?: boolean;
-    setAutoGrantKeeperDecrypt?: (val: boolean) => void;
     boundPresetPeriod?: boolean;
     setBoundPresetPeriod?: (val: boolean) => void;
     proofSummary?: AgentProofSummary;
@@ -141,8 +139,6 @@ export default function AgentChat({
     busy,
     onCancelBusy,
     onClearChat,
-    autoGrantKeeperDecrypt,
-    setAutoGrantKeeperDecrypt,
     boundPresetPeriod,
     setBoundPresetPeriod,
     proofSummary,
@@ -310,7 +306,6 @@ export default function AgentChat({
                         payAmount,
                         depositAmount,
                         streamIndex,
-                        autoGrantKeeperDecrypt,
                         boundPresetPeriod,
                         proofSummary
                     },
@@ -324,7 +319,7 @@ export default function AgentChat({
             console.error('[AgentChat] askGrok fetch error:', err);
             return { reply: `I couldn't reach my brain. Please try again.` };
         }
-    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, depositAmount, streamIndex, executionSteps, phase, autoGrantKeeperDecrypt, boundPresetPeriod, proofSummary]);
+    }, [messages, businessExists, vaultExists, configExists, depositorBalance, vaultBalance, depositorTokenAccount, employeeWallet, payPreset, payAmount, depositAmount, streamIndex, executionSteps, phase, boundPresetPeriod, proofSummary]);
 
     const handleSend = useCallback(async () => {
         const text = input.trim();
@@ -535,7 +530,6 @@ export default function AgentChat({
                 }
 
                 if (optionStep === 0) {
-                    setAutoGrantKeeperDecrypt?.(isYes);
                     addAgentMsg(isYes ? ` **Automation enabled.**\n\n` : `⬜ **Manual settlement only.**\n\n`);
                     addAgentMsg(`⏱️ **Stop payroll automatically at the end of period?** (yes/no)`);
                     setOptionStep(1);
@@ -704,7 +698,7 @@ export default function AgentChat({
                         } else if (step.key === 'create-worker-record') {
                             const hsStep = executionSteps.find(s => s.key === 'enable-high-speed');
                             if (hsStep && hsStep.status === 'pending') {
-                                addAgentMsg(` **Encrypted employee record created!**${proof}\n\nHigh-speed mode is optional. Type ${randomGoCmd()} to enable it, or tell me to skip.`);
+                                addAgentMsg(` **Encrypted employee record created!**${proof}\n\nHigh-speed mode is required for real-time payroll. Type ${randomGoCmd()} to enable it now.`);
                                 setPhase('confirm_plan');
                             } else {
                                 addAgentMsg(` **Encrypted employee record created!**${proof}\n\n **Setup is complete!** The employee can now use the **Employee Portal** at /employee.\nType \`/proof\` any time to see encryption/delegation verification.`);
@@ -809,7 +803,7 @@ export default function AgentChat({
         businessExists, vaultExists, configExists, addAgentMsg, addUserMsg,
         askGrok, executionSteps, onDraftPlan, onExecutePlan, onApplyPlan, actionableSteps, activeStep, activeStepIndex,
         setInput, walletAddress, setDepositAmount, setOptionStep, optionStep,
-        setAutoGrantKeeperDecrypt, setBoundPresetPeriod, onCancelBusy, setPhase, proofSummary
+        setBoundPresetPeriod, onCancelBusy, setPhase, proofSummary
     ]);
 
     const handleKeyDown = useCallback(

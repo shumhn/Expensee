@@ -32,7 +32,6 @@ type AgentPlan = {
   salaryPerSecond?: string;
   boundPresetPeriod?: boolean;
   autoGrantDecrypt?: boolean;
-  autoGrantKeeperDecrypt?: boolean;
   streamIndex?: number;
   bonusAmount?: string;
   depositAmount?: string;
@@ -136,7 +135,6 @@ function buildHeuristicPlan(input: PlannerInput): AgentPlan {
     missing,
     boundPresetPeriod: true,
     autoGrantDecrypt: false,
-    autoGrantKeeperDecrypt: true,
   };
 
   // Detect basic intent keywords
@@ -376,7 +374,6 @@ function normalizeLlmPlan(raw: unknown): AgentPlan | null {
 
   normalized.boundPresetPeriod = typeof obj.boundPresetPeriod === 'boolean' ? obj.boundPresetPeriod : true;
   normalized.autoGrantDecrypt = typeof obj.autoGrantDecrypt === 'boolean' ? obj.autoGrantDecrypt : false;
-  normalized.autoGrantKeeperDecrypt = typeof obj.autoGrantKeeperDecrypt === 'boolean' ? obj.autoGrantKeeperDecrypt : true;
 
   const depositAmount = toTrimmedString(obj.depositAmount);
   if (depositAmount) normalized.depositAmount = depositAmount;

@@ -24,6 +24,15 @@ type PageShellProps = {
 export default function PageShell({ icon = '', title, subtitle, navItems = [], children }: PageShellProps) {
   const primaryNav = navItems.filter((item) => !item.advanced);
   const advancedNav = navItems.filter((item) => item.advanced);
+  const rpcUrl =
+    process.env.NEXT_PUBLIC_SOLANA_READ_RPC_URL || process.env.NEXT_PUBLIC_SOLANA_RPC_URL || '';
+  const networkLabel = rpcUrl.includes('mainnet')
+    ? 'Mainnet'
+    : rpcUrl.includes('devnet')
+      ? 'Devnet'
+      : rpcUrl
+        ? 'Custom'
+        : 'Devnet';
 
   return (
     <div className="min-h-screen bg-[var(--app-bg)] text-[var(--app-ink)] font-sans selection:bg-cyan-500/20 selection:text-cyan-600 dark:selection:text-cyan-300 transition-colors duration-500">
@@ -62,6 +71,7 @@ export default function PageShell({ icon = '', title, subtitle, navItems = [], c
               </nav>
             )}
             <div className="flex items-center gap-3">
+              <span className="expensee-pill">{networkLabel}</span>
               <WalletButton />
             </div>
           </div>

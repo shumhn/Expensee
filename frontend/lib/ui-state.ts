@@ -13,7 +13,7 @@ export function getEmployerStepStates(state: EmployerWizardState): Record<number
   const step1: StepState = state.businessReady && state.vaultReady ? 'done' : 'active';
   const step2: StepState = state.vaultFunded ? 'done' : state.businessReady && state.vaultReady ? 'active' : 'locked';
   const step3: StepState = state.hasWorkerRecord ? 'done' : state.vaultReady && state.configReady ? 'active' : 'locked';
-  const step4: StepState = state.highSpeedOn ? 'done' : state.hasWorkerRecord ? 'optional' : 'locked';
+  const step4: StepState = state.highSpeedOn ? 'done' : state.hasWorkerRecord ? 'active' : 'locked';
   const step5: StepState = state.hasWorkerRecord ? 'active' : 'locked';
   return { 1: step1, 2: step2, 3: step3, 4: step4, 5: step5 };
 }

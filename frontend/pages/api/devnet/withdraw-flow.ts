@@ -23,6 +23,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const businessIndex = body?.businessIndex;
   const employeeIndex = body?.employeeIndex;
   const flowMode = body?.mode;
+  const skipRequest = body?.skipRequest;
 
   execFile(
     'node',
@@ -35,6 +36,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         ...(Number.isFinite(Number(businessIndex)) ? { BUSINESS_INDEX: String(businessIndex) } : {}),
         ...(Number.isFinite(Number(employeeIndex)) ? { EMPLOYEE_INDEX: String(employeeIndex) } : {}),
         ...(flowMode ? { FLOW_MODE: String(flowMode) } : {}),
+        ...(skipRequest ? { SKIP_REQUEST_WITHDRAW: 'true' } : {}),
       },
     },
     (error, stdout, stderr) => {

@@ -9,6 +9,7 @@ import AdvancedDetails from '../components/AdvancedDetails';
 import StepCard, { StepState } from '../components/StepCard';
 import {
   claimPayoutV4,
+  commitAndUndelegateStreamV4,
   createIncoTokenAccount,
   ensureTeeAuthToken,
   getBusinessStreamConfigV4Account,
@@ -25,7 +26,6 @@ import {
   getUserTokenAccountV4,
   getWithdrawRequestV4PDA,
   grantEmployeeViewAccessV4,
-  grantKeeperViewAccessV4,
   isMagicblockTeeModeEnabled,
   isStoredTeeTokenValid,
   initUserTokenAccountV4,
@@ -104,7 +104,6 @@ export default function EmployeeV4Page() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [lastTx, setLastTx] = useState<{ label: string; sig: string } | null>(null);
-  const [teeModeEnabled, setTeeModeEnabled] = useState(false);
   const [teeStatus, setTeeStatus] = useState<'missing' | 'ready'>('missing');
 
   const [businessIndexInput, setBusinessIndexInput] = useState('0');
@@ -128,9 +127,8 @@ export default function EmployeeV4Page() {
   const [withdrawRequestLoading, setWithdrawRequestLoading] = useState(false);
   const [payouts, setPayouts] = useState<Awaited<ReturnType<typeof getPayoutsForEmployeeV4>>>([]);
   const [payoutsLoading, setPayoutsLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const autoRefresh = true;
   const [streamConfig, setStreamConfig] = useState<Awaited<ReturnType<typeof getBusinessStreamConfigV4Account>>>(null);
-  const [streamConfigLoading, setStreamConfigLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showOverview, setShowOverview] = useState(true);
   const [employeeStep, setEmployeeStep] = useState(1);
@@ -236,6 +234,18 @@ export default function EmployeeV4Page() {
     setWithdrawProgress('');
     setError('');
     setMessage('');
+
+    if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
+      setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
+      return;
+    }
+    
+    const { isMagicblockTeeModeEnabled, getStoredTeeToken } = await import('../lib/payroll-client');
+    if (!isMagicblockTeeModeEnabled() || !getStoredTeeToken(wallet.publicKey)) {
+      setError('High-speed TEE is not authorized. Please enable TEE signing in your wallet settings below.');
+      return;
+    }
+
     setBusy(true);
 
     try {
@@ -259,8 +269,12 @@ export default function EmployeeV4Page() {
       }
       setDestinationTokenAccount(destToken.toBase58());
 
-      // Step 2: Request withdraw + commit via ER
+      // Step 2: Ensure stream is on base layer, then request withdraw
       setWithdrawPhase('requesting');
+      if (businessIndex !== null && employee?.isDelegated) {
+        setWithdrawProgress('Committing stream back to Solana...');
+        await commitAndUndelegateStreamV4(connection, wallet, businessIndex, employeeIndex);
+      }
       setWithdrawProgress('Requesting withdrawal from MagicBlock...');
       await requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
 
@@ -318,7 +332,7 @@ export default function EmployeeV4Page() {
     } finally {
       setBusy(false);
     }
-  }, [wallet, connection, businessPda, employeeIndex]);
+  }, [wallet, connection, businessPda, businessIndex, employeeIndex, employee?.isDelegated]);
 
   const runDevnetAction = useCallback(async (endpoint: string, body?: Record<string, any>) => {
     setDevnetBusy(true);
@@ -335,7 +349,7 @@ export default function EmployeeV4Page() {
         throw new Error(json?.error || 'Devnet request failed');
       }
       const output = String(json?.stdout || '').trim();
-      setDevnetOutput(output || 'Devnet keeper complete.');
+      setDevnetOutput(output || 'Devnet automation complete.');
       return json;
     } catch (e: any) {
       setDevnetError(e?.message || 'Failed to run devnet action');
@@ -350,6 +364,7 @@ export default function EmployeeV4Page() {
     await runDevnetAction('/api/devnet/withdraw-flow', {
       businessIndex: Number(businessIndex),
       employeeIndex: Number(employeeIndex),
+      skipRequest: true,
     });
   }, [businessIndex, employeeIndex, runDevnetAction]);
 
@@ -362,12 +377,10 @@ export default function EmployeeV4Page() {
   }, [wallet.publicKey]);
 
   useEffect(() => {
-    setTeeModeEnabled(isMagicblockTeeModeEnabled());
-  }, []);
-
-  useEffect(() => {
+    // MagicBlock TEE is required in v4 flows.
+    setMagicblockTeeModeEnabled(true);
     refreshTeeStatus();
-  }, [refreshTeeStatus, teeModeEnabled]);
+  }, [refreshTeeStatus]);
 
   const refreshWithdrawRequest = useCallback(async () => {
     if (!businessPda || employeeIndex === null) {
@@ -407,14 +420,11 @@ export default function EmployeeV4Page() {
       setStreamConfig(null);
       return;
     }
-    setStreamConfigLoading(true);
     try {
       const config = await getBusinessStreamConfigV4Account(connection, businessPda);
       setStreamConfig(config);
     } catch (e: any) {
       setError(e?.message || 'Failed to refresh stream config');
-    } finally {
-      setStreamConfigLoading(false);
     }
   }, [businessPda, connection]);
 
@@ -568,7 +578,9 @@ export default function EmployeeV4Page() {
     };
 
     tick();
-    earnedTimerRef.current = window.setInterval(tick, 1000);
+    if (revealed.salaryLamportsPerSec !== 0n) {
+      earnedTimerRef.current = window.setInterval(tick, 1000);
+    }
     return () => {
       if (earnedTimerRef.current) {
         window.clearInterval(earnedTimerRef.current);
@@ -614,7 +626,7 @@ export default function EmployeeV4Page() {
 
   const signKeeperRevealV4 = useCallback(async () => {
     if (!wallet.publicKey || !wallet.signMessage) {
-      throw new Error('Wallet signature is required for keeper relay reveal.');
+      throw new Error('Wallet signature is required for relay reveal.');
     }
     if (businessIndex === null || employeeIndex === null) {
       throw new Error('Business and employee index are required.');
@@ -745,7 +757,7 @@ export default function EmployeeV4Page() {
                 checkpointTime,
                 revealedAt: Math.floor(Date.now() / 1000),
               });
-              setMessage('Live earnings revealed via keeper relay.');
+              setMessage('Live earnings revealed via relay.');
               return;
             } catch (keeperErr: any) {
               setError(keeperErr?.message || msg);
@@ -840,7 +852,7 @@ export default function EmployeeV4Page() {
             if (keeperFallbackEnabled) {
               const keeperRes = await revealHandlesViaKeeperRelayV4(uniqueHandles);
               decodePlaintexts(keeperRes?.plaintexts || []);
-              note = `${note} (keeper relay)`;
+              note = `${note} (relay)`;
             } else {
               throw retryErr;
             }
@@ -910,11 +922,7 @@ export default function EmployeeV4Page() {
   );
   const walletConnected = Boolean(wallet.publicKey);
 
-  const stepPrereqState: StepState = teeModeEnabled
-    ? teeStatus === 'ready'
-      ? 'done'
-      : 'active'
-    : 'optional';
+  const stepPrereqState: StepState = teeStatus === 'ready' ? 'done' : 'active';
   const stepRecordState: StepState = employee ? 'done' : 'active';
   const stepPayoutState: StepState = employee ? 'active' : 'locked';
   const stepEarningsState: StepState = employee ? 'active' : 'locked';
@@ -964,14 +972,7 @@ export default function EmployeeV4Page() {
             ))}
           </div>
           <div className="expensee-setup-nav-actions">
-            <label className="expensee-toggle">
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-              />
-              <span>Auto-refresh every 10s</span>
-            </label>
+            <span className="text-xs text-gray-500">Auto-refresh every 10s (always on)</span>
             {advancedAllowed ? (
               <label className="expensee-toggle">
                 <input
@@ -1013,12 +1014,12 @@ export default function EmployeeV4Page() {
           <div>
             <p className="employee-overview-title">Employee setup</p>
             <p className="employee-overview-sub">
-              Employers fund payroll using USDC. Employees only request and claim payouts.
+              Employers fund payroll using USDC. MagicBlock keeps your stream real-time. You only request and claim payouts.
             </p>
           </div>
           <div className="employee-overview-status">
             <span>Wallet: {walletConnected ? 'Connected' : 'Missing'}</span>
-            <span>TEE: {!teeModeEnabled ? 'Off' : teeStatus === 'ready' ? 'Ready' : 'Needs auth'}</span>
+            <span>TEE: {teeStatus === 'ready' ? 'Ready' : 'Needs auth'} (required)</span>
             <span>Record: {employee ? 'Loaded' : 'Missing'}</span>
             <span>Registry: {registryLinked ? 'Linked' : 'Not linked'}</span>
           </div>
@@ -1029,34 +1030,17 @@ export default function EmployeeV4Page() {
         <StepCard
           number={1}
           title="Secure access & network sync"
-          description="Confirm TEE access (optional) and load the latest devnet snapshot."
+          description="Confirm TEE access (required) and load the latest devnet snapshot."
           state={stepPrereqState}
         >
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="panel-card">
               <h2 className="text-lg font-semibold text-[#2D2D2A]">TEE Access</h2>
               <p className="mt-1 text-sm text-gray-600">
-                Enable TEE mode to execute employee actions inside MagicBlock PER when streams are delegated to the TEE
-                validator.
+                TEE access is required to execute employee actions inside MagicBlock PER.
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={teeModeEnabled}
-                    onChange={async (e) => {
-                      const enabled = e.target.checked;
-                      setMagicblockTeeModeEnabled(enabled);
-                      setTeeModeEnabled(enabled);
-                      if (enabled) {
-                        await runAction('Authorize TEE', () => ensureTeeAuthToken(wallet));
-                      }
-                      refreshTeeStatus();
-                    }}
-                  />
-                  <span>Use TEE RPC for signed transactions</span>
-                </label>
-                <span className="text-gray-500">TEE token:</span>
+                <span className="text-gray-500">TEE status:</span>
                 <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
                   {teeStatus === 'ready' ? 'ready' : 'missing'}
                 </span>
@@ -1068,7 +1052,7 @@ export default function EmployeeV4Page() {
                   disabled={busy || !wallet.publicKey}
                   className="premium-btn premium-btn-secondary disabled:opacity-50"
                 >
-                  Refresh TEE Auth
+                  {teeStatus === 'ready' ? 'Refresh TEE Auth' : 'Authorize TEE'}
                 </button>
               </div>
             </div>
@@ -1195,6 +1179,20 @@ export default function EmployeeV4Page() {
                         setError('Business index is required.');
                         return;
                       }
+                      if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
+                        setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
+                        return;
+                      }
+                      if (!isMagicblockTeeModeEnabled() || !isStoredTeeTokenValid(wallet.publicKey!)) {
+                        setError('High-speed TEE is not authorized. Please enable TEE signing in your wallet settings below.');
+                        return;
+                      }
+                      
+                      if (businessIndex !== null && employeeIndex !== null && employee?.isDelegated) {
+                        await runAction('Commit stream (required)', () =>
+                          commitAndUndelegateStreamV4(connection, wallet, businessIndex, employeeIndex)
+                        );
+                      }
                       await runAction('Request withdraw', () => {
                         if (employeeIndex === null) throw new Error('Employee index is required');
                         return requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
@@ -1212,12 +1210,12 @@ export default function EmployeeV4Page() {
                 </div>
                 <div className="text-xs text-gray-500">
                   {devnetBusy
-                    ? 'Devnet keeper is running…'
+                    ? 'Devnet automation is running…'
                     : devnetError
-                      ? `Devnet keeper failed: ${devnetError}`
+                      ? `Devnet automation failed: ${devnetError}`
                       : devnetOutput
-                        ? `Devnet keeper: ${devnetOutput.split('\n').slice(-1)[0]}`
-                        : 'Devnet: auto-run keeper after withdraw (if enabled).'}
+                        ? `Devnet automation: ${devnetOutput.split('\n').slice(-1)[0]}`
+                        : 'Devnet: auto-run automation after withdraw (if enabled).'}
                 </div>
               </div>
             </div>
@@ -1240,7 +1238,7 @@ export default function EmployeeV4Page() {
                 )}
                 {employee ? (
                   <>
-                    <div>Delegated: {employee.isDelegated ? 'yes' : 'no'}</div>
+                    <div>Streaming: {employee.isDelegated ? 'MagicBlock (real-time)' : 'Base layer (paused)'}</div>
                     <div>Last accrual: {employee.lastAccrualTime}</div>
                   </>
                 ) : null}
@@ -1264,7 +1262,7 @@ export default function EmployeeV4Page() {
         <StepCard
           number={3}
           title="Claim payout"
-          description="Use the payout nonce (from keeper) to claim to your destination token account."
+          description="Use the payout nonce from the withdrawal flow to claim to your destination token account."
           state={stepPayoutState}
         >
           <div className="panel-card">
@@ -1451,7 +1449,7 @@ export default function EmployeeV4Page() {
 
             <div className="panel-card">
               <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout claim</h2>
-              <p className="mt-1 text-sm text-gray-600">Enter payout details from the keeper run.</p>
+              <p className="mt-1 text-sm text-gray-600">Enter payout details from the withdrawal flow.</p>
               <div className="mt-4 space-y-3">
                 <input
                   value={nonceInput}
@@ -1570,31 +1568,6 @@ export default function EmployeeV4Page() {
                     Grant View Access
                   </button>
                   <button
-                    onClick={async () => {
-                      if (!businessPda || employeeIndex === null) {
-                        setError('Business and employee index are required.');
-                        return;
-                      }
-                      if (!streamConfig?.keeperPubkey) {
-                        setError('Keeper not configured yet.');
-                        return;
-                      }
-                      await runAction('Grant keeper access', () =>
-                        grantKeeperViewAccessV4(
-                          connection,
-                          wallet,
-                          businessPda,
-                          employeeIndex,
-                          streamConfig.keeperPubkey
-                        )
-                      );
-                    }}
-                    disabled={busy || !businessPda || employeeIndex === null || streamConfigLoading}
-                    className="premium-btn premium-btn-secondary disabled:opacity-50"
-                  >
-                    Grant Keeper Access
-                  </button>
-                  <button
                     onClick={() => void revealLiveEarnings()}
                     disabled={revealLoading || !employee}
                     className="premium-btn premium-btn-primary disabled:opacity-50"
@@ -1611,6 +1584,12 @@ export default function EmployeeV4Page() {
                   <div className="mt-1 text-[11px] text-gray-500">
                     Live estimate · updates every second from last on-chain snapshot
                   </div>
+                  {revealed && revealed.salaryLamportsPerSec === 0n ? (
+                    <div className="mt-2 text-[11px] text-amber-600">
+                      Salary rate is 0 — stream is paused or unfunded. Live estimate will not
+                      increase until the employer tops up and updates your rate.
+                    </div>
+                  ) : null}
                   <div className="mt-2 grid gap-1">
                     <div>
                       Rate:{' '}
@@ -1633,11 +1612,7 @@ export default function EmployeeV4Page() {
                   </div>
                 </div>
                 <div className="text-xs text-gray-500">
-                  If reveal fails, we auto-refresh your access and retry. Keeper access is optional and enables
-                  server fallback if configured.
-                </div>
-                <div className="text-xs text-gray-500">
-                  Keeper: {streamConfig?.keeperPubkey ? streamConfig.keeperPubkey.toBase58() : '—'}
+                  If reveal fails, we auto-refresh your access and retry.
                 </div>
               </div>
             </div>
