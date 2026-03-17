@@ -2495,7 +2495,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                 </div>
                 {isAdmin ? (
                   <div className="expensee-step-badge">
-                    Admin mode · {wallet.publicKey ? wallet.publicKey.toBase58() : 'connect wallet'}
+                    Admin mode · {wallet.publicKey?.toBase58() ?? 'connect wallet'}
                   </div>
                 ) : null}
                 <div className="expensee-setup-nav-actions">
@@ -2544,17 +2544,17 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                       <div className="mt-4 space-y-3">
                         {masterVault && !isAdmin ? (
                           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
-                            ✅ Master vault is active · Authority: <span className="mono">{masterVault.authority.toBase58().slice(0, 8)}...{masterVault.authority.toBase58().slice(-4)}</span>
+                            ✅ Master vault is active · Authority: <span className="mono">{masterVault?.authority?.toBase58().slice(0, 8)}...{masterVault?.authority?.toBase58().slice(-4)}</span>
                             <div className="mt-1 text-[10px] text-emerald-200/60">
                               Your wallet is not the admin. Vault init is read-only. You can proceed to Step 2.
                             </div>
                           </div>
                         ) : isAdmin ? (
                           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
-                            Admin wallet: {wallet.publicKey ? wallet.publicKey.toBase58() : 'connect wallet'}
+                            Admin wallet: {wallet.publicKey?.toBase58() ?? 'connect wallet'}
                             {masterVault?.authority ? (
                               <div className="mt-1 text-[10px] text-emerald-200">
-                                Master vault authority: {masterVault.authority.toBase58()}
+                                Master vault authority: {masterVault?.authority?.toBase58()}
                               </div>
                             ) : null}
                           </div>
@@ -2583,7 +2583,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                           <AdvancedDetails title="Technical details">
                             {masterVault ? (
                               <div className="text-xs text-[var(--app-muted)]">
-                                Next business index: {masterVault.nextBusinessIndex} · Active: {masterVault.isActive ? 'yes' : 'no'}
+                                Next business index: {masterVault?.nextBusinessIndex} · Active: {masterVault?.isActive ? 'yes' : 'no'}
                               </div>
                             ) : null}
                             <div className="text-xs text-[var(--app-muted)] break-all">
@@ -2641,7 +2641,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                           <AdvancedDetails title="Technical details">
                             {masterVault?.vaultTokenAccount ? (
                               <div className="text-xs text-[var(--app-muted)] break-all">
-                                Current pool vault: {masterVault.vaultTokenAccount.toBase58()}
+                                Current pool vault: {masterVault?.vaultTokenAccount?.toBase58()}
                               </div>
                             ) : null}
                             <div className="text-xs text-[var(--app-muted)] break-all">Mint: {PAYUSD_MINT.toBase58()}</div>
@@ -2708,11 +2708,11 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                         <AdvancedDetails title="Technical details">
                           {business ? (
                             <div className="text-xs text-[var(--app-muted)]">
-                              Next employee index: {business.nextEmployeeIndex} · Active: {business.isActive ? 'yes' : 'no'}
+                              Next employee index: {business?.nextEmployeeIndex} · Active: {business?.isActive ? 'yes' : 'no'}
                             </div>
                           ) : null}
                           <div className="text-xs text-[var(--app-muted)] break-all">
-                            Business PDA: {businessPda ? businessPda.toBase58() : '—'}
+                            Business PDA: {businessPda?.toBase58() ?? '—'}
                           </div>
                         </AdvancedDetails>
                       ) : null}
@@ -3126,11 +3126,11 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                         <AdvancedDetails title="Technical details">
                           {employee ? (
                             <div className="text-xs text-[var(--app-muted)]">
-                              Employee active: {employee.isActive ? 'yes' : 'no'} · Last settle: {employee.lastSettleTime}
+                              Employee active: {employee?.isActive ? 'yes' : 'no'} · Last settle: {employee?.lastSettleTime}
                             </div>
                           ) : null}
                           <div className="text-xs text-[var(--app-muted)] break-all">
-                            Employee PDA: {employeePda ? employeePda.toBase58() : '—'}
+                            Employee PDA: {employeePda?.toBase58() ?? '—'}
                           </div>
                         </AdvancedDetails>
                       ) : null}
@@ -3172,7 +3172,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                       </div>
                       {crankScheduleInfo ? (
                         <div className="text-xs text-[var(--app-muted)]">
-                          Last scheduled: {crankScheduleInfo.scheduledAt} · Task ID: {crankScheduleInfo.taskId}
+                          Last scheduled: {crankScheduleInfo?.scheduledAt} · Task ID: {crankScheduleInfo?.taskId}
                         </div>
                       ) : null}
                       <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--app-muted)]">
@@ -3340,7 +3340,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                                 rel="noreferrer"
                                 className="text-purple-400 underline"
                               >
-                                {lastCrankTx.slice(0, 8)}…{lastCrankTx.slice(-6)}
+                                {lastCrankTx?.slice(0, 8)}…{lastCrankTx?.slice(-6)}
                               </a>
                             </div>
                           ) : null}
@@ -3353,7 +3353,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                                 rel="noreferrer"
                                 className="text-emerald-400 underline"
                               >
-                                {lastDelegateTx.slice(0, 8)}…{lastDelegateTx.slice(-6)}
+                                {lastDelegateTx?.slice(0, 8)}…{lastDelegateTx?.slice(-6)}
                               </a>
                             </div>
                           ) : null}
@@ -3366,7 +3366,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                                 rel="noreferrer"
                                 className="text-amber-400 underline"
                               >
-                                {lastUndelegateTx.slice(0, 8)}…{lastUndelegateTx.slice(-6)}
+                                {lastUndelegateTx?.slice(0, 8)}…{lastUndelegateTx?.slice(-6)}
                               </a>
                             </div>
                           ) : null}
@@ -3379,7 +3379,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                                 rel="noreferrer"
                                 className="text-sky-400 underline"
                               >
-                                {lastRedelegateTx.slice(0, 8)}…{lastRedelegateTx.slice(-6)}
+                                {lastRedelegateTx?.slice(0, 8)}…{lastRedelegateTx?.slice(-6)}
                               </a>
                             </div>
                           ) : null}
@@ -3414,8 +3414,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                             <div className="flex items-center justify-between">
                               <span className="font-medium text-[var(--app-ink)]">Token registry</span>
                               <span>
-                                {userTokenRegistry && !userTokenRegistry.incoTokenAccount.equals(PublicKey.default)
-                                  ? userTokenRegistry.incoTokenAccount.toBase58()
+                                {userTokenRegistry && !userTokenRegistry?.incoTokenAccount.equals(PublicKey.default)
+                                  ? userTokenRegistry?.incoTokenAccount.toBase58()
                                   : 'Not linked'}
                               </span>
                             </div>
@@ -3664,13 +3664,13 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                         {lastWrapTx ? (
                           <>
                             <span>·</span>
-                            <span>Last wrap: {lastWrapTx.slice(0, 8)}...{lastWrapTx.slice(-4)}</span>
+                            <span>Last wrap: {lastWrapTx?.slice(0, 8)}...{lastWrapTx?.slice(-4)}</span>
                           </>
                         ) : null}
                       </div>
                       {advancedEnabled && masterVault?.vaultTokenAccount ? (
                         <div className="text-xs text-[var(--app-muted)] break-all">
-                          Pool vault token: {masterVault.vaultTokenAccount.toBase58()}
+                          Pool vault token: {masterVault?.vaultTokenAccount?.toBase58()}
                         </div>
                       ) : null}
                     </div>

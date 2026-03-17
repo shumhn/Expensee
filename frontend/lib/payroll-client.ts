@@ -17,7 +17,7 @@
  * - Deactivate individual streams
  */
 
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, ComputeBudgetProgram, AccountInfo } from '@solana/web3.js';
 import { WalletContextState } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { encryptValue } from '@inco/solana-sdk/encryption';
@@ -5863,7 +5863,7 @@ export async function findEmploymentRecordV4(
   // 1. Identify a fingerprint (hash) for the current user once.
   const myHash = await hashPubkeyToU128(wallet.publicKey);
 
-  const allCandidates: { businessIndex: number; employeeIndex: number; handle: bigint }[] = [];
+  const allCandidates: { businessIndex: number; employeeIndex: number; handle: bigint; allowancePda: PublicKey }[] = [];
 
   // 2. Iterate businesses backwards to collect all potential employee handles
   for (let bIdx = nextBusinessIndex - 1; bIdx >= startBusiness; bIdx -= 1) {
@@ -5912,7 +5912,7 @@ export async function findEmploymentRecordV4(
   // 3. Pre-filter candidates by checking if the IncoAllowance PDA actually exists on-chain.
   // This prevents the Covalidator "Address is not allowed to decrypt this handle" error.
   const allowancePdas = allCandidates.map((c) => c.allowancePda);
-  const allowanceAccounts = [];
+  const allowanceAccounts: (AccountInfo<Buffer> | null)[] = [];
 
   // getMultipleAccountsInfo has a pubkey limit of 100 per request
   for (let i = 0; i < allowancePdas.length; i += 100) {
