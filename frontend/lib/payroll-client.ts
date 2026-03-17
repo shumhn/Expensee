@@ -1589,6 +1589,15 @@ export interface RateHistoryV4Account {
   entries: RateHistoryEntryV4[];
 }
 
+export function extractHandleFromCiphertext32(data: Uint8Array | Buffer): bigint {
+  const bytes = Buffer.from(data).subarray(0, 16);
+  let result = 0n;
+  for (let i = 15; i >= 0; i -= 1) {
+    result = result * 256n + BigInt(bytes[i] || 0);
+  }
+  return result;
+}
+
 function readU128LEFrom32(handle32: Buffer): bigint {
   const b = handle32.subarray(0, 16);
   let out = 0n;
@@ -1957,7 +1966,7 @@ function getPrivacyIdSalt(): Uint8Array | null {
   return new TextEncoder().encode(raw);
 }
 
-async function hashPubkeyToU128(pubkey: PublicKey): Promise<bigint> {
+export async function hashPubkeyToU128(pubkey: PublicKey): Promise<bigint> {
   const pubkeyBuffer = pubkey.toBuffer();
   const salt = getPrivacyIdSalt();
   const input = salt ? new Uint8Array([...salt, ...pubkeyBuffer]) : new Uint8Array(pubkeyBuffer);
@@ -5829,4 +5838,125 @@ export async function signWithdrawAuthorization(
     signature,
     publicKey: wallet.publicKey,
   };
+}
+
+/**
+ * Scan for an employment record matching the user's wallet.
+ * Iterates backwards through businesses to find the most recent matching record.
+ */
+export async function findEmploymentRecordV4(
+  connection: Connection,
+  wallet: WalletContextState,
+  limit = 20
+): Promise<{ businessIndex: number; employeeIndex: number } | null> {
+  if (!wallet.publicKey || !wallet.signMessage) {
+    throw new Error('Wallet not connected or cannot sign messages');
+  }
+
+  const [masterVaultPDA] = getMasterVaultV4PDA();
+  const master = await getMasterVaultV4Account(connection);
+  if (!master) throw new Error('MasterVaultV4 not initialized.');
+
+  const nextBusinessIndex = Number(master.nextBusinessIndex);
+  const startBusiness = Math.max(0, nextBusinessIndex - limit);
+
+  // 1. Identify a fingerprint (hash) for the current user once.
+  const myHash = await hashPubkeyToU128(wallet.publicKey);
+
+  const allCandidates: { businessIndex: number; employeeIndex: number; handle: bigint }[] = [];
+
+  // 2. Iterate businesses backwards to collect all potential employee handles
+  for (let bIdx = nextBusinessIndex - 1; bIdx >= startBusiness; bIdx -= 1) {
+    const [businessPDA] = getBusinessV4PDA(masterVaultPDA, bIdx);
+    const business = await getBusinessV4AccountByAddress(connection, businessPDA);
+    if (!business) continue;
+
+    const nextEmployeeIndex = Number(business.nextEmployeeIndex);
+    const startEmployee = Math.max(0, nextEmployeeIndex - limit);
+
+    const employeePDAs: PublicKey[] = [];
+    const indices: number[] = [];
+
+    for (let eIdx = nextEmployeeIndex - 1; eIdx >= startEmployee; eIdx -= 1) {
+      const [ePda] = getEmployeeV4PDA(businessPDA, eIdx);
+      employeePDAs.push(ePda);
+      indices.push(eIdx);
+    }
+
+    if (employeePDAs.length === 0) continue;
+
+    // Batch fetch employee accounts to see handles
+    const accounts = await connection.getMultipleAccountsInfo(employeePDAs, 'confirmed');
+
+    for (let i = 0; i < accounts.length; i += 1) {
+      const account = accounts[i];
+      if (!account) continue;
+
+      // Extract handle from ciphertext
+      const handle = extractHandleFromCiphertext32(account.data.slice(48, 80));
+      if (handle === 0n) continue;
+
+      const allowancePda = getIncoAllowancePda(handle, wallet.publicKey);
+
+      allCandidates.push({
+        businessIndex: bIdx,
+        employeeIndex: indices[i],
+        handle,
+        allowancePda,
+      });
+    }
+  }
+
+  if (allCandidates.length === 0) return null;
+
+  // 3. Pre-filter candidates by checking if the IncoAllowance PDA actually exists on-chain.
+  // This prevents the Covalidator "Address is not allowed to decrypt this handle" error.
+  const allowancePdas = allCandidates.map((c) => c.allowancePda);
+  const allowanceAccounts = [];
+
+  // getMultipleAccountsInfo has a pubkey limit of 100 per request
+  for (let i = 0; i < allowancePdas.length; i += 100) {
+    const chunk = allowancePdas.slice(i, i + 100);
+    const results = await connection.getMultipleAccountsInfo(chunk, 'confirmed');
+    allowanceAccounts.push(...results);
+  }
+
+  const authorizedCandidates = allCandidates.filter((_, idx) => allowanceAccounts[idx] !== null);
+
+  if (authorizedCandidates.length === 0) return null;
+
+  try {
+    // 4. One single signature request for all AUTHORIZED candidates
+    const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+    const handlesToDecrypt = authorizedCandidates.map((c) => c.handle.toString());
+    const CHUNK_SIZE = 5; // Decrypt 5 handles at a time to prevent timeout
+
+    for (let i = 0; i < handlesToDecrypt.length; i += CHUNK_SIZE) {
+      const chunkOptions = handlesToDecrypt.slice(i, i + CHUNK_SIZE);
+      const chunkCandidates = authorizedCandidates.slice(i, i + CHUNK_SIZE);
+
+      const results = await decrypt(chunkOptions, {
+        address: wallet.publicKey,
+        signMessage: wallet.signMessage,
+      });
+
+      if (results && results.plaintexts) {
+        for (let j = 0; j < results.plaintexts.length; j += 1) {
+          const plainText = BigInt(results.plaintexts[j]);
+          if (plainText === myHash) {
+            // MATCH FOUND!
+            return {
+              businessIndex: chunkCandidates[j].businessIndex,
+              employeeIndex: chunkCandidates[j].employeeIndex,
+            };
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed batch decryption for Magic Scan:', err);
+    throw err;
+  }
+
+  return null;
 }

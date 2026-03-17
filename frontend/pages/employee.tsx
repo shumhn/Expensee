@@ -12,6 +12,7 @@ import {
   commitAndUndelegateStreamV4,
   createIncoTokenAccount,
   ensureTeeAuthToken,
+  findEmploymentRecordV4,
   getBusinessStreamConfigV4Account,
   getBusinessV4PDA,
   getEmployeeV4Account,
@@ -119,14 +120,13 @@ export default function EmployeeV4Page() {
 
   const [employee, setEmployee] = useState<Awaited<ReturnType<typeof getEmployeeV4Account>>>(null);
   const [payout, setPayout] = useState<Awaited<ReturnType<typeof getShieldedPayoutV4Account>>>(null);
-  const [devnetState, setDevnetState] = useState<any | null>(null);
-  const [devnetBusy, setDevnetBusy] = useState(false);
-  const [devnetOutput, setDevnetOutput] = useState('');
-  const [devnetError, setDevnetError] = useState('');
   const [withdrawRequestExists, setWithdrawRequestExists] = useState(false);
   const [withdrawRequestLoading, setWithdrawRequestLoading] = useState(false);
   const [payouts, setPayouts] = useState<Awaited<ReturnType<typeof getPayoutsForEmployeeV4>>>([]);
   const [payoutsLoading, setPayoutsLoading] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanSuccess, setScanSuccess] = useState(false);
   const autoRefresh = true;
   const [streamConfig, setStreamConfig] = useState<Awaited<ReturnType<typeof getBusinessStreamConfigV4Account>>>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -198,6 +198,8 @@ export default function EmployeeV4Page() {
     if (!businessPda || employeeIndex === null || nonce === null) return null;
     return getShieldedPayoutV4PDA(businessPda, employeeIndex, nonce)[0];
   }, [businessPda, employeeIndex, nonce]);
+
+
 
   const runAction = useCallback(
     async <T,>(label: string, action: () => Promise<T>) => {
@@ -334,39 +336,7 @@ export default function EmployeeV4Page() {
     }
   }, [wallet, connection, businessPda, businessIndex, employeeIndex, employee?.isDelegated]);
 
-  const runDevnetAction = useCallback(async (endpoint: string, body?: Record<string, any>) => {
-    setDevnetBusy(true);
-    setDevnetOutput('');
-    setDevnetError('');
-    try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {}),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error || 'Devnet request failed');
-      }
-      const output = String(json?.stdout || '').trim();
-      setDevnetOutput(output || 'Devnet automation complete.');
-      return json;
-    } catch (e: any) {
-      setDevnetError(e?.message || 'Failed to run devnet action');
-      return null;
-    } finally {
-      setDevnetBusy(false);
-    }
-  }, []);
 
-  const triggerDevnetKeeper = useCallback(async () => {
-    if (businessIndex === null || employeeIndex === null) return;
-    await runDevnetAction('/api/devnet/withdraw-flow', {
-      businessIndex: Number(businessIndex),
-      employeeIndex: Number(employeeIndex),
-      skipRequest: true,
-    });
-  }, [businessIndex, employeeIndex, runDevnetAction]);
 
   const refreshTeeStatus = useCallback(() => {
     if (!wallet.publicKey) {
@@ -441,6 +411,37 @@ export default function EmployeeV4Page() {
     await refreshWithdrawRequest();
     await refreshPayouts();
   }, [businessPda, employeeIndex, connection, runAction, refreshPayouts, refreshWithdrawRequest]);
+
+  const handleMagicScan = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signMessage) {
+      setError('Please connect your wallet first.');
+      return;
+    }
+    setScanBusy(true);
+    setScanError('');
+    setScanSuccess(false);
+    setMessage('Scanning blockchain for your record... (Signature required)');
+    try {
+      const result = await findEmploymentRecordV4(connection, wallet);
+      if (result) {
+        setBusinessIndexInput(result.businessIndex.toString());
+        setEmployeeIndexInput(result.employeeIndex.toString());
+        setScanSuccess(true);
+        setMessage(`Success! Found Business ${result.businessIndex}, Employee ${result.employeeIndex}`);
+        // Trigger localized refreshes
+        setTimeout(() => {
+          refreshEmployee();
+          refreshStreamConfig();
+        }, 100);
+      } else {
+        setScanError('No employment record found for this wallet.');
+      }
+    } catch (err: any) {
+      setScanError(err.message || 'Scan failed.');
+    } finally {
+      setScanBusy(false);
+    }
+  }, [connection, wallet, refreshEmployee, refreshStreamConfig]);
 
   const loadEmployeeSilent = useCallback(async () => {
     if (!businessPda || employeeIndex === null) return;
@@ -589,92 +590,7 @@ export default function EmployeeV4Page() {
     };
   }, [revealed]);
 
-  const loadDevnetState = useCallback(async () => {
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      const res = await fetch('/api/devnet/state');
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error || 'Failed to load devnet state');
-      }
-      const data = json?.data || null;
-      setDevnetState(data);
-      if (data?.businessIndex !== undefined) {
-        setBusinessIndexInput(String(data.businessIndex));
-      }
-      if (data?.employeeIndex !== undefined) {
-        setEmployeeIndexInput(String(data.employeeIndex));
-      }
-      if (data?.payoutNonce !== undefined) {
-        setNonceInput(String(data.payoutNonce));
-      }
-      if (data?.payoutTokenAccount) {
-        setPayoutTokenAccount(String(data.payoutTokenAccount));
-      }
-      if (data?.destinationTokenAccount) {
-        setDestinationTokenAccount(String(data.destinationTokenAccount));
-      }
-      setMessage('Loaded devnet v4 state.');
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load devnet state');
-    } finally {
-      setBusy(false);
-    }
-  }, []);
 
-  const signKeeperRevealV4 = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signMessage) {
-      throw new Error('Wallet signature is required for relay reveal.');
-    }
-    if (businessIndex === null || employeeIndex === null) {
-      throw new Error('Business and employee index are required.');
-    }
-    const timestamp = Math.floor(Date.now() / 1000);
-    const message = new TextEncoder().encode(`reveal_v4:${businessIndex}:${employeeIndex}:${timestamp}`);
-    const signature = await wallet.signMessage(message);
-    return {
-      workerPubkey: wallet.publicKey.toBase58(),
-      businessIndex,
-      employeeIndex,
-      timestamp,
-      signature: Array.from(signature),
-    };
-  }, [businessIndex, employeeIndex, wallet.publicKey, wallet.signMessage]);
-
-  const revealViaKeeperRelayV4 = useCallback(async () => {
-    const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
-    const payload = await signKeeperRevealV4();
-    const resp = await fetchWithTimeout(`${keeperUrl}/api/v4/reveal-live`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const json = await resp.json();
-    if (!resp.ok) {
-      throw new Error(json?.error || 'Keeper reveal failed');
-    }
-    return json;
-  }, [signKeeperRevealV4]);
-
-  const revealHandlesViaKeeperRelayV4 = useCallback(
-    async (handles: string[]) => {
-      const keeperUrl = process.env.NEXT_PUBLIC_KEEPER_API_URL || 'http://localhost:9090';
-      const payload = await signKeeperRevealV4();
-      const resp = await fetchWithTimeout(`${keeperUrl}/api/v4/reveal-handles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, handles }),
-      });
-      const json = await resp.json();
-      if (!resp.ok) {
-        throw new Error(json?.error || 'Keeper reveal failed');
-      }
-      return json;
-    },
-    [signKeeperRevealV4]
-  );
 
   const refreshEmployeeViewAccess = useCallback(async () => {
     if (!businessPda || employeeIndex === null) {
@@ -727,7 +643,6 @@ export default function EmployeeV4Page() {
       setMessage('Live earnings revealed.');
     } catch (e: any) {
       const msg = e?.message || 'Failed to reveal live earnings';
-      const keeperFallbackEnabled = process.env.NEXT_PUBLIC_KEEPER_SERVER_DECRYPT === 'true';
       if (isPermissionError(msg)) {
         try {
           await refreshEmployeeViewAccess();
@@ -743,32 +658,12 @@ export default function EmployeeV4Page() {
             revealedAt: Math.floor(Date.now() / 1000),
           });
           setMessage('View access refreshed.');
-          return;
         } catch (retryErr: any) {
-          if (keeperFallbackEnabled) {
-            try {
-              const revealed = await revealViaKeeperRelayV4();
-              const salary = BigInt(revealed?.salaryLamportsPerSec || '0');
-              const accrued = BigInt(revealed?.accruedLamportsCheckpoint || '0');
-              const checkpointTime = Number(revealed?.checkpointTime || 0);
-              setRevealed({
-                salaryLamportsPerSec: salary,
-                accruedLamportsCheckpoint: accrued,
-                checkpointTime,
-                revealedAt: Math.floor(Date.now() / 1000),
-              });
-              setMessage('Live earnings revealed via relay.');
-              return;
-            } catch (keeperErr: any) {
-              setError(keeperErr?.message || msg);
-              return;
-            }
-          }
           setError(retryErr?.message || msg);
-          return;
         }
+      } else {
+        setError(msg);
       }
-      setError(msg);
     } finally {
       setRevealLoading(false);
     }
@@ -776,7 +671,6 @@ export default function EmployeeV4Page() {
     decryptHandlesLocal,
     employee,
     refreshEmployeeViewAccess,
-    revealViaKeeperRelayV4,
     wallet.publicKey,
   ]);
 
@@ -842,20 +736,13 @@ export default function EmployeeV4Page() {
         decodePlaintexts(result?.plaintexts || []);
       } catch (e: any) {
         const msg = e?.message || 'Failed to decrypt salary handles';
-        const keeperFallbackEnabled = process.env.NEXT_PUBLIC_KEEPER_SERVER_DECRYPT === 'true';
         if (isPermissionError(msg)) {
           try {
             await refreshEmployeeViewAccess();
             const retried = await decryptHandlesLocal(uniqueHandles);
             decodePlaintexts(retried?.plaintexts || []);
           } catch (retryErr: any) {
-            if (keeperFallbackEnabled) {
-              const keeperRes = await revealHandlesViaKeeperRelayV4(uniqueHandles);
-              decodePlaintexts(keeperRes?.plaintexts || []);
-              note = `${note} (relay)`;
-            } else {
-              throw retryErr;
-            }
+            throw retryErr;
           }
         } else {
           throw e;
@@ -912,7 +799,6 @@ export default function EmployeeV4Page() {
     employeeIndex,
     payslipEnd,
     payslipStart,
-    revealHandlesViaKeeperRelayV4,
     wallet.publicKey,
     wallet.signMessage,
   ]);
@@ -1029,63 +915,30 @@ export default function EmployeeV4Page() {
         {showStep1 ? (
         <StepCard
           number={1}
-          title="Secure access & network sync"
-          description="Confirm TEE access (required) and load the latest devnet snapshot."
+          title="Secure access"
+          description="Confirm TEE access (required) to execute confidential actions."
           state={stepPrereqState}
         >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">TEE Access</h2>
-              <p className="mt-1 text-sm text-gray-600">
-                TEE access is required to execute employee actions inside MagicBlock PER.
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
-                <span className="text-gray-500">TEE status:</span>
-                <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
-                  {teeStatus === 'ready' ? 'ready' : 'missing'}
-                </span>
-                <button
-                  onClick={async () => {
-                    await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
-                    refreshTeeStatus();
-                  }}
-                  disabled={busy || !wallet.publicKey}
-                  className="premium-btn premium-btn-secondary disabled:opacity-50"
-                >
-                  {teeStatus === 'ready' ? 'Refresh TEE Auth' : 'Authorize TEE'}
-                </button>
-              </div>
-            </div>
-
-            <div className="panel-card">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-[#2D2D2A]">Devnet v4 Snapshot</h2>
-                  <p className="text-sm text-gray-600">Load the latest payout metadata from devnet.</p>
-                </div>
-                <button
-                  onClick={() => void loadDevnetState()}
-                  disabled={busy}
-                  className="premium-btn premium-btn-secondary disabled:opacity-50"
-                >
-                  Load Devnet State
-                </button>
-              </div>
-              {devnetState ? (
-                <div className="mt-4 grid gap-2 text-xs text-gray-600">
-                  <div>Business index: {devnetState.businessIndex ?? '—'}</div>
-                  <div>Employee index: {devnetState.employeeIndex ?? '—'}</div>
-                  <div>Payout nonce: {devnetState.payoutNonce ?? '—'}</div>
-                  {advancedEnabled ? (
-                    <>
-                      <div className="break-all">Payout token: {devnetState.payoutTokenAccount ?? '—'}</div>
-                      <div className="break-all">Destination token: {devnetState.destinationTokenAccount ?? '—'}</div>
-                    </>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="mt-4 text-xs text-gray-500">No snapshot loaded yet.</div>
-              )}
+          <div className="panel-card">
+            <h2 className="text-lg font-semibold text-[#2D2D2A]">TEE Access</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              TEE access is required to execute employee actions inside MagicBlock PER.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
+              <span className="text-gray-500">TEE status:</span>
+              <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
+                {teeStatus === 'ready' ? 'ready' : 'missing'}
+              </span>
+              <button
+                onClick={async () => {
+                  await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
+                  refreshTeeStatus();
+                }}
+                disabled={busy || !wallet.publicKey}
+                className="premium-btn premium-btn-secondary disabled:opacity-50"
+              >
+                {teeStatus === 'ready' ? 'Refresh TEE Auth' : 'Authorize TEE'}
+              </button>
             </div>
           </div>
         </StepCard>
@@ -1174,6 +1027,22 @@ export default function EmployeeV4Page() {
                     Refresh
                   </button>
                   <button
+                    onClick={() => void handleMagicScan()}
+                    disabled={busy || scanBusy || !wallet.publicKey}
+                    className={`premium-btn ${scanSuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'premium-btn-secondary'} disabled:opacity-50 flex items-center gap-2`}
+                  >
+                    {scanBusy ? (
+                      <>
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                        Scanning...
+                      </>
+                    ) : scanSuccess ? (
+                      '🪄 Found!'
+                    ) : (
+                      '🪄 Magic Scan'
+                    )}
+                  </button>
+                  <button
                     onClick={async () => {
                       if (!businessPda) {
                         setError('Business index is required.');
@@ -1198,7 +1067,6 @@ export default function EmployeeV4Page() {
                         return requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
                       });
                       await refreshWithdrawRequest();
-                      await triggerDevnetKeeper();
                       await refreshPayout();
                       await refreshPayouts();
                     }}
@@ -1207,15 +1075,6 @@ export default function EmployeeV4Page() {
                   >
                     Request Withdraw
                   </button>
-                </div>
-                <div className="text-xs text-gray-500">
-                  {devnetBusy
-                    ? 'Devnet automation is running…'
-                    : devnetError
-                      ? `Devnet automation failed: ${devnetError}`
-                      : devnetOutput
-                        ? `Devnet automation: ${devnetOutput.split('\n').slice(-1)[0]}`
-                        : 'Devnet: auto-run automation after withdraw (if enabled).'}
                 </div>
               </div>
             </div>

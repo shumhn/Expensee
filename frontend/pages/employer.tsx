@@ -39,6 +39,7 @@ import {
   getUserTokenAccountV4,
   grantIncoDecryptAccessForHandle,
   ensureTeeAuthToken,
+  extractHandleFromCiphertext32,
   initRateHistoryV4,
   isMagicblockValidatorRegionAvailable,
   isMagicblockTeeModeEnabled,
@@ -135,14 +136,7 @@ function extractIncoTokenHandle(data: Buffer): bigint {
   return result;
 }
 
-function extractHandleFromCiphertext32(data: Uint8Array | Buffer): bigint {
-  const bytes = Buffer.from(data).subarray(0, 16);
-  let result = 0n;
-  for (let i = 15; i >= 0; i -= 1) {
-    result = result * 256n + BigInt(bytes[i] || 0);
-  }
-  return result;
-}
+
 
 function formatAddress(value: string, chars = 4): string {
   if (!value) return '—';
@@ -1891,7 +1885,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showDashboard ? (
+        {/* {showDashboard ? (
           <section id="overview" className="expensee-grid">
             <div className="expensee-card">
               <h4>Business</h4>
@@ -1914,7 +1908,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
               <div className="expensee-sub">{streamConfig ? `Every ${streamConfig.settleIntervalSecs}s` : 'Set schedule'}</div>
             </div>
           </section>
-        ) : null}
+        ) : null} */}
 
         {mode === 'all' && advancedEnabled ? (
           <section className="expensee-status-grid">
@@ -1964,7 +1958,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showDashboard ? (
+        {/* {showDashboard ? (
           <section className="expensee-setup-summary">
             <div className="expensee-setup-card">
               <div className="expensee-setup-head">
@@ -1986,7 +1980,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
               </div>
             </div>
           </section>
-        ) : null}
+        ) : null} */}
 
         {showEmployees ? (
           <section id="employees" className="expensee-section">
@@ -2033,7 +2027,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showDashboard || showAgent ? (
+        {/* {showDashboard || showAgent ? (
           <section className={`expensee-panels ${isSoloAgent ? 'expensee-panels--solo' : ''}`}>
             {showDashboard ? (
               <div className="expensee-panel-stack">
@@ -2360,7 +2354,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
               </div>
             ) : null}
           </section>
-        ) : null}
+        ) : null} */}
 
         {showHistory ? (
           <section id="history" className="expensee-section">
@@ -2478,7 +2472,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showStep1 || showStep2 || showStep3 || showStep4 ? (
+        {/* USER_REQUEST: Removed setup wizard from homepage */}
+        {false && (showStep1 || showStep2 || showStep3 || showStep4) ? (
           <section id="setup" className="expensee-steps">
             {setupOnly ? (
               <div className="expensee-setup-nav">
@@ -3686,7 +3681,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {showReports ? (
+        {/* USER_REQUEST: Removed reports from homepage */}
+        {false && showReports ? (
           <section id="reports" className="expensee-section">
             <h3 className="text-lg font-semibold text-[var(--app-ink)]">Reports</h3>
             <p className="text-sm text-[var(--app-muted)]">
