@@ -11,6 +11,7 @@
   <a href="#market-opportunity">Market</a> •
   <a href="#competitive-landscape">Competitors</a> •
   <a href="#go-to-market-strategy">GTM</a> •
+  <a href="#business-model">Business Model</a> •
   <a href="#how-it-works">How It Works</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#roadmap">Roadmap</a> •
@@ -142,6 +143,29 @@ Expensee is the **only protocol** that combines FHE-encrypted salaries, pooled-v
 - **AI Agent virality** — "Set up payroll by chatting" is a demo that sells itself
 - **Magic Scan UX** — Zero-config employee onboarding lowers adoption friction to near zero
 - **Privacy as a moat** — Once a company encrypts salaries with FHE, switching cost is high
+
+---
+
+## Business Model
+
+Expensee generates revenue through protocol-level fees and premium services — no rent-seeking middlemen, just infrastructure that earns as it scales.
+
+| Revenue Stream | How It Works | When |
+|---------------|-------------|------|
+| **Protocol Fee** | 0.1–0.5% fee on every withdrawal/payout processed through the pooled vault | From mainnet launch |
+| **Premium Tier** | Monthly subscription for advanced features: batch operations, compliance exports, multi-signer vaults, priority settlement | Post-mainnet |
+| **Vault Yield** | Idle funds in the pooled vault generate yield via DeFi integrations (lending protocols, liquid staking) — protocol keeps a performance fee | Post-mainnet |
+| **SDK Licensing** | White-label Expensee for freelancer platforms, HR tools, and payroll providers — per-seat or revenue-share model | Phase 2–3 |
+
+### Unit Economics
+
+- **Cost to serve**: Near-zero marginal cost — all logic is on-chain, no off-chain servers to maintain
+- **Revenue scales with volume**: More businesses × more employees × more withdrawals = compounding protocol fees
+- **Privacy creates lock-in**: Once salaries are encrypted with FHE, migration cost is high — strong retention moat
+
+### Why This Works
+
+Traditional payroll processors (ADP, Gusto, Deel) charge **$6–$12 per employee per month**. Expensee's protocol fee model is 10–100× cheaper for the employer while generating sustainable revenue at scale. A single DAO with 50 contributors streaming $5K/month each = $250K monthly volume → $250–$1,250/month in protocol fees, growing linearly with adoption.
 
 ---
 
