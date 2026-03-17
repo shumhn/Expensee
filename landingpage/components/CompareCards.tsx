@@ -6,41 +6,41 @@ import { Shield, Zap, Database, Check } from "lucide-react";
 const features = [
     {
         title: "Instant Settlement",
-        description: "Real-time salary accrual and on-chain payouts, every second.",
+        description: "Real-time salary accrual and encrypted payouts, every second.",
         icon: Zap
     },
     {
         title: "Privacy by Default",
-        description: "FHE-encrypted salaries — only the employee sees their pay.",
+        description: "FHE-encrypted salaries — only the employee can decrypt their pay.",
         icon: Shield
     },
     {
-        title: "Global Coverage",
-        description: "Pay contractors in 50+ countries with USDC on Solana.",
+        title: "Magic Scan",
+        description: "One-click auto-detection of your employment record on-chain.",
         icon: Database
     }
 ];
 
 const plans = [
     {
-        name: "Starter",
-        description: "Small Teams & Founders",
+        name: "Solo",
+        description: "Freelancers & Founders",
         price: "Free",
-        features: ["5 Employees", "Real-time Accrual", "USDC Payouts"],
+        features: ["1 Business", "Up to 5 Employees", "Real-time Streaming"],
         color: "zinc"
     },
     {
-        name: "Growth",
-        description: "Growing Organizations",
-        price: "$99",
-        features: ["Unlimited Employees", "FHE Privacy", "Stealth Addresses"],
+        name: "Team",
+        description: "Growing Teams",
+        price: "Free",
+        features: ["Unlimited Employees", "FHE Privacy", "Magic Scan"],
         color: "teal"
     },
     {
         name: "Enterprise",
-        description: "Global Enterprises",
-        price: "Custom",
-        features: ["Dedicated Keeper", "Multi-sig Treasury", "Compliance Reports"],
+        description: "Large Organizations",
+        price: "Contact Us",
+        features: ["Multi-business Vaults", "Pooled Payouts", "Audit Tools"],
         color: "purple"
     }
 ];

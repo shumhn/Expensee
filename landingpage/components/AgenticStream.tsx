@@ -104,8 +104,8 @@ export function AgenticStream() {
                     left={30} top={130}
                     delay={0}
                     icon={Bot}
-                    title="AI Trigger"
-                    status="Intercepting Intent"
+                    title="Employer"
+                    status="Encrypting Salary"
                     color="text-blue-400"
                     glow="shadow-[0_0_20px_rgba(96,165,250,0.2)]"
                     border="border-blue-400/30"
@@ -128,8 +128,8 @@ export function AgenticStream() {
                     left={520} top={130}
                     delay={0.4}
                     icon={Activity}
-                    title="Live Stream"
-                    status="Agent Connected"
+                    title="MagicBlock"
+                    status="TEE Streaming"
                     color="text-blue-400"
                     glow="shadow-[0_0_20px_rgba(96,165,250,0.2)]"
                     border="border-blue-400/30"

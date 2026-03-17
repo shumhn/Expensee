@@ -171,9 +171,9 @@ export function Hero() {
                         transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
                         className="text-[2.5rem] sm:text-[3.2rem] md:text-[3.8rem] lg:text-[4.2rem] font-black tracking-[-0.03em] leading-[1.06] text-white"
                     >
-                        <span className="block">Private Realtime</span>
-                        <span className="block">Payroll for</span>
-                        <span className="text-zinc-500 block">next generation </span>
+                        <span className="block">Private Payroll,</span>
+                        <span className="block">Streaming</span>
+                        <span className="text-zinc-500 block">in Real-Time</span>
                     </motion.h1>
 
                     <motion.div
@@ -183,10 +183,10 @@ export function Hero() {
                         className="flex flex-col gap-3"
                     >
                         {[
-                            "Fully Homomorphic Encryption (FHE) via Inco.",
-                            "Real-time payroll accrual via MagicBlock TEEs.",
-                            "AI-assisted payroll orchestration with OnyxFii Intelligence.",
-                            "Automated settlements with Expensee Keeper.",
+                            "Salaries encrypted end-to-end with Inco FHE. Invisible on-chain.",
+                            "Earnings stream every second through MagicBlock secure vaults.",
+                            "One-click Magic Scan finds your record — no setup, no friction.",
+                            "Pooled payouts keep your wallet anonymous. Withdraw in stealth.",
                         ].map((item, i) => (
                             <div key={i} className="flex items-center gap-3">
                                 <Check
@@ -300,7 +300,7 @@ export function Hero() {
                                         E
                                     </div>
                                     <span className="text-white text-xs font-bold">
-                                        Main Vault
+                                        Employee Vault
                                     </span>
                                     <span className="text-zinc-500 text-[10px] ml-1">
                                         📋
@@ -310,15 +310,15 @@ export function Hero() {
                                 {/* Balance */}
                                 <div className="mb-2">
                                     <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold mb-0.5">
-                                        BALANCE
+                                        LIVE EARNINGS
                                     </div>
                                     <div className="text-3xl font-black text-white tracking-tight leading-none">
                                         <StreamingBalance />
                                     </div>
                                     <div className="mt-1 text-[10px] text-zinc-500">
-                                        +$840.19 ·{" "}
+                                        streaming via MagicBlock ·{" "}
                                         <span className="text-emerald-400">
-                                            +5.24%
+                                            encrypted
                                         </span>
                                     </div>
                                 </div>
@@ -326,11 +326,11 @@ export function Hero() {
                                 {/* Action Icons */}
                                 <div className="flex items-center justify-between my-4 py-3 border-y border-white/[0.06]">
                                     {[
-                                        { icon: "↓", label: "Receive" },
-                                        { icon: "🏦", label: "Fund" },
-                                        { icon: "↔", label: "Swap" },
+                                        { icon: "🪄", label: "Scan" },
                                         { icon: "🔒", label: "Encrypt" },
                                         { icon: "▶", label: "Stream" },
+                                        { icon: "💸", label: "Withdraw" },
+                                        { icon: "📄", label: "Payslip" },
                                     ].map((action, i) => (
                                         <div
                                             key={i}
@@ -348,7 +348,7 @@ export function Hero() {
 
                                 {/* Tabs */}
                                 <div className="flex items-center gap-5 mb-3">
-                                    {["Streams", "Payroll", "History"].map(
+                                    {["Earnings", "Payouts", "History"].map(
                                         (tab) => (
                                             <button
                                                 key={tab}
@@ -367,32 +367,26 @@ export function Hero() {
                                 {/* Total Value */}
                                 <div className="mb-2">
                                     <div className="text-[8px] text-zinc-500 uppercase tracking-widest font-bold">
-                                        TOTAL VALUE
+                                        ACCRUED PAYUSD
                                     </div>
                                     <div className="text-lg font-bold text-white tracking-tight">
-                                        $8,367.32
+                                        $1,090.96
                                     </div>
                                 </div>
 
                                 {/* Asset Rows */}
                                 <div>
                                     <LiveStreamRow
-                                        label="SOL"
-                                        amount="$250.32"
-                                        change="+6.02%"
-                                        changeColor="text-emerald-400"
-                                    />
-                                    <LiveStreamRow
                                         label="PayUSD"
-                                        amount="$1.00"
-                                        change="+0.01%"
+                                        amount="Streaming"
+                                        change="live"
                                         changeColor="text-emerald-400"
                                     />
                                     <LiveStreamRow
                                         label="FHE Vault"
                                         amount="Encrypted"
-                                        change=""
-                                        changeColor=""
+                                        change="private"
+                                        changeColor="text-cyan-400"
                                     />
                                 </div>
 

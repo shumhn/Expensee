@@ -17,7 +17,7 @@ export function Footer() {
                         </h2>
                     </div>
                     <p className="text-zinc-500 text-lg font-medium max-w-sm leading-relaxed">
-                        Join the 10+ forward-thinking businesses building the future of global payroll on crypto rails.
+                        Private, real-time payroll streaming on Solana. FHE-encrypted salaries with MagicBlock TEE enclaves.
                     </p>
                 </div>
 
@@ -26,9 +26,9 @@ export function Footer() {
                     <FooterColumn
                         title="Platform"
                         links={[
-                            { label: "Sign Up", href: "https://onyx-fii.vercel.app/" },
-                            { label: "Contractor Onboarding", href: "https://onyx-fii.vercel.app/" },
-                            { label: "Accounting Sync", href: "https://onyx-fii.vercel.app/" }
+                            { label: "Employer Portal", href: "https://onyx-fii.vercel.app/" },
+                            { label: "Employee Portal", href: "https://onyx-fii.vercel.app/" },
+                            { label: "Devnet App", href: "https://onyx-fii.vercel.app/" }
                         ]}
                     />
                     <FooterColumn

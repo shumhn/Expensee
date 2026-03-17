@@ -7,23 +7,23 @@ import { Plus, Minus } from "lucide-react";
 const faqs = [
     {
         question: "How is my salary kept private?",
-        answer: "Expensee uses Fully Homomorphic Encryption (FHE) via Inco Lightning. This means your salary rate and accrued balance are stored as encrypted handles on-chain. Nobody—not even the nodes running the network—can see the actual dollar amounts."
+        answer: "Expensee uses Fully Homomorphic Encryption (FHE) via Inco Lightning. Your salary rate and accrued balance are stored as encrypted handles on-chain. Nobody can see the actual dollar amounts. Only you can decrypt your own earnings by signing with your wallet."
     },
     {
-        question: "What is 'Ghost Mode' withdrawal?",
-        answer: "Ghost Mode allows employees to withdraw funds without linking their wallet address to their employee index on-chain. You sign an off-chain message that the Expensee Keeper relays, keeping your identity hidden from public blockchain explorers."
+        question: "What is Magic Scan?",
+        answer: "Magic Scan is a one-click feature that automatically detects your employment record on the blockchain. It checks which encrypted employee handles you are authorized to decrypt, then verifies your identity using a cryptographic fingerprint of your wallet. No manual input needed."
     },
     {
         question: "How does real-time streaming work?",
-        answer: "We leverage MagicBlock TEEs (Trusted Execution Environments). Your salary accrues every second in a secure off-chain enclave, which then periodically commits the encrypted state back to the Solana L1."
+        answer: "Expensee leverages MagicBlock TEEs (Trusted Execution Environments). Your salary accrues every second inside a secure off-chain enclave with sub-10ms latency, which then periodically commits the encrypted state back to Solana."
     },
     {
-        question: "Can I use Expensee for my team today?",
-        answer: "Expensee is currently live on Solana Devnet. You can register your business, fund your vault with devnet USDC, and start streaming to your team immediately to experience the future of private payroll."
+        question: "How do withdrawals stay private?",
+        answer: "Expensee uses pooled privacy payouts. When you withdraw, the funds are routed through a shared vault so that on-chain observers cannot link your wallet address to a specific employee record. Your identity remains private even after claiming."
     },
     {
-        question: "Is the protocol audited?",
-        answer: "The Expensee core protocol architecture is built on top of audited primitives from Inco and MagicBlock. Our custom Keeper and settlement logic are designed with multi-layer failovers for production-grade reliability."
+        question: "Can I use Expensee today?",
+        answer: "Expensee is currently live on Solana Devnet. You can register a business, add employees with encrypted salaries, fund your vault with devnet PayUSD, and stream earnings in real-time."
     },
 ];
 

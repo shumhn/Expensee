@@ -26,7 +26,7 @@ export function Benefits() {
                     transition={{ delay: 0.2 }}
                     className="text-zinc-500 text-lg md:text-xl text-center max-w-3xl mx-auto leading-relaxed -mt-12 mb-12"
                 >
-                    Expensee combines Fully Homomorphic Encryption with Trusted Execution Environments to deliver the world's first truly private, real-time salary streaming protocol on Solana.
+                    Expensee combines Inco’s Fully Homomorphic Encryption with MagicBlock’s Trusted Execution Environments to deliver truly private, real-time salary streaming on Solana.
                 </motion.p>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
@@ -34,7 +34,7 @@ export function Benefits() {
                     {/* Card 1: FHE */}
                     <BenefitCard
                         title="Absolute Salary Privacy"
-                        subtitle="Fully Homomorphic Encryption ensures salary amounts and balances remain private, even from node operators."
+                        subtitle="Inco FHE ensures salary amounts and balances stay private on-chain. Only you can decrypt your own earnings."
                         index={0}
                     >
                         <div className="relative w-full h-full flex flex-col p-8 font-mono">
@@ -63,7 +63,7 @@ export function Benefits() {
                     {/* Card 2: TEE */}
                     <BenefitCard
                         title="Continuous Earnings"
-                        subtitle="Real-time salary accrual every second, powered by secure off-chain execution enclaves."
+                        subtitle="MagicBlock TEE enclaves accrue your salary every second with sub-10ms latency, then commit encrypted state back to Solana."
                         index={1}
                     >
                         <div className="relative w-full h-full flex flex-col items-center justify-center p-8">
@@ -103,7 +103,7 @@ export function Benefits() {
                     {/* Card 3: Keeper */}
                     <BenefitCard
                         title="Automated Settlements"
-                        subtitle="Smart automation for global settlements and high-security Ghost Mode withdrawals."
+                        subtitle="Pooled privacy payouts let employees withdraw without exposing their wallet-to-employee link on-chain."
                         index={2}
                     >
                         <div className="relative w-full h-full flex flex-col p-8">
