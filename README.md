@@ -8,10 +8,12 @@
 
 <p align="center">
   <a href="#the-problem">Problem</a> •
+  <a href="#market-opportunity">Market</a> •
+  <a href="#competitive-landscape">Competitors</a> •
+  <a href="#go-to-market-strategy">GTM</a> •
   <a href="#how-it-works">How It Works</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#on-chain-program">On-Chain Program</a> •
-  <a href="#features">Features</a> •
+  <a href="#roadmap">Roadmap</a> •
   <a href="#getting-started">Getting Started</a>
 </p>
 
@@ -77,6 +79,84 @@ Traditional payroll forces a **30-day liquidity gap**. Workers generate value fr
 | **Remote-First Companies** | Instant global payouts on Solana — no SWIFT, no 5-day waits, no 3–7% fees |
 | **Freelancers & Contractors** | Real-time earnings that stream every second — withdraw on demand |
 | **Employees** | Magic Scan auto-finds your record, reveal encrypted earnings, request payouts — zero friction |
+
+---
+
+## Market Opportunity
+
+The on-chain payroll market is accelerating as crypto compensation goes mainstream.
+
+| Metric | Value | Source / Context |
+|--------|-------|-----------------|
+| **Global payroll outsourcing market** | ~$12 B (2024) | Traditional payroll — ripe for disruption |
+| **Crypto payroll market** | ~$1.5 B (2024) → projected **$6.4 B by 2033** | 19.2% CAGR driven by remote work and stablecoin adoption |
+| **Cross-border payment flows** | $39.9 T (2024) → $64.5 T by 2032 | Crypto reduces fees by up to 95% vs SWIFT |
+| **Active DAO treasuries** | 12,000+ DAOs managing **$28 B** on-chain | Growing need for private, automated contributor payments |
+| **Crypto salary adoption** | 3% (2023) → 9.6% (2024) → **25%+ of businesses by 2025** | Stablecoins account for 90%+ of digital salaries (USDC 63%) |
+
+**Why now:** By 2026, stablecoin payroll has crossed the early-adopter chasm. Regulatory clarity is improving, enterprise blockchain adoption is maturing, and Gen-Z workforce expectations are shifting toward real-time, crypto-native compensation. Yet **no protocol offers salary privacy** — until Expensee.
+
+---
+
+## Competitive Landscape
+
+Expensee is the **only protocol** that combines FHE-encrypted salaries, pooled-vault privacy, and real-time TEE streaming. Here's how we compare:
+
+| Feature | Expensee | Superfluid | Sablier | Zebec |
+|---------|:--------:|:----------:|:-------:|:-----:|
+| **Salary Privacy (FHE)** | ✅ | ❌ | ❌ | ❌ |
+| **Pooled Vault** (breaks employer↔employee traceability) | ✅ | ❌ | ❌ | ❌ |
+| **Real-Time Streaming** | ✅ MagicBlock TEE | ✅ Protocol-level | ✅ Smart Contract | ✅ |
+| **AI Setup Assistant** | ✅ | ❌ | ❌ | ❌ |
+| **Auto-Discovery (Magic Scan)** | ✅ | ❌ | ❌ | ❌ |
+| **Keeper-Free / Permissionless** | ✅ On-chain cranks | Partial | ✅ | ❌ Requires infra |
+| **Chain** | Solana | EVM (multi-chain) | EVM (multi-chain) | Solana / Multi |
+| **Target Users** | Startups, DAOs, remote teams | DeFi, DAOs | DAOs, vesting | Enterprise, SMBs |
+
+### Where Competitors Fall Short
+
+- **Superfluid / Sablier**: Great streaming primitives, but **all salary data is fully public on-chain**. Any explorer can see who pays whom and how much. No privacy at all.
+- **Zebec**: Closest in ambition (real payroll on Solana), but focuses on TradFi integration and compliance — salaries are still transparent on-chain, and it relies on centralized infrastructure.
+- **Expensee**: The **privacy-first** payroll protocol. FHE means salary rates and balances are mathematically invisible. The pooled vault means even the employer-employee link is hidden. Nobody else does this.
+
+---
+
+## Go-To-Market Strategy
+
+### Phase 1 → Web3 Startups & DAOs *(now)*
+- **Why first**: Treasury already on-chain, crypto-native teams, immediate product-market fit
+- **Wedge**: "Your contributor salaries are public right now — competitors can see your entire org chart and burn rate"
+- **Distribution**: Solana ecosystem partnerships, hackathon demos, developer content, DAO governance proposals
+
+### Phase 2 → Remote-First Companies *(next)*
+- **Why**: 70M+ global remote workers, cross-border payroll is painful (3–7% fees, 3–5 day waits)
+- **Wedge**: "Pay your global team in seconds for <$0.01 per transaction — no SWIFT, no intermediaries"
+- **Distribution**: HR/payroll platform integrations, stablecoin on-ramp partnerships
+
+### Phase 3 → Freelancer Platforms & Contractor Networks
+- **Why**: Gig economy workers earn every second but get paid every 30 days
+- **Wedge**: "Real-time salary streaming — withdraw your earnings the moment you earn them"
+- **Distribution**: Platform SDK, white-label integration for freelancer marketplaces
+
+### Growth Levers
+- **AI Agent virality** — "Set up payroll by chatting" is a demo that sells itself
+- **Magic Scan UX** — Zero-config employee onboarding lowers adoption friction to near zero
+- **Privacy as a moat** — Once a company encrypts salaries with FHE, switching cost is high
+
+---
+
+## Roadmap
+
+| Status | Milestone |
+|:------:|-----------|
+| ✅ | **Devnet live** — FHE streaming, Magic Scan, AI agent, pooled payouts fully functional |
+| ✅ | **V4 architecture** — Keeper-free, crank-based settlements, shielded payouts |
+| 🔜 | **Mainnet beta** — Production deployment on Solana mainnet |
+| 🔜 | **Multi-business batch ops** — Bulk employee onboarding, batch deposits |
+| 🔜 | **Payslip NFTs** — On-chain verifiable proof of payment for employees |
+| 🔜 | **Compliance exports** — Tax-ready reports, jurisdiction-aware summaries |
+| 🔜 | **SDK & API** — Third-party integrations for platforms and payroll providers |
+| 🔜 | **Mobile experience** — Employee app for real-time balance tracking and withdrawals |
 
 ---
 
