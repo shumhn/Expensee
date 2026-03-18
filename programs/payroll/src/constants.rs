@@ -36,28 +36,6 @@ pub use ephemeral_rollups_sdk::consts::MAGIC_PROGRAM_ID;
 // PDA Seeds (Privacy-Preserving: Index-Based)
 // ============================================================
 
-/// Business PDA seed
-pub const BUSINESS_SEED: &[u8] = b"business";
-
-/// Vault PDA seed - owns the token account
-pub const VAULT_SEED: &[u8] = b"vault";
-
-/// Vault token account seed
-pub const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
-
-/// v3 master vault seed (index-based privacy)
-pub const MASTER_VAULT_V3_SEED: &[u8] = b"master_vault_v3";
-/// v3 business entry seed (index-based privacy)
-pub const BUSINESS_V3_SEED: &[u8] = b"business_v3";
-/// v3 employee entry seed (index-based privacy)
-pub const EMPLOYEE_V3_SEED: &[u8] = b"employee_v3";
-/// v3 stream config seed
-pub const STREAM_CONFIG_V3_SEED: &[u8] = b"stream_config_v3";
-/// v3 withdraw request seed
-pub const WITHDRAW_REQUEST_V3_SEED: &[u8] = b"withdraw_request_v3";
-/// v3 shielded payout seed
-pub const SHIELDED_PAYOUT_V3_SEED: &[u8] = b"shielded_payout_v3";
-
 /// v4 master vault seed (pooled vault)
 pub const MASTER_VAULT_V4_SEED: &[u8] = b"master_vault_v4b";
 /// v4 business entry seed (index-based privacy)
@@ -75,19 +53,6 @@ pub const WITHDRAW_REQUEST_V4_SEED: &[u8] = b"withdraw_request_v4";
 /// v4 shielded payout seed
 pub const SHIELDED_PAYOUT_V4_SEED: &[u8] = b"shielded_payout_v4";
 
-/// v2 business stream config seed
-pub const STREAM_CONFIG_V2_SEED: &[u8] = b"stream_config_v2";
-
-/// v2 employee stream seed
-pub const EMPLOYEE_V2_SEED: &[u8] = b"employee_v2";
-
-/// v2 withdraw request seed
-pub const WITHDRAW_REQUEST_V2_SEED: &[u8] = b"withdraw_request_v2";
-/// v2 shielded payout seed (Phase 2: who-paid-whom privacy)
-pub const SHIELDED_PAYOUT_V2_SEED: &[u8] = b"shielded_payout";
-/// Default expiry for unclaimed shielded payouts: 7 days
-pub const DEFAULT_PAYOUT_EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
-pub const RATE_HISTORY_V2_SEED: &[u8] = b"rate_history_v2";
 pub const RATE_HISTORY_V4_SEED: &[u8] = b"rate_history_v4";
 pub const RATE_HISTORY_MAX_ENTRIES: usize = 16;
 

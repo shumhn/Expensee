@@ -7,7 +7,7 @@ use anchor_lang::solana_program::{
 use crate::constants::*;
 use crate::errors::PayrollError;
 use crate::state::EncryptedHandle;
-use crate::state::{EmployeeEntryV3, EmployeeEntryV4, EmployeeStreamV2};
+use crate::state::EmployeeEntryV4;
 
 // ============================================================
 // Handle Conversion Helpers
@@ -35,46 +35,6 @@ pub fn u128_to_handle(value: u128) -> EncryptedHandle {
 
 pub fn is_handle_zero(handle: &EncryptedHandle) -> bool {
     handle.handle.iter().all(|b| *b == 0)
-}
-
-// ============================================================
-// Employee Stream V2 Serialization
-// ============================================================
-
-pub fn load_employee_stream_v2(account: &AccountInfo<'_>) -> Result<EmployeeStreamV2> {
-    let data = account.try_borrow_data()?;
-    let mut slice: &[u8] = &data;
-    EmployeeStreamV2::try_deserialize(&mut slice).map_err(Into::into)
-}
-
-pub fn save_employee_stream_v2(
-    account: &AccountInfo<'_>,
-    employee: &EmployeeStreamV2,
-) -> Result<()> {
-    let mut data = account.try_borrow_mut_data()?;
-    let mut dst: &mut [u8] = &mut data;
-    employee.try_serialize(&mut dst)?;
-    Ok(())
-}
-
-// ============================================================
-// Employee Entry V3 Serialization
-// ============================================================
-
-pub fn load_employee_entry_v3(account: &AccountInfo<'_>) -> Result<EmployeeEntryV3> {
-    let data = account.try_borrow_data()?;
-    let mut slice: &[u8] = &data;
-    EmployeeEntryV3::try_deserialize(&mut slice).map_err(Into::into)
-}
-
-pub fn save_employee_entry_v3(
-    account: &AccountInfo<'_>,
-    employee: &EmployeeEntryV3,
-) -> Result<()> {
-    let mut data = account.try_borrow_mut_data()?;
-    let mut dst: &mut [u8] = &mut data;
-    employee.try_serialize(&mut dst)?;
-    Ok(())
 }
 
 // ============================================================
