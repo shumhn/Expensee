@@ -13,6 +13,15 @@ const nextConfig = {
     };
     return config;
   },
+  async rewrites() {
+    return [
+      { source: '/dashboard', destination: '/employer?mode=dashboard' },
+      { source: '/setup', destination: '/employer?mode=setup' },
+      { source: '/employees', destination: '/employer?mode=employees' },
+      { source: '/history', destination: '/employer?mode=history' },
+      { source: '/agent', destination: '/employer?mode=agent' },
+    ];
+  },
 };
 
 module.exports = nextConfig;

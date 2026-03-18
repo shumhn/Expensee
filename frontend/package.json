@@ -4,7 +4,7 @@
   "private": true,
   "description": "Private real-time payroll and employee payouts setup",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
