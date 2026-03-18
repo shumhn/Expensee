@@ -1,6 +1,15 @@
 use anchor_lang::prelude::*;
 
-use crate::state::EncryptedHandle;
+// ============================================================
+// Encrypted Value Handle
+// ============================================================
+
+/// Handle to an encrypted 128-bit value stored in Inco Lightning.
+/// This is just a 32-byte handle/reference to the ciphertext.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, Debug)]
+pub struct EncryptedHandle {
+    pub handle: [u8; 32],
+}
 
 // ============================================================
 // V4 Pooled-Vault Account Structures (Single Global Vault)
