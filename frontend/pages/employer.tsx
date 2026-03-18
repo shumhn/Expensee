@@ -9,6 +9,7 @@ import ExpenseeShell from '../components/ExpenseeShell';
 import AdvancedDetails from '../components/AdvancedDetails';
 import StepCard from '../components/StepCard';
 import StatusPill from '../components/StatusPill';
+import { useRouter } from 'next/router';
 import { usePayrollHistory } from '../hooks/usePayrollHistory';
 import {
   PAYUSD_MINT,
@@ -34,6 +35,7 @@ import {
   getMasterVaultV4PDA,
   getReturnDataU128,
   getRateHistoryV4Account,
+  getRateHistoryV4PDA,
   getStreamConfigV4PDA,
   getTaskContextPDA,
   getUserTokenAccountV4,
@@ -200,7 +202,10 @@ type EmployerV4ScreenProps = {
   mode?: EmployerV4Mode;
 };
 
-export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) {
+export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4ScreenProps) {
+  const router = useRouter();
+  const mode = (router.query.mode as EmployerV4Mode) || propMode;
+
   const { connection } = useConnection();
   const wallet = useWallet();
 
@@ -1966,7 +1971,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                   <h3>Setup Progress</h3>
                   <p>Complete setup to enable private payroll streaming.</p>
                 </div>
-                <Link className="expensee-cta-btn" href="/setup">Open Setup</Link>
+                <Link className="expensee-cta-btn" href="/employer?mode=setup" as="/setup" shallow={true}>Open Setup</Link>
               </div>
               <div className="expensee-setup-slim">
                 <div>
@@ -2058,7 +2063,7 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
                       <div className="expensee-note">
                         Create a depositor token account in setup before minting or depositing.
                       </div>
-                      <Link className="expensee-cta-btn" href="/setup">Open Setup</Link>
+                      <Link className="expensee-cta-btn" href="/employer?mode=setup" as="/setup" shallow={true}>Open Setup</Link>
                     </div>
                   ) : (
                     <div className="expensee-fund-grid">
@@ -2472,8 +2477,8 @@ export default function EmployerV4Page({ mode = 'all' }: EmployerV4ScreenProps) 
           </section>
         ) : null}
 
-        {/* USER_REQUEST: Removed setup wizard from homepage */}
-        {false && (showStep1 || showStep2 || showStep3 || showStep4) ? (
+        {/* Setup wizard: only visible on /setup page */}
+        {setupOnly ? (
           <section id="setup" className="expensee-steps">
             {setupOnly ? (
               <div className="expensee-setup-nav">
