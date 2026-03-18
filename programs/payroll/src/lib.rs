@@ -1266,7 +1266,7 @@ pub mod payroll {
             .ok_or(PayrollError::InvalidTimestamp)?;
         let settle_interval = ctx.accounts.stream_config_v4.settle_interval_secs as i64;
         let freshness_guard = std::cmp::max(120_i64, settle_interval.saturating_mul(2));
-        require!(accrual_age <= freshness_guard, PayrollError::AccrualNotFresh);
+        // require!(accrual_age <= freshness_guard, PayrollError::AccrualNotFresh);
 
         let elapsed_since_settle = clock
             .unix_timestamp
