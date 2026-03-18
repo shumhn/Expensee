@@ -1,7 +1,6 @@
 /**
  * Production-oriented MagicBlock helpers.
  *
- * NOTE: v2 stream lifecycle (delegate -> accrue -> settle -> redelegate)
  * is executed through on-chain payroll instructions and keeper service,
  * not through local mock sessions.
  */

@@ -14,7 +14,7 @@ const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 const SYSVAR_RENT_PUBKEY = new PublicKey('SysvarRent111111111111111111111111111111111');
 const PUBLIC_USDC_MINT = new PublicKey(process.env.NEXT_PUBLIC_PUBLIC_USDC_MINT || '11111111111111111111111111111111');
-const BRIDGE_LAST_RESULT_KEY = 'ghoststream_bridge_last_result_v1';
+const BRIDGE_LAST_RESULT_KEY = 'ghoststream_bridge_last_result_v4';
 
 function formatActionError(e: any): string {
   const objectFallback =

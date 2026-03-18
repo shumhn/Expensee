@@ -18,7 +18,7 @@ export default function ExpenseeShell({ title, subtitle, children, actions }: Ex
   const router = useRouter();
   const isEmployer = router.pathname.includes('employer');
   const isEmployee = router.pathname.includes('employee');
-  const isActive = (path: string) => router.asPath.startsWith(path);
+  const isActive = (path: string) => router.asPath.includes(path);
   return (
     <div className="expensee-shell">
       <div className="expensee-layout">
@@ -43,19 +43,19 @@ export default function ExpenseeShell({ title, subtitle, children, actions }: Ex
           </div>
 
           <nav className="expensee-nav">
-            <Link className={`expensee-nav-link ${isActive('/dashboard') ? 'active' : ''}`} href="/employer?mode=dashboard" as="/dashboard" shallow={true}>
+            <Link className={`expensee-nav-link ${isActive('dashboard') ? 'active' : ''}`} href="/employer?mode=dashboard">
               Home
             </Link>
-            <Link className={`expensee-nav-link ${isActive('/setup') ? 'active' : ''}`} href="/employer?mode=setup" as="/setup" shallow={true}>
+            <Link className={`expensee-nav-link ${isActive('setup') ? 'active' : ''}`} href="/employer?mode=setup">
               Setup
             </Link>
-            <Link className={`expensee-nav-link ${isActive('/employees') ? 'active' : ''}`} href="/employer?mode=employees" as="/employees" shallow={true}>
+            <Link className={`expensee-nav-link ${isActive('employees') ? 'active' : ''}`} href="/employer?mode=employees">
               Employees
             </Link>
-            <Link className={`expensee-nav-link ${isActive('/history') ? 'active' : ''}`} href="/employer?mode=history" as="/history" shallow={true}>
+            <Link className={`expensee-nav-link ${isActive('history') ? 'active' : ''}`} href="/employer?mode=history">
               History
             </Link>
-            <Link className={`expensee-nav-link ${isActive('/agent') ? 'active' : ''}`} href="/employer?mode=agent" as="/agent" shallow={true}>
+            <Link className={`expensee-nav-link ${isActive('agent') ? 'active' : ''}`} href="/employer?mode=agent">
               Agent
             </Link>
           </nav>
@@ -73,10 +73,10 @@ export default function ExpenseeShell({ title, subtitle, children, actions }: Ex
             </div>
             <div className="expensee-actions">
               {actions}
-              <Link className="expensee-action-btn outline" href="/employer?mode=setup" as="/setup" shallow={true}>
+              <Link className="expensee-action-btn outline" href="/employer?mode=setup">
                 Start Setup
               </Link>
-              <Link className="expensee-action-btn" href="/employer?mode=agent" as="/agent" shallow={true}>
+              <Link className="expensee-action-btn" href="/employer?mode=agent">
                 Agent
               </Link>
               <div className="expensee-icon-btn">🔔</div>

@@ -180,7 +180,7 @@ function fromDateTimeLocal(value: string): string {
   return String(Math.floor(ts / 1000));
 }
 
-const CRANK_REGION_STORAGE_KEY = 'expensee.crank_region_v1';
+const CRANK_REGION_STORAGE_KEY = 'expensee.crank_region_v4';
 
 function normalizeMagicblockRegion(value: string | null): MagicblockValidatorRegion | null {
   if (value === 'eu' || value === 'us' || value === 'asia') return value;
@@ -204,7 +204,20 @@ type EmployerV4ScreenProps = {
 
 export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4ScreenProps) {
   const router = useRouter();
-  const mode = (router.query.mode as EmployerV4Mode) || propMode;
+  
+  // Predict mode directly from asPath for shallow routed rewrites (since query.mode gets lost)
+  let mode = (router.query.mode as EmployerV4Mode) || propMode;
+  if (router.asPath) {
+    const path = router.asPath;
+    if (path.includes('/setup') || path.includes('mode=setup')) mode = 'setup';
+    else if (path.includes('/dashboard') || path.includes('mode=dashboard')) mode = 'dashboard';
+    else if (path.includes('/employees') || path.includes('mode=employees')) mode = 'employees';
+    else if (path.includes('/history') || path.includes('mode=history')) mode = 'history';
+    else if (path.includes('/agent') || path.includes('mode=agent')) mode = 'agent';
+    else if (path.includes('/vault') || path.includes('mode=vault')) mode = 'vault';
+    else if (path.includes('/payments') || path.includes('mode=payments')) mode = 'payments';
+    else if (path.includes('/reports') || path.includes('mode=reports')) mode = 'reports';
+  }
 
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -304,6 +317,25 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
   const businessIndex = useMemo(() => parseIndex(businessIndexInput), [businessIndexInput]);
   const employeeIndex = useMemo(() => parseIndex(employeeIndexInput), [employeeIndexInput]);
 
+  // Derive a stable localStorage key for crank schedule persistence
+  const crankStorageKey = useMemo(() => {
+    if (!wallet.publicKey || businessIndex === null || employeeIndex === null) return null;
+    return `expensee.crankSchedule.${wallet.publicKey.toBase58()}.${businessIndex}.${employeeIndex}`;
+  }, [wallet.publicKey, businessIndex, employeeIndex]);
+
+  // Hydrate crank schedule info from localStorage on mount/key change
+  useEffect(() => {
+    if (typeof window === 'undefined' || !crankStorageKey) return;
+    try {
+      const stored = window.localStorage.getItem(crankStorageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setCrankScheduleInfo(parsed);
+        setCrankScheduleStatus('yes');
+      }
+    } catch {}
+  }, [crankStorageKey]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const stored = window.localStorage.getItem('expensee.usdcMode');
@@ -389,13 +421,17 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
             taskId
           );
           setLastCrankTx(crankTx);
-          setCrankScheduleInfo({
+          const schedInfo = {
             taskId,
             scheduledAt: new Date().toLocaleString(),
             region: entry,
             payer: wallet.publicKey.toBase58(),
-          });
+          };
+          setCrankScheduleInfo(schedInfo);
           setCrankScheduleStatus('yes');
+          // Persist to localStorage so it survives page refresh (ER garbage-collects task_context PDAs)
+          const storageKey = `expensee.crankSchedule.${wallet.publicKey.toBase58()}.${targetBusinessIndex}.${targetEmployeeIndex}`;
+          try { window.localStorage.setItem(storageKey, JSON.stringify(schedInfo)); } catch {}
           if (entry !== delegateRegion) {
             setDelegateRegion(entry);
           }
@@ -417,8 +453,9 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     [wallet, wallet.publicKey, waitForErAccount, delegateRegion]
   );
 
-  // Deterministic crank check — no localStorage needed.
-  // Derives the taskId from wallet + businessIndex + employeeIndex, then queries the ER RPC.
+  // Deterministic crank check — queries ER first, falls back to localStorage.
+  // The ER is ephemeral and garbage-collects task_context PDAs, so localStorage
+  // is used as a reliable secondary source of truth.
   const checkCrankScheduled = useCallback(
     async () => {
       if (!wallet.publicKey || businessIndex === null || employeeIndex === null) {
@@ -442,7 +479,20 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
             return;
           }
         }
-        setCrankScheduleStatus('no');
+        // ER didn't have the account — check localStorage as fallback
+        const localKey = `expensee.crankSchedule.${wallet.publicKey.toBase58()}.${businessIndex}.${employeeIndex}`;
+        const stored = typeof window !== 'undefined' ? window.localStorage.getItem(localKey) : null;
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            setCrankScheduleInfo(parsed);
+            setCrankScheduleStatus('yes');
+          } catch {
+            setCrankScheduleStatus('no');
+          }
+        } else {
+          setCrankScheduleStatus('no');
+        }
       } catch {
         setCrankScheduleStatus('unknown');
       }
@@ -1406,7 +1456,9 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
         setIsDelegated(null);
         throw new Error('Employee v4 account not found');
       }
-      setIsDelegated(info.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM));
+      const isDelegatedFlag = info.data[161] === 1;
+      const isDelegatedByOwner = info.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
+      setIsDelegated(isDelegatedFlag || isDelegatedByOwner);
       return info;
     });
   }, [connection, employeePda, runAction]);
@@ -1420,7 +1472,9 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
         attempts += 1;
         const info = await connection.getAccountInfo(employeePda, 'confirmed');
         if (info) {
-          const delegatedNow = info.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
+          const isDelegatedFlag = info.data[161] === 1;
+          const isDelegatedByOwner = info.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
+          const delegatedNow = isDelegatedFlag || isDelegatedByOwner;
           setIsDelegated(delegatedNow);
           if (delegatedNow === targetDelegated) {
             setDelegationStatusMsg(
@@ -1664,11 +1718,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     }
   }, [business, refreshVaultBalance]);
 
-  useEffect(() => {
-    if (!wallet.connected) return;
-    if (!businessPda || streamConfig) return;
-    void attemptAutoConfig();
-  }, [attemptAutoConfig, businessPda, streamConfig, wallet.connected]);
+  // Removed invasive auto-config useEffect that triggers Phantom popups on page mount.
 
   const loadDevnetState = useCallback(async () => {
     setBusy(true);
@@ -1963,15 +2013,14 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
           </section>
         ) : null}
 
-        {/* {showDashboard ? (
+        {showDashboard ? (
           <section className="expensee-setup-summary">
             <div className="expensee-setup-card">
               <div className="expensee-setup-head">
                 <div>
-                  <h3>Setup Progress</h3>
-                  <p>Complete setup to enable private payroll streaming.</p>
+                  <h3>Private Payroll Operations</h3>
+                  <p>Welcome to your V4 pooled privacy dashboard.</p>
                 </div>
-                <Link className="expensee-cta-btn" href="/employer?mode=setup" as="/setup" shallow={true}>Open Setup</Link>
               </div>
               <div className="expensee-setup-slim">
                 <div>
@@ -1985,7 +2034,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
               </div>
             </div>
           </section>
-        ) : null} */}
+        ) : null}
 
         {showEmployees ? (
           <section id="employees" className="expensee-section">
@@ -2032,7 +2081,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
           </section>
         ) : null}
 
-        {/* {showDashboard || showAgent ? (
+        {showDashboard || showAgent ? (
           <section className={`expensee-panels ${isSoloAgent ? 'expensee-panels--solo' : ''}`}>
             {showDashboard ? (
               <div className="expensee-panel-stack">
@@ -2359,7 +2408,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
               </div>
             ) : null}
           </section>
-        ) : null} */}
+        ) : null}
 
         {showHistory ? (
           <section id="history" className="expensee-section">

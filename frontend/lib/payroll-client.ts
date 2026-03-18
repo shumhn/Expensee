@@ -1,5 +1,5 @@
 /**
- * Payroll Program Client (v2)
+ * Payroll Program Client (v4 – Pooled Vault)
  *
  * Integrates with the deployed Confidential Streaming Payroll program.
  * Program ID: 97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU
@@ -7,12 +7,12 @@
  * Architecture:
  * - Business PDA: ["business", owner_pubkey]
  * - Vault PDA: ["vault", business_pubkey]
- * - Employee Stream PDA: ["employee_v2", business_pubkey, stream_index (u64)]
+ * - Employee PDA: ["employee_v4", business_pubkey, employee_index (u64)]
  *
  * Features:
  * - Register business with confidential vault
  * - Deposit encrypted tokens to vault via CPI
- * - v2 private real-time streaming with MagicBlock TEE
+ * - v4 pooled vault private streaming with MagicBlock TEE
  * - Withdraw request + keeper settlement
  * - Deactivate individual streams
  */
@@ -23,6 +23,37 @@ import bs58 from 'bs58';
 import { encryptValue } from '@inco/solana-sdk/encryption';
 import { hexToBuffer } from '@inco/solana-sdk/utils';
 import { createMagicBlockClient } from './magicblock';
+
+if (typeof Buffer !== 'undefined') {
+  if (!Buffer.prototype.writeBigUInt64LE) {
+    Buffer.prototype.writeBigUInt64LE = function (value: bigint, offset = 0) {
+      const low = Number(value & 0xffffffffn);
+      const high = Number((value >> 32n) & 0xffffffffn);
+      this.writeUInt32LE(low, offset);
+      this.writeUInt32LE(high, offset + 4);
+      return offset + 8;
+    };
+  }
+  if (!Buffer.prototype.writeBigInt64LE) {
+    Buffer.prototype.writeBigInt64LE = function (value: bigint, offset = 0) {
+      const unsigned = value < 0n ? value + 18446744073709551616n : value;
+      return this.writeBigUInt64LE(unsigned, offset);
+    };
+  }
+  if (!Buffer.prototype.readBigUInt64LE) {
+    Buffer.prototype.readBigUInt64LE = function (offset = 0) {
+      const low = BigInt(this.readUInt32LE(offset));
+      const high = BigInt(this.readUInt32LE(offset + 4));
+      return (high << 32n) + low;
+    };
+  }
+  if (!Buffer.prototype.readBigInt64LE) {
+    Buffer.prototype.readBigInt64LE = function (offset = 0) {
+      const val = this.readBigUInt64LE(offset);
+      return val >= 9223372036854775808n ? val - 18446744073709551616n : val;
+    };
+  }
+}
 
 // ============================================================
 // Program IDs (from env with fallbacks)
@@ -90,8 +121,8 @@ export const MAGICBLOCK_TEE_VALIDATOR_IDENTITY = new PublicKey(
 const MAGICBLOCK_TEE_ENABLED = process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED === 'true';
 const MAGICBLOCK_TEE_URL =
   process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_URL || 'https://tee.magicblock.app';
-const TEE_MODE_STORAGE_KEY = 'expensee_tee_mode_v1';
-const TEE_TOKEN_STORAGE_PREFIX = 'expensee_tee_token_v1:';
+const TEE_MODE_STORAGE_KEY = 'expensee_tee_mode_v4';
+const TEE_TOKEN_STORAGE_PREFIX = 'expensee_tee_token_v4:';
 
 function assertTeeAllowed(validator: PublicKey): void {
   if (MAGICBLOCK_TEE_ENABLED) return;
@@ -365,12 +396,6 @@ const WITHDRAW_REQUEST_V2_SEED = Buffer.from('withdraw_request_v2');
 const SHIELDED_PAYOUT_V2_SEED = Buffer.from('shielded_payout');
 const RATE_HISTORY_V2_SEED = Buffer.from('rate_history_v2');
 const RATE_HISTORY_V4_SEED = Buffer.from('rate_history_v4');
-const MASTER_VAULT_V3_SEED = Buffer.from('master_vault_v3');
-const BUSINESS_V3_SEED = Buffer.from('business_v3');
-const EMPLOYEE_V3_SEED = Buffer.from('employee_v3');
-const STREAM_CONFIG_V3_SEED = Buffer.from('stream_config_v3');
-const WITHDRAW_REQUEST_V3_SEED = Buffer.from('withdraw_request_v3');
-const SHIELDED_PAYOUT_V3_SEED = Buffer.from('shielded_payout_v3');
 const MASTER_VAULT_V4_SEED = Buffer.from('master_vault_v4b');
 const BUSINESS_V4_SEED = Buffer.from('business_v4');
 const EMPLOYEE_V4_SEED = Buffer.from('employee_v4');
@@ -446,67 +471,18 @@ const INCO_ALLOW_DISCRIMINATOR = disc([60, 103, 140, 65, 110, 109, 147, 164]);
 
 const DISCRIMINATORS = {
   // Setup
-  register_business: disc([73, 228, 5, 59, 229, 67, 133, 82]),
-  init_vault: disc([77, 79, 85, 150, 33, 217, 52, 106]),
-  rotate_vault_token_account: disc([229, 88, 174, 100, 140, 129, 2, 213]),
 
-  // Operations
-  deposit: disc([242, 35, 198, 137, 82, 225, 242, 182]),
-  admin_withdraw_vault_v2: disc([107, 78, 201, 164, 14, 202, 112, 10]),
-
-  // v2 real-time private payroll
-  init_stream_config_v2: disc([189, 68, 68, 47, 176, 124, 45, 106]),
-  update_keeper_v2: disc([52, 172, 105, 244, 89, 165, 39, 71]),
-  add_employee_stream_v2: disc([159, 218, 122, 103, 242, 71, 89, 240]),
-  delegate_stream_v2: disc([149, 221, 59, 171, 243, 25, 232, 241]),
-  accrue_v2: disc([109, 173, 74, 232, 133, 35, 206, 149]),
-  auto_settle_stream_v2: disc([220, 231, 109, 26, 242, 148, 211, 2]),
-  commit_and_undelegate_stream_v2: disc([221, 72, 242, 203, 64, 158, 195, 242]),
-  redelegate_stream_v2: disc([231, 62, 146, 164, 236, 234, 43, 88]),
-  deactivate_stream_v2: disc([18, 228, 219, 116, 117, 114, 136, 3]),
-  pause_stream_v2: disc([77, 162, 53, 254, 80, 88, 242, 76]),
-  resume_stream_v2: disc([57, 120, 86, 179, 230, 106, 181, 161]),
-  init_rate_history_v2: disc([199, 217, 121, 94, 112, 222, 26, 240]),
-  update_salary_rate_v2: disc([188, 52, 12, 49, 104, 111, 100, 100]),
-  grant_bonus_v2: disc([24, 176, 4, 187, 122, 90, 99, 9]),
 
   // v4 rate history (selective disclosure)
   init_rate_history_v4: disc([255, 56, 128, 46, 243, 113, 17, 22]),
   update_salary_rate_v4: disc([36, 230, 191, 106, 46, 239, 153, 16]),
 
-  // v2 withdraw request (EWA pull model)
-  request_withdraw_v2: disc([177, 251, 0, 3, 73, 86, 101, 32]),
+  // Legacy v2 discriminators (still referenced by payout receipt scanning)
   process_withdraw_request_v2: disc([128, 150, 154, 174, 215, 145, 233, 234]),
-
-  // Inco access control (view permission)
-  grant_employee_view_access_v2: disc([201, 191, 208, 133, 117, 221, 125, 147]),
-  grant_keeper_view_access_v2: disc([60, 78, 33, 123, 183, 61, 107, 58]),
-
-  // Phase 2: Shielded payout
-  claim_payout_v2: disc([173, 130, 104, 210, 0, 178, 203, 83]),
-  cancel_expired_payout_v2: disc([97, 13, 123, 62, 246, 36, 146, 99]),
-
-  // Phase 2: Programmable viewing policies + keeper-relayed claims
-  revoke_view_access_v2: disc([79, 190, 166, 170, 246, 184, 119, 163]),
-  grant_auditor_view_access_v2: disc([169, 70, 78, 218, 59, 114, 203, 200]),
   keeper_claim_on_behalf_v2: disc([161, 194, 33, 127, 138, 221, 153, 84]),
+  claim_payout_v2: disc([173, 130, 104, 210, 0, 178, 203, 83]),
 
-  // v3 privacy-first (index-based)
-  init_master_vault_v3: disc([82, 161, 25, 126, 64, 130, 101, 80]),
-  register_business_v3: disc([226, 216, 208, 219, 191, 112, 53, 18]),
-  init_vault_v3: disc([68, 31, 119, 104, 201, 102, 57, 121]),
-  deposit_v3: disc([143, 121, 102, 14, 14, 12, 216, 226]),
-  init_stream_config_v3: disc([59, 125, 145, 25, 210, 51, 171, 157]),
-  update_keeper_v3: disc([148, 139, 116, 90, 225, 246, 192, 192]),
-  add_employee_v3: disc([38, 99, 133, 102, 48, 234, 105, 17]),
-  accrue_v3: disc([41, 45, 124, 121, 147, 96, 204, 107]),
-  delegate_stream_v3: disc([178, 105, 65, 227, 6, 227, 119, 126]),
-  commit_and_undelegate_stream_v3: disc([131, 255, 179, 226, 50, 246, 203, 72]),
-  redelegate_stream_v3: disc([166, 31, 98, 46, 187, 229, 4, 111]),
-  request_withdraw_v3: disc([58, 145, 212, 233, 12, 201, 200, 74]),
-  process_withdraw_request_v3: disc([71, 37, 32, 22, 140, 169, 123, 39]),
-  claim_payout_v3: disc([159, 33, 24, 178, 27, 179, 113, 56]),
-  cancel_expired_payout_v3: disc([8, 59, 108, 78, 51, 30, 55, 254]),
+
 
   // v4 pooled-vault privacy (global pool)
   init_master_vault_v4: disc([132, 191, 148, 16, 203, 34, 4, 210]),
@@ -667,65 +643,6 @@ export function getShieldedPayoutV2PDA(business: PublicKey, streamIndex: number,
   );
 }
 
-// ============================================================
-// V3 PDA Seeds (Index-Based Privacy)
-// ============================================================
-
-export function getMasterVaultV3PDA(): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [MASTER_VAULT_V3_SEED],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-export function getBusinessV3PDA(masterVault: PublicKey, businessIndex: number): [PublicKey, number] {
-  const indexBuf = Buffer.alloc(8);
-  indexBuf.writeBigUInt64LE(BigInt(businessIndex));
-  return PublicKey.findProgramAddressSync(
-    [BUSINESS_V3_SEED, masterVault.toBuffer(), indexBuf],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-export function getEmployeeV3PDA(business: PublicKey, employeeIndex: number): [PublicKey, number] {
-  const indexBuf = Buffer.alloc(8);
-  indexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  return PublicKey.findProgramAddressSync(
-    [EMPLOYEE_V3_SEED, business.toBuffer(), indexBuf],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-export function getStreamConfigV3PDA(business: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [STREAM_CONFIG_V3_SEED, business.toBuffer()],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-export function getWithdrawRequestV3PDA(business: PublicKey, employeeIndex: number): [PublicKey, number] {
-  const indexBuf = Buffer.alloc(8);
-  indexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  return PublicKey.findProgramAddressSync(
-    [WITHDRAW_REQUEST_V3_SEED, business.toBuffer(), indexBuf],
-    PAYROLL_PROGRAM_ID
-  );
-}
-
-export function getShieldedPayoutV3PDA(
-  business: PublicKey,
-  employeeIndex: number,
-  nonce: number
-): [PublicKey, number] {
-  const indexBuf = Buffer.alloc(8);
-  indexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(BigInt(nonce));
-  return PublicKey.findProgramAddressSync(
-    [SHIELDED_PAYOUT_V3_SEED, business.toBuffer(), indexBuf, nonceBuf],
-    PAYROLL_PROGRAM_ID
-  );
-}
 
 // ============================================================
 // V4 PDA Seeds (Pooled Vault)
@@ -811,13 +728,6 @@ export function getV2DelegationPDAs(employeeStream: PublicKey): {
   return { bufferPDA, delegationRecordPDA, delegationMetadataPDA };
 }
 
-export function getV3DelegationPDAs(employeeStream: PublicKey): {
-  bufferPDA: PublicKey;
-  delegationRecordPDA: PublicKey;
-  delegationMetadataPDA: PublicKey;
-} {
-  return getV2DelegationPDAs(employeeStream);
-}
 
 export function getV4DelegationPDAs(employeeStream: PublicKey): {
   bufferPDA: PublicKey;
@@ -948,203 +858,6 @@ export async function getVaultAccount(
     tokenAccount: new PublicKey(data.slice(72, 104)),
     encryptedBalance: data.slice(104, 136),
     bump: data[136],
-  };
-}
-
-// ============================================================
-// V3 Account Parsing (Index-Based Privacy)
-// ============================================================
-
-export interface MasterVaultV3Account {
-  address: PublicKey;
-  authority: PublicKey;
-  encryptedBusinessCount: Uint8Array;
-  encryptedEmployeeCount: Uint8Array;
-  nextBusinessIndex: number;
-  isActive: boolean;
-  bump: number;
-}
-
-export async function getMasterVaultV3Account(
-  connection: Connection
-): Promise<MasterVaultV3Account | null> {
-  const [masterPDA] = getMasterVaultV3PDA();
-  const accountInfo = await getAccountInfoWithFallback(connection, masterPDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  // Layout:
-  // 0-8 discriminator
-  // 8-40 authority
-  // 40-72 encrypted_business_count
-  // 72-104 encrypted_employee_count
-  // 104-112 next_business_index
-  // 112 is_active
-  // 113 bump
-  return {
-    address: masterPDA,
-    authority: new PublicKey(data.slice(8, 40)),
-    encryptedBusinessCount: data.slice(40, 72),
-    encryptedEmployeeCount: data.slice(72, 104),
-    nextBusinessIndex: Number(data.readBigUInt64LE(104)),
-    isActive: data[112] === 1,
-    bump: data[113],
-  };
-}
-
-export interface BusinessV3Account {
-  address: PublicKey;
-  masterVault: PublicKey;
-  businessIndex: number;
-  encryptedEmployerId: Uint8Array;
-  vault: PublicKey;
-  encryptedBalance: Uint8Array;
-  encryptedEmployeeCount: Uint8Array;
-  nextEmployeeIndex: number;
-  isActive: boolean;
-  bump: number;
-}
-
-export async function getBusinessV3Account(
-  connection: Connection,
-  masterVault: PublicKey,
-  businessIndex: number
-): Promise<BusinessV3Account | null> {
-  const [businessPDA] = getBusinessV3PDA(masterVault, businessIndex);
-  const accountInfo = await getAccountInfoWithFallback(connection, businessPDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  // Layout:
-  // 0-8 discriminator
-  // 8-40 master_vault
-  // 40-48 business_index
-  // 48-80 encrypted_employer_id
-  // 80-112 vault
-  // 112-144 encrypted_balance
-  // 144-176 encrypted_employee_count
-  // 176-184 next_employee_index
-  // 184 is_active
-  // 185 bump
-  return {
-    address: businessPDA,
-    masterVault: new PublicKey(data.slice(8, 40)),
-    businessIndex: Number(data.readBigUInt64LE(40)),
-    encryptedEmployerId: data.slice(48, 80),
-    vault: new PublicKey(data.slice(80, 112)),
-    encryptedBalance: data.slice(112, 144),
-    encryptedEmployeeCount: data.slice(144, 176),
-    nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
-    isActive: data[184] === 1,
-    bump: data[185],
-  };
-}
-
-export async function getBusinessV3AccountByAddress(
-  connection: Connection,
-  businessPDA: PublicKey
-): Promise<BusinessV3Account | null> {
-  const accountInfo = await getAccountInfoWithFallback(connection, businessPDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  return {
-    address: businessPDA,
-    masterVault: new PublicKey(data.slice(8, 40)),
-    businessIndex: Number(data.readBigUInt64LE(40)),
-    encryptedEmployerId: data.slice(48, 80),
-    vault: new PublicKey(data.slice(80, 112)),
-    encryptedBalance: data.slice(112, 144),
-    encryptedEmployeeCount: data.slice(144, 176),
-    nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
-    isActive: data[184] === 1,
-    bump: data[185],
-  };
-}
-
-export interface EmployeeV3Account {
-  address: PublicKey;
-  owner: PublicKey;
-  business: PublicKey;
-  employeeIndex: number;
-  encryptedEmployeeId: Uint8Array;
-  encryptedSalaryRate: Uint8Array;
-  encryptedAccrued: Uint8Array;
-  lastAccrualTime: number;
-  lastSettleTime: number;
-  isActive: boolean;
-  isDelegated: boolean;
-  bump: number;
-  periodStart: number;
-  periodEnd: number;
-}
-
-export async function getEmployeeV3Account(
-  connection: Connection,
-  business: PublicKey,
-  employeeIndex: number
-): Promise<EmployeeV3Account | null> {
-  const [employeePDA] = getEmployeeV3PDA(business, employeeIndex);
-  const accountInfo = await getAccountInfoWithFallback(connection, employeePDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  const isDelegatedFlag = data[161] === 1;
-  const isDelegatedByOwner = accountInfo.owner.equals(MAGICBLOCK_DELEGATION_PROGRAM);
-  const isDelegated = isDelegatedFlag || isDelegatedByOwner;
-  return {
-    address: employeePDA,
-    owner: accountInfo.owner,
-    business: new PublicKey(data.slice(8, 40)),
-    employeeIndex: Number(data.readBigUInt64LE(40)),
-    encryptedEmployeeId: data.slice(48, 80),
-    encryptedSalaryRate: data.slice(80, 112),
-    encryptedAccrued: data.slice(112, 144),
-    lastAccrualTime: Number(data.readBigInt64LE(144)),
-    lastSettleTime: Number(data.readBigInt64LE(152)),
-    isActive: data[160] === 1,
-    isDelegated,
-    bump: data[162],
-    periodStart: Number(data.readBigInt64LE(163)),
-    periodEnd: Number(data.readBigInt64LE(171)),
-  };
-}
-
-export interface BusinessStreamConfigV3Account {
-  address: PublicKey;
-  business: PublicKey;
-  keeperPubkey: PublicKey;
-  settleIntervalSecs: number;
-  isPaused: boolean;
-  pauseReason: number;
-  bump: number;
-}
-
-export async function getBusinessStreamConfigV3Account(
-  connection: Connection,
-  business: PublicKey
-): Promise<BusinessStreamConfigV3Account | null> {
-  const [streamConfigPDA] = getStreamConfigV3PDA(business);
-  const accountInfo = await getAccountInfoWithFallback(connection, streamConfigPDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  // Layout:
-  // 0-8 discriminator
-  // 8-40 business
-  // 40-72 keeper_pubkey
-  // 72-80 settle_interval_secs
-  // 80 is_paused
-  // 81 pause_reason
-  // 82 bump
-  return {
-    address: streamConfigPDA,
-    business: new PublicKey(data.slice(8, 40)),
-    keeperPubkey: new PublicKey(data.slice(40, 72)),
-    settleIntervalSecs: Number(data.readBigUInt64LE(72)),
-    isPaused: data[80] === 1,
-    pauseReason: data[81],
-    bump: data[82],
   };
 }
 
@@ -1590,18 +1303,20 @@ export interface RateHistoryV4Account {
 }
 
 export function extractHandleFromCiphertext32(data: Uint8Array | Buffer): bigint {
-  const bytes = Buffer.from(data).subarray(0, 16);
+  const bytes = Buffer.from(data).subarray(0, 32);
   let result = 0n;
-  for (let i = 15; i >= 0; i -= 1) {
+  // Read full 32 bytes for 256-bit handle
+  for (let i = 31; i >= 0; i -= 1) {
     result = result * 256n + BigInt(bytes[i] || 0);
   }
   return result;
 }
 
 function readU128LEFrom32(handle32: Buffer): bigint {
-  const b = handle32.subarray(0, 16);
+  const b = handle32.subarray(0, 32);
   let out = 0n;
-  for (let i = 15; i >= 0; i -= 1) {
+  // Read full 32 bytes for 256-bit handle
+  for (let i = 31; i >= 0; i -= 1) {
     out = out * 256n + BigInt(b[i] || 0);
   }
   return out;
@@ -1984,706 +1699,37 @@ async function encryptPubkeyId(pubkey: PublicKey): Promise<Buffer> {
 }
 
 // ============================================================
-// Setup Instructions
-// ============================================================
-
-/**
- * Register a new business
- * Creates Business PDA for the owner
- */
-export async function registerBusiness(
-  connection: Connection,
-  wallet: WalletContextState
-): Promise<{ txid: string; businessPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-
-  // Check if already registered
-  const existing = await getAccountInfoWithFallback(connection, businessPDA);
-  if (existing) {
-    throw new Error('Business already registered');
-  }
-
-  const encryptedEmployerId = await encryptPubkeyId(wallet.publicKey);
-  const employerIdLen = Buffer.alloc(4);
-  employerIdLen.writeUInt32LE(encryptedEmployerId.length);
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.register_business,
-    employerIdLen,
-    encryptedEmployerId,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction, 'init_master_vault_v4', {
-    forceBase: true,
-  });
-  return { txid, businessPDA };
-}
-
-/**
- * Initialize the business vault
- * Creates Vault PDA and links to Inco Token account
- *
- * Note: The Inco Token account must be created externally first,
- * with the vault PDA as the owner.
- */
-export async function initVault(
-  connection: Connection,
-  wallet: WalletContextState,
-  vaultTokenAccount: PublicKey,
-  mint: PublicKey = PAYUSD_MINT
-): Promise<{ txid: string; vaultPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  // Verify business exists
-  const businessAccount = await getAccountInfoWithFallback(connection, businessPDA);
-  if (!businessAccount) {
-    throw new Error('Business not registered. Please register first.');
-  }
-
-  // Build instruction data: discriminator + mint (32) + vault_token_account (32)
-  const data = Buffer.concat([
-    DISCRIMINATORS.init_vault,
-    mint.toBuffer(),
-    vaultTokenAccount.toBuffer(),
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(
-    connection,
-    wallet,
-    instruction,
-    'create_inco_token_account',
-    { forceBase: true }
-  );
-  return { txid, vaultPDA };
-}
-
-/**
- * Rotate/update the vault's mint + token account.
- *
- * Fixes "MintMismatch: Account not associated with this Mint" when your vault was
- * initialized against an old mint/token-account.
- */
-export async function rotateVaultTokenAccount(
-  connection: Connection,
-  wallet: WalletContextState,
-  newVaultTokenAccount: PublicKey,
-  newMint: PublicKey = PAYUSD_MINT
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  // Instruction data: discriminator + new_mint (32)
-  const data = Buffer.concat([DISCRIMINATORS.rotate_vault_token_account, newMint.toBuffer()]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: newVaultTokenAccount, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'request_withdraw_v3', { forceBase: true });
-}
-
-// ============================================================
-// V3 Privacy-First Setup Instructions
-// ============================================================
-
-export async function initMasterVaultV3(
-  connection: Connection,
-  wallet: WalletContextState
-): Promise<{ txid: string; masterVaultPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const existing = await getAccountInfoWithFallback(connection, masterVaultPDA);
-  if (existing) {
-    throw new Error('MasterVaultV3 already initialized');
-  }
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: DISCRIMINATORS.init_master_vault_v3,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, masterVaultPDA };
-}
-
-export async function registerBusinessV3(
-  connection: Connection,
-  wallet: WalletContextState
-): Promise<{ txid: string; masterVaultPDA: PublicKey; businessPDA: PublicKey; businessIndex: number }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const master = await getMasterVaultV3Account(connection);
-  if (!master) {
-    throw new Error('MasterVaultV3 not initialized. Run initMasterVaultV3 first.');
-  }
-
-  const businessIndex = master.nextBusinessIndex;
-  const [businessPDA] = getBusinessV3PDA(master.address, businessIndex);
-
-  const encryptedEmployerId = await encryptPubkeyId(wallet.publicKey);
-  const employerIdLen = Buffer.alloc(4);
-  employerIdLen.writeUInt32LE(encryptedEmployerId.length);
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.register_business_v3,
-    employerIdLen,
-    encryptedEmployerId,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: master.address, isSigner: false, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, masterVaultPDA: master.address, businessPDA, businessIndex };
-}
-
-export async function initVaultV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  vaultTokenAccount: PublicKey,
-  mint: PublicKey = PAYUSD_MINT
-): Promise<{ txid: string; vaultPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.init_vault_v3,
-    mint.toBuffer(),
-    vaultTokenAccount.toBuffer(),
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, vaultPDA };
-}
-
-export async function initStreamConfigV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  keeperPubkey: PublicKey,
-  settleIntervalSecs: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const settleBuf = Buffer.alloc(8);
-  settleBuf.writeBigUInt64LE(BigInt(settleIntervalSecs));
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.init_stream_config_v3,
-    keeperPubkey.toBuffer(),
-    settleBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'request_withdraw_v4', { forceBase: true });
-}
-
-export async function updateKeeperV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  keeperPubkey: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const data = Buffer.concat([DISCRIMINATORS.update_keeper_v3, keeperPubkey.toBuffer()]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'update_keeper_v3');
-}
-
-export async function addEmployeeV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  employeeWallet: PublicKey,
-  salaryLamports: bigint,
-  periodStart: number,
-  periodEnd: number
-): Promise<{ txid: string; employeePDA: PublicKey; employeeIndex: number }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const business = await getBusinessV3AccountByAddress(connection, businessPDA);
-  if (!business) throw new Error('BusinessV3 account not found.');
-
-  const employeeIndex = business.nextEmployeeIndex;
-  const [employeePDA] = getEmployeeV3PDA(businessPDA, employeeIndex);
-
-  const encryptedEmployeeId = await encryptPubkeyId(employeeWallet);
-  const encryptedSalary = await encryptForInco(salaryLamports);
-  const employeeIdLen = Buffer.alloc(4);
-  employeeIdLen.writeUInt32LE(encryptedEmployeeId.length);
-  const salaryLen = Buffer.alloc(4);
-  salaryLen.writeUInt32LE(encryptedSalary.length);
-  const periodStartBuf = Buffer.alloc(8);
-  periodStartBuf.writeBigInt64LE(BigInt(periodStart));
-  const periodEndBuf = Buffer.alloc(8);
-  periodEndBuf.writeBigInt64LE(BigInt(periodEnd));
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.add_employee_v3,
-    employeeIdLen,
-    encryptedEmployeeId,
-    salaryLen,
-    encryptedSalary,
-    periodStartBuf,
-    periodEndBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction, 'add_employee_v3');
-  return { txid, employeePDA, employeeIndex };
-}
-
-export async function depositV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  depositorTokenAccount: PublicKey,
-  vaultTokenAccount: PublicKey,
-  amountLamports: bigint
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  const encryptedAmount = await encryptForInco(amountLamports);
-  const lengthBytes = Buffer.alloc(4);
-  lengthBytes.writeUInt32LE(encryptedAmount.length);
-  const data = Buffer.concat([DISCRIMINATORS.deposit_v3, lengthBytes, encryptedAmount]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: depositorTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'init_stream_config_v4', {
-    forceBase: true,
-  });
-}
-
-/**
- * Delegate v3 employee stream to a MagicBlock ER validator.
- */
-export async function delegateStreamV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessIndex: number,
-  employeeIndex: number,
-  validator: PublicKey = TEE_VALIDATOR
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  await requireRangeCompliance(wallet.publicKey.toBase58());
-  assertTeeAllowed(validator);
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [businessPDA] = getBusinessV3PDA(masterVaultPDA, businessIndex);
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const [employeePDA] = getEmployeeV3PDA(businessPDA, employeeIndex);
-  const { bufferPDA, delegationRecordPDA, delegationMetadataPDA } = getV3DelegationPDAs(employeePDA);
-
-  const employee = await getEmployeeV3Account(connection, businessPDA, employeeIndex);
-  if (!employee) {
-    throw new Error(`v3 employee ${employeeIndex} not found`);
-  }
-  if (!employee.isActive) {
-    throw new Error(`v3 employee ${employeeIndex} is inactive`);
-  }
-  if (employee.isDelegated) {
-    throw new Error(`v3 employee ${employeeIndex} already delegated`);
-  }
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.delegate_stream_v3,
-    employeeIndexBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: bufferPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationRecordPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationMetadataPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: validator, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: PAYROLL_PROGRAM_ID, isSigner: false, isWritable: false }, // owner_program
-      { pubkey: MAGICBLOCK_DELEGATION_PROGRAM, isSigner: false, isWritable: false }, // delegation_program
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'update_keeper_v4', {
-    forceBase: true,
-  });
-}
-
-/**
- * Commit pending delegated state and undelegate v3 stream back to base layer.
- */
-export async function commitAndUndelegateStreamV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessIndex: number,
-  employeeIndex: number,
-  magicContext: PublicKey = MAGICBLOCK_MAGIC_CONTEXT
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [businessPDA] = getBusinessV3PDA(masterVaultPDA, businessIndex);
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const [employeePDA] = getEmployeeV3PDA(businessPDA, employeeIndex);
-
-  const employee = await getEmployeeV3Account(connection, businessPDA, employeeIndex);
-  if (!employee) {
-    throw new Error(`v3 employee ${employeeIndex} not found`);
-  }
-  if (!employee.isDelegated) {
-    throw new Error(`v3 employee ${employeeIndex} is not delegated`);
-  }
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.commit_and_undelegate_stream_v3,
-    employeeIndexBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: magicContext, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'init_user_token_account_v4', {
-    forceBase: true,
-  });
-}
-
-/**
- * Re-delegate a v3 stream after settlement commit.
- */
-export async function redelegateStreamV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessIndex: number,
-  employeeIndex: number,
-  validator: PublicKey = TEE_VALIDATOR
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-  assertTeeAllowed(validator);
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [businessPDA] = getBusinessV3PDA(masterVaultPDA, businessIndex);
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const [employeePDA] = getEmployeeV3PDA(businessPDA, employeeIndex);
-  const { bufferPDA, delegationRecordPDA, delegationMetadataPDA } = getV3DelegationPDAs(employeePDA);
-
-  const employee = await getEmployeeV3Account(connection, businessPDA, employeeIndex);
-  if (!employee) {
-    throw new Error(`v3 employee ${employeeIndex} not found`);
-  }
-  if (employee.isDelegated) {
-    throw new Error(`v3 employee ${employeeIndex} already delegated`);
-  }
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.redelegate_stream_v3,
-    employeeIndexBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: bufferPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationRecordPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationMetadataPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: validator, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: PAYROLL_PROGRAM_ID, isSigner: false, isWritable: false }, // owner_program
-      { pubkey: MAGICBLOCK_DELEGATION_PROGRAM, isSigner: false, isWritable: false }, // delegation_program
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction, 'link_user_token_account_v4', {
-    forceBase: true,
-  });
-}
-
-export async function requestWithdrawV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  employeeIndex: number,
-  autoAllow: boolean = true
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [streamConfigPDA] = getStreamConfigV3PDA(businessPDA);
-  const [employeePDA] = getEmployeeV3PDA(businessPDA, employeeIndex);
-  const [withdrawRequestPDA] = getWithdrawRequestV3PDA(businessPDA, employeeIndex);
-
-  const employee = await getEmployeeV3Account(connection, businessPDA, employeeIndex);
-  if (!employee) throw new Error('Employee v3 not found');
-  const employeeIdHandleValue = readU128LEFrom32(Buffer.from(employee.encryptedEmployeeId));
-  const employeeIdAllowance = getIncoAllowancePda(employeeIdHandleValue, wallet.publicKey);
-
-  if (autoAllow) {
-    const allowanceInfo = await getAccountInfoWithFallback(connection, employeeIdAllowance);
-    if (!allowanceInfo) {
-      const allowIx = buildIncoAllowInstruction(
-        employeeIdAllowance,
-        wallet.publicKey,
-        wallet.publicKey,
-        employeeIdHandleValue,
-        true
-      );
-      await sendAndConfirmTransaction(connection, wallet, allowIx, 'inco_allow', { forceBase: true });
-    }
-  }
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeePDA, isSigner: false, isWritable: false },
-      { pubkey: withdrawRequestPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.request_withdraw_v3, employeeIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-export async function claimPayoutV3(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  employeeIndex: number,
-  nonce: number,
-  payoutTokenAccount: PublicKey,
-  claimerTokenAccount: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV3PDA();
-  const [shieldedPayoutPDA] = getShieldedPayoutV3PDA(businessPDA, employeeIndex, nonce);
-  const payout = await getShieldedPayoutV3Account(connection, businessPDA, employeeIndex, nonce);
-  if (!payout) {
-    throw new Error(`v3 shielded payout ${employeeIndex}/${nonce} not found`);
-  }
-  const employeeIdHandleValue = u128FromBytesLE(payout.employeeAuthHandle.slice(0, 16));
-  const employeeIdAllowance = getIncoAllowancePda(employeeIdHandleValue, wallet.publicKey);
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(BigInt(nonce));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true },
-      { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: claimerTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.claim_payout_v3, employeeIndexBuf, nonceBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-// ============================================================
 // V4 Pooled-Vault Instructions
 // ============================================================
+
+/**
+ * Fail-closed compliance screening used for delegate flow.
+ * When COMPLIANCE_ENABLED is false (the default), this is a no-op.
+ */
+async function requireRangeCompliance(address: string): Promise<void> {
+  if (!COMPLIANCE_ENABLED) {
+    return;
+  }
+
+  const { rangeClient } = await import('./range');
+
+  if (!rangeClient.isConfigured()) {
+    throw new Error('Range API key is required for fail-closed compliance policy');
+  }
+
+  let compliance;
+  try {
+    compliance = await rangeClient.fullComplianceCheckFailClosed(address);
+  } catch (error: any) {
+    throw new Error(`Compliance check unavailable for ${address}: ${error?.message || 'unknown error'}`);
+  }
+
+  if (!compliance.isCompliant) {
+    throw new Error(
+      `Compliance check failed for ${address} (risk=${compliance.riskScore}, blacklisted=${compliance.isBlacklisted}, ofac=${compliance.isOFACSanctioned})`
+    );
+  }
+}
 
 export async function initMasterVaultV4(
   connection: Connection,
@@ -3936,118 +2982,6 @@ export async function createVaultTokenAccount(
 ): Promise<{ txid: string; tokenAccount: PublicKey }> {
   return createIncoTokenAccount(connection, wallet, vaultPDA, mint);
 }
-
-// ============================================================
-// Deposit Instruction
-// ============================================================
-
-/**
- * Deposit encrypted tokens to business vault
- *
- * PRIVACY: Amount is encrypted using Inco FHE
- */
-export async function deposit(
-  connection: Connection,
-  wallet: WalletContextState,
-  depositorTokenAccount: PublicKey,
-  vaultTokenAccount: PublicKey,
-  amount: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  // Verify business and vault exist
-  const business = await getBusinessAccount(connection, wallet.publicKey);
-  if (!business) {
-    throw new Error('Business not registered');
-  }
-
-  // Encrypt amount (9 decimals)
-  const amountLamports = BigInt(Math.floor(amount * 1_000_000_000));
-  const encryptedAmount = await encryptForInco(amountLamports);
-
-  // Build instruction data: discriminator + encrypted_amount (Vec<u8>)
-  const lengthBytes = Buffer.alloc(4);
-  lengthBytes.writeUInt32LE(encryptedAmount.length);
-  const data = Buffer.concat([DISCRIMINATORS.deposit, lengthBytes, encryptedAmount]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: true }, // Fails with ConstraintMut if false against current deploy
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: depositorTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: vaultTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Owner-only admin withdrawal of unused funds from vault.
- *
- * Transfers encrypted amount from vault token account to destination token account.
- */
-export async function adminWithdrawVaultV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  destinationTokenAccount: PublicKey,
-  amount: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-
-  // Verify business and vault exist
-  const business = await getBusinessAccount(connection, wallet.publicKey);
-  if (!business) {
-    throw new Error('Business not registered');
-  }
-  const vault = await getVaultAccount(connection, businessPDA);
-  if (!vault) {
-    throw new Error('Vault not initialized');
-  }
-
-  // Encrypt amount (9 decimals)
-  const amountLamports = BigInt(Math.floor(amount * 1_000_000_000));
-  const encryptedAmount = await encryptForInco(amountLamports);
-
-  // Build instruction data: discriminator + encrypted_amount (Vec<u8>)
-  const lengthBytes = Buffer.alloc(4);
-  lengthBytes.writeUInt32LE(encryptedAmount.length);
-  const data = Buffer.concat([DISCRIMINATORS.admin_withdraw_vault_v2, lengthBytes, encryptedAmount]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: vault.tokenAccount, isSigner: false, isWritable: true },
-      { pubkey: destinationTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
 // ============================================================
 // Employee Management
 // ============================================================
@@ -4061,932 +2995,6 @@ export async function adminWithdrawVaultV2(
  * @param salaryRatePerSecond - Salary per second in Confidential Token (encrypted)
  */
 
-// ============================================================
-// v2 Private Real-Time Payroll
-// ============================================================
-
-/**
- * Fail-closed compliance screening used for v2 create/activate flow.
- */
-async function requireRangeCompliance(address: string): Promise<void> {
-  if (!COMPLIANCE_ENABLED) {
-    return;
-  }
-
-  const { rangeClient } = await import('./range');
-
-  if (!rangeClient.isConfigured()) {
-    throw new Error('Range API key is required for v2 fail-closed compliance policy');
-  }
-
-  let compliance;
-  try {
-    compliance = await rangeClient.fullComplianceCheckFailClosed(address);
-  } catch (error: any) {
-    throw new Error(`Compliance check unavailable for ${address}: ${error?.message || 'unknown error'}`);
-  }
-
-  if (!compliance.isCompliant) {
-    throw new Error(
-      `Compliance check failed for ${address} (risk=${compliance.riskScore}, blacklisted=${compliance.isBlacklisted}, ofac=${compliance.isOFACSanctioned})`
-    );
-  }
-}
-
-/**
- * Compute 32-byte auth hash for employee wallet.
- */
-export async function hashEmployeeAuthV2(employeeWallet: PublicKey): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(employeeWallet.toBytes()));
-  return new Uint8Array(digest).slice(0, 32);
-}
-
-/**
- * Init v2 stream config for a business.
- */
-export async function initStreamConfigV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  keeperPubkey: PublicKey,
-  settleIntervalSecs: number = 10
-): Promise<{ txid: string; streamConfigPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-
-  const existing = await getAccountInfoWithFallback(connection, streamConfigPDA);
-  if (existing) {
-    throw new Error('v2 stream config already initialized');
-  }
-
-  const intervalBuf = Buffer.alloc(8);
-  intervalBuf.writeBigUInt64LE(BigInt(settleIntervalSecs));
-  const data = Buffer.concat([
-    DISCRIMINATORS.init_stream_config_v2,
-    keeperPubkey.toBuffer(),
-    intervalBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, streamConfigPDA };
-}
-
-/**
- * Rotate keeper wallet for an existing v2 stream config.
- * Requires business owner signature.
- */
-export async function updateKeeperV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  keeperPubkey: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-
-  const existing = await getAccountInfoWithFallback(connection, streamConfigPDA);
-  if (!existing) {
-    throw new Error('v2 stream config not initialized');
-  }
-
-  const data = Buffer.concat([DISCRIMINATORS.update_keeper_v2, keeperPubkey.toBuffer()]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Add a v2 employee stream.
- * Pass `PublicKey.default` as `employeeTokenAccount` for privacy mode
- * (no fixed destination in stream state; destination is provided at claim-time).
- * Enforces fail-closed compliance checks before stream creation.
- */
-export async function addEmployeeStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  employeeWallet: PublicKey,
-  employeeTokenAccount: PublicKey,
-  salaryRatePerSecond: number,
-  /** Pay period start (unix timestamp). 0 = unbounded (legacy). */
-  periodStart: number = 0,
-  /** Pay period end (unix timestamp). 0 = unbounded (legacy). */
-  periodEnd: number = 0
-): Promise<{ txid: string; employeeStreamPDA: PublicKey; streamIndex: number; employeeAuthHash: Uint8Array }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-  if (!employeeTokenAccount.equals(PublicKey.default)) {
-    throw new Error('Direct worker destination is disabled. Use private shield route.');
-  }
-
-  await requireRangeCompliance(wallet.publicKey.toBase58());
-  await requireRangeCompliance(employeeWallet.toBase58());
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const streamConfig = await getBusinessStreamConfigV2Account(connection, businessPDA);
-
-  if (!streamConfig) {
-    throw new Error('v2 stream config not initialized');
-  }
-  if (streamConfig.isPaused) {
-    throw new Error(`v2 stream config is paused (reason=${streamConfig.pauseReason})`);
-  }
-
-  const streamIndex = streamConfig.nextStreamIndex;
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const employeeAuthHash = await hashEmployeeAuthV2(employeeWallet);
-  const encryptedEmployeeId = await encryptPubkeyId(employeeWallet);
-  const salaryLamports = BigInt(Math.floor(salaryRatePerSecond * 1_000_000_000));
-  const encryptedSalary = await encryptForInco(salaryLamports);
-
-  const employeeIdLen = Buffer.alloc(4);
-  employeeIdLen.writeUInt32LE(encryptedEmployeeId.length);
-
-  const salaryLen = Buffer.alloc(4);
-  salaryLen.writeUInt32LE(encryptedSalary.length);
-
-  // Serialize period_start and period_end as i64 LE.
-  const periodStartBuf = Buffer.alloc(8);
-  periodStartBuf.writeBigInt64LE(BigInt(periodStart));
-  const periodEndBuf = Buffer.alloc(8);
-  periodEndBuf.writeBigInt64LE(BigInt(periodEnd));
-
-  const data = Buffer.concat([
-    DISCRIMINATORS.add_employee_stream_v2,
-    Buffer.from(employeeAuthHash),
-    employeeTokenAccount.toBuffer(),
-    employeeIdLen,
-    encryptedEmployeeId,
-    salaryLen,
-    encryptedSalary,
-    periodStartBuf,
-    periodEndBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
-      { pubkey: businessPDA, isSigner: false, isWritable: true },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const heapIx = ComputeBudgetProgram.requestHeapFrame({ bytes: 256000 });
-  const tx = new Transaction().add(heapIx, instruction);
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, tx);
-  return { txid, employeeStreamPDA, streamIndex, employeeAuthHash };
-}
-
-export async function initRateHistoryV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  streamIndex: number
-): Promise<{ txid: string; rateHistoryPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const [rateHistoryPDA] = getRateHistoryV2PDA(businessPDA, streamIndex);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-  const data = Buffer.concat([DISCRIMINATORS.init_rate_history_v2, streamIndexBuf]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, rateHistoryPDA };
-}
-
-export async function updateSalaryRateV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  streamIndex: number,
-  salaryRatePerSecond: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const [rateHistoryPDA] = getRateHistoryV2PDA(businessPDA, streamIndex);
-
-  const salaryLamports = BigInt(Math.floor(salaryRatePerSecond * 1_000_000_000));
-  const encryptedSalary = await encryptForInco(salaryLamports);
-  const lenBuf = Buffer.alloc(4);
-  lenBuf.writeUInt32LE(encryptedSalary.length);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.update_salary_rate_v2,
-    streamIndexBuf,
-    lenBuf,
-    encryptedSalary,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // unused, kept for parity with program accounts
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-export async function initRateHistoryV4(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  employeeIndex: number
-): Promise<{ txid: string; rateHistoryPDA: PublicKey }> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV4PDA();
-  const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
-  const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
-  const [rateHistoryPDA] = getRateHistoryV4PDA(businessPDA, employeeIndex);
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const data = Buffer.concat([DISCRIMINATORS.init_rate_history_v4, employeeIndexBuf]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
-  return { txid, rateHistoryPDA };
-}
-
-export async function updateSalaryRateV4(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessPDA: PublicKey,
-  employeeIndex: number,
-  salaryLamports: bigint,
-  requiredDepositAmount: bigint = 0n
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [masterVaultPDA] = getMasterVaultV4PDA();
-  const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
-  const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
-  const [rateHistoryPDA] = getRateHistoryV4PDA(businessPDA, employeeIndex);
-
-  const encryptedSalary = await encryptForInco(salaryLamports);
-  const lenBuf = Buffer.alloc(4);
-  lenBuf.writeUInt32LE(encryptedSalary.length);
-
-  const employeeIndexBuf = Buffer.alloc(8);
-  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
-  const requiredAmountBuf = Buffer.alloc(8);
-  requiredAmountBuf.writeBigUInt64LE(requiredDepositAmount);
-  const data = Buffer.concat([
-    DISCRIMINATORS.update_salary_rate_v4,
-    employeeIndexBuf,
-    lenBuf,
-    encryptedSalary,
-    requiredAmountBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeePDA, isSigner: false, isWritable: true },
-      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // unused, kept for parity with program accounts
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-export async function grantBonusV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  streamIndex: number,
-  bonusAmount: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const bonusLamports = BigInt(Math.floor(bonusAmount * 1_000_000_000));
-  const encryptedBonus = await encryptForInco(bonusLamports);
-  const lenBuf = Buffer.alloc(4);
-  lenBuf.writeUInt32LE(encryptedBonus.length);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.grant_bonus_v2,
-    streamIndexBuf,
-    lenBuf,
-    encryptedBonus,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // unused, kept for parity with program accounts
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Delegate v2 stream account to a MagicBlock ER validator (EU/US/Asia recommended on devnet).
- */
-export async function delegateStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  validator: PublicKey = TEE_VALIDATOR
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  await requireRangeCompliance(wallet.publicKey.toBase58());
-  assertTeeAllowed(validator);
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const { bufferPDA, delegationRecordPDA, delegationMetadataPDA } = getV2DelegationPDAs(employeeStreamPDA);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-  if (!stream.isActive) {
-    throw new Error(`v2 employee stream ${streamIndex} is inactive`);
-  }
-  if (stream.isDelegated) {
-    throw new Error(`v2 employee stream ${streamIndex} already delegated`);
-  }
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-  const data = Buffer.concat([
-    DISCRIMINATORS.delegate_stream_v2,
-    streamIndexBuf,
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: bufferPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationRecordPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationMetadataPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: validator, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: PAYROLL_PROGRAM_ID, isSigner: false, isWritable: false }, // owner_program
-      { pubkey: MAGICBLOCK_DELEGATION_PROGRAM, isSigner: false, isWritable: false }, // delegation_program
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Keeper accrual step for v2 stream.
- */
-export async function accrueV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.accrue_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-export interface AutoSettleV2Params {
-  businessOwner: PublicKey;
-  streamIndex: number;
-  magicContext?: PublicKey;
-  magicProgram?: PublicKey;
-}
-
-/**
- * Keeper settle step for v2 stream.
- */
-export async function autoSettleStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  params: AutoSettleV2Params
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(params.businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [vaultPDA] = getVaultPDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, params.streamIndex);
-
-  const business = await getBusinessAccount(connection, params.businessOwner);
-  if (!business) {
-    throw new Error('Business not found');
-  }
-  const vault = await getVaultAccount(connection, businessPDA);
-  if (!vault) {
-    throw new Error('Vault not initialized');
-  }
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, params.streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${params.streamIndex} not found`);
-  }
-  if (!stream.hasFixedDestination) {
-    throw new Error('This payroll record uses claim-time destination privacy mode; auto-settle is disabled.');
-  }
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(params.streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: vaultPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: vault.tokenAccount, isSigner: false, isWritable: true },
-      { pubkey: stream.employeeTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: params.magicProgram || MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: params.magicContext || MAGICBLOCK_MAGIC_CONTEXT, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.auto_settle_stream_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Commit pending delegated state and undelegate stream back to base layer.
- */
-export async function commitAndUndelegateStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  magicContext: PublicKey = MAGICBLOCK_MAGIC_CONTEXT
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-  if (!stream.isDelegated) {
-    throw new Error(`v2 employee stream ${streamIndex} is not delegated`);
-  }
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: MAGICBLOCK_MAGIC_PROGRAM, isSigner: false, isWritable: false },
-      { pubkey: magicContext, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.commit_and_undelegate_stream_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Re-delegate a v2 stream after settlement commit.
- */
-export async function redelegateStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  validator: PublicKey = TEE_VALIDATOR
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-  assertTeeAllowed(validator);
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const { bufferPDA, delegationRecordPDA, delegationMetadataPDA } = getV2DelegationPDAs(employeeStreamPDA);
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: bufferPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationRecordPDA, isSigner: false, isWritable: true },
-      { pubkey: delegationMetadataPDA, isSigner: false, isWritable: true },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-      { pubkey: validator, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: PAYROLL_PROGRAM_ID, isSigner: false, isWritable: false }, // owner_program
-      { pubkey: MAGICBLOCK_DELEGATION_PROGRAM, isSigner: false, isWritable: false }, // delegation_program
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.redelegate_stream_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Grant the employee wallet permission to decrypt salary/accrued handles (Inco allow).
- *
- * This lets the employee use attested decrypt in the UI. It creates/updates two allowance PDAs:
- * one for salary handle, one for accrued handle.
- */
-export async function grantEmployeeViewAccessV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  employeeWallet: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-
-  const handles = getEmployeeStreamV2DecryptHandles(stream);
-  const salaryHandleValue = handles.salaryHandleValue;
-  const accruedHandleValue = handles.accruedHandleValue;
-  const employeeIdHandleValue = handles.employeeIdHandleValue;
-  const salaryAllowance = getIncoAllowancePda(salaryHandleValue, employeeWallet);
-  const accruedAllowance = getIncoAllowancePda(accruedHandleValue, employeeWallet);
-  const employeeIdAllowance = getIncoAllowancePda(employeeIdHandleValue, employeeWallet);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false }, // stream (read-only)
-      { pubkey: employeeWallet, isSigner: false, isWritable: false }, // allowed address
-      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
-      { pubkey: accruedAllowance, isSigner: false, isWritable: true },
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.grant_employee_view_access_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Grant the configured keeper permission to decrypt the salary-rate handle (Inco allow).
- *
- * This is required for the real-world op model where:
- * - business owner key is cold
- * - keeper is an always-online hot key
- *
- * NOTE: We only grant access to the salary-rate handle (not accrued) because the keeper uses the
- * rate-only withdraw computation on devnet for reliability.
- */
-export async function grantKeeperViewAccessV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  keeperWallet: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-
-  const handles = getEmployeeStreamV2DecryptHandles(stream);
-  const salaryHandleValue = handles.salaryHandleValue;
-  const salaryAllowance = getIncoAllowancePda(salaryHandleValue, keeperWallet);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false }, // stream (read-only)
-      { pubkey: keeperWallet, isSigner: false, isWritable: false }, // allowed keeper address
-      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.grant_keeper_view_access_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Employee requests a v2 withdraw (withdraw-all). Keeper buffers payout in a shielded PDA.
- * Final destination is chosen at claim-time.
- */
-export async function requestWithdrawV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-  const [withdrawRequestPDA] = getWithdrawRequestV2PDA(businessPDA, streamIndex);
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-  const handles = getEmployeeStreamV2DecryptHandles(stream);
-  const employeeIdAllowance = getIncoAllowancePda(handles.employeeIdHandleValue, wallet.publicKey);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // employee_signer
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false }, // can be delegated
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
-      { pubkey: withdrawRequestPDA, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.request_withdraw_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Pause all v2 streams for a business.
- * reason: 1 manual, 2 compliance
- */
-export async function pauseStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  reason: 1 | 2
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const data = Buffer.concat([
-    DISCRIMINATORS.pause_stream_v2,
-    Buffer.from([reason]),
-  ]);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Resume all v2 streams for a business.
- */
-export async function resumeStreamV2(
-  connection: Connection,
-  wallet: WalletContextState
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: DISCRIMINATORS.resume_stream_v2,
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Deactivate a single v2 employee stream.
- *
- * Owner-only. Sets is_active = false on the stream to stop accrual.
- * Stream must be undelegated (on base layer) before deactivation.
- */
-export async function deactivateStreamV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  streamIndex: number
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(wallet.publicKey);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // owner
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: true },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.deactivate_stream_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
 
 // ============================================================
 // Helper Functions
@@ -5229,64 +3237,6 @@ export async function getShieldedPayoutV2Account(
   };
 }
 
-// ============================================================
-// V3 Shielded Payout (Claim Flow)
-// ============================================================
-
-export interface ShieldedPayoutV3Account {
-  address: PublicKey;
-  business: PublicKey;
-  employeeIndex: number;
-  nonce: number;
-  employeeAuthHandle: Uint8Array;
-  encryptedAmount: Uint8Array;
-  claimed: boolean;
-  cancelled: boolean;
-  createdAt: number;
-  expiresAt: number;
-  payoutTokenAccount: PublicKey;
-  bump: number;
-}
-
-export async function getShieldedPayoutV3Account(
-  connection: Connection,
-  business: PublicKey,
-  employeeIndex: number,
-  nonce: number
-): Promise<ShieldedPayoutV3Account | null> {
-  const [payoutPDA] = getShieldedPayoutV3PDA(business, employeeIndex, nonce);
-  const accountInfo = await getAccountInfoWithFallback(connection, payoutPDA);
-  if (!accountInfo) return null;
-
-  const data = accountInfo.data;
-  // ShieldedPayoutV3 layout:
-  // 0-8: discriminator
-  // 8-40: business (32)
-  // 40-48: employee_index (u64)
-  // 48-56: nonce (u64)
-  // 56-88: employee_auth_handle (32)
-  // 88-120: encrypted_amount (32)
-  // 120: claimed (u8)
-  // 121: cancelled (u8)
-  // 122-130: created_at (i64)
-  // 130-138: expires_at (i64)
-  // 138-170: payout_token_account (32)
-  // 170: bump (u8)
-  return {
-    address: payoutPDA,
-    business: new PublicKey(data.slice(8, 40)),
-    employeeIndex: Number(data.readBigUInt64LE(40)),
-    nonce: Number(data.readBigUInt64LE(48)),
-    employeeAuthHandle: data.slice(56, 88),
-    encryptedAmount: data.slice(88, 120),
-    claimed: data[120] === 1,
-    cancelled: data[121] === 1,
-    createdAt: Number(data.readBigInt64LE(122)),
-    expiresAt: Number(data.readBigInt64LE(130)),
-    payoutTokenAccount: new PublicKey(data.slice(138, 170)),
-    bump: data[170],
-  };
-}
 
 // ============================================================
 // V4 Shielded Payout (Pooled Vault Claim Flow)
@@ -5627,157 +3577,7 @@ export async function getLatestPayoutReceiptForWorker(
  * ShieldedPayoutV2 PDA signs the transfer from payout_token_account to claimer.
  * NO vault or employer accounts in this tx = full metadata break.
  */
-export async function claimPayoutV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  nonce: number,
-  payoutTokenAccount: PublicKey,
-  claimerTokenAccount: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
 
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [shieldedPayoutPDA] = getShieldedPayoutV2PDA(businessPDA, streamIndex, nonce);
-  const payout = await getShieldedPayoutV2Account(connection, businessPDA, streamIndex, nonce);
-  if (!payout) {
-    throw new Error(`shielded payout ${streamIndex}/${nonce} not found`);
-  }
-  const employeeIdHandleValue = u128FromBytesLE(payout.employeeAuthHash.slice(0, 16));
-  const employeeIdAllowance = getIncoAllowancePda(employeeIdHandleValue, wallet.publicKey);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(BigInt(nonce));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },   // claimer
-      { pubkey: businessPDA, isSigner: false, isWritable: false },      // business
-      { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true }, // shielded_payout
-      { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },// payout_token_account
-      { pubkey: claimerTokenAccount, isSigner: false, isWritable: true }, // claimer_token_account
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
-      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.claim_payout_v2, streamIndexBuf, nonceBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-// ============================================================
-// Phase 2: Programmable Viewing Policies
-// ============================================================
-
-/**
- * Revoke decrypt access for a wallet on a stream's salary + accrued handles.
- * Only the business owner can call this.
- */
-export async function revokeViewAccessV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  targetWallet: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-
-  const handles = getEmployeeStreamV2DecryptHandles(stream);
-  const salaryAllowance = getIncoAllowancePda(handles.salaryHandleValue, targetWallet);
-  const accruedAllowance = getIncoAllowancePda(handles.accruedHandleValue, targetWallet);
-  const employeeIdAllowance = getIncoAllowancePda(handles.employeeIdHandleValue, targetWallet);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false },
-      { pubkey: targetWallet, isSigner: false, isWritable: false },
-      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
-      { pubkey: accruedAllowance, isSigner: false, isWritable: true },
-      { pubkey: employeeIdAllowance, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.revoke_view_access_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
-
-/**
- * Grant an auditor wallet read-only access to salary + accrued handles.
- * Only the business owner can call this.
- */
-export async function grantAuditorViewAccessV2(
-  connection: Connection,
-  wallet: WalletContextState,
-  businessOwner: PublicKey,
-  streamIndex: number,
-  auditorWallet: PublicKey
-): Promise<string> {
-  if (!wallet.publicKey) {
-    throw new Error('Wallet not connected');
-  }
-
-  const [businessPDA] = getBusinessPDA(businessOwner);
-  const [streamConfigPDA] = getStreamConfigV2PDA(businessPDA);
-  const [employeeStreamPDA] = getEmployeeStreamV2PDA(businessPDA, streamIndex);
-
-  const stream = await getEmployeeStreamV2Account(connection, businessPDA, streamIndex);
-  if (!stream) {
-    throw new Error(`v2 employee stream ${streamIndex} not found`);
-  }
-
-  const handles = getEmployeeStreamV2DecryptHandles(stream);
-  const salaryAllowance = getIncoAllowancePda(handles.salaryHandleValue, auditorWallet);
-  const accruedAllowance = getIncoAllowancePda(handles.accruedHandleValue, auditorWallet);
-
-  const streamIndexBuf = Buffer.alloc(8);
-  streamIndexBuf.writeBigUInt64LE(BigInt(streamIndex));
-
-  const instruction = new TransactionInstruction({
-    keys: [
-      { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
-      { pubkey: businessPDA, isSigner: false, isWritable: false },
-      { pubkey: streamConfigPDA, isSigner: false, isWritable: false },
-      { pubkey: employeeStreamPDA, isSigner: false, isWritable: false },
-      { pubkey: auditorWallet, isSigner: false, isWritable: false },
-      { pubkey: salaryAllowance, isSigner: false, isWritable: true },
-      { pubkey: accruedAllowance, isSigner: false, isWritable: true },
-      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    programId: PAYROLL_PROGRAM_ID,
-    data: Buffer.concat([DISCRIMINATORS.grant_auditor_view_access_v2, streamIndexBuf]),
-  });
-
-  return sendAndConfirmTransaction(connection, wallet, instruction);
-}
 
 // ============================================================
 // Phase 2: Keeper-Relayed Claims
@@ -5959,4 +3759,91 @@ export async function findEmploymentRecordV4(
   }
 
   return null;
+}
+export async function initRateHistoryV4(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessPDA: PublicKey,
+  employeeIndex: number
+): Promise<{ txid: string; rateHistoryPDA: PublicKey }> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [masterVaultPDA] = getMasterVaultV4PDA();
+  const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
+  const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
+  const [rateHistoryPDA] = getRateHistoryV4PDA(businessPDA, employeeIndex);
+
+  const employeeIndexBuf = Buffer.alloc(8);
+  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
+  const data = Buffer.concat([DISCRIMINATORS.init_rate_history_v4, employeeIndexBuf]);
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
+      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
+      { pubkey: employeePDA, isSigner: false, isWritable: true },
+      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data,
+  });
+
+  const txid = await sendAndConfirmTransaction(connection, wallet, instruction);
+  return { txid, rateHistoryPDA };
+}
+export async function updateSalaryRateV4(
+  connection: Connection,
+  wallet: WalletContextState,
+  businessPDA: PublicKey,
+  employeeIndex: number,
+  salaryLamports: bigint,
+  requiredDepositAmount: bigint = 0n
+): Promise<string> {
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
+  const [masterVaultPDA] = getMasterVaultV4PDA();
+  const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
+  const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
+  const [rateHistoryPDA] = getRateHistoryV4PDA(businessPDA, employeeIndex);
+
+  const encryptedSalary = await encryptForInco(salaryLamports);
+  const lenBuf = Buffer.alloc(4);
+  lenBuf.writeUInt32LE(encryptedSalary.length);
+
+  const employeeIndexBuf = Buffer.alloc(8);
+  employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));
+  const requiredAmountBuf = Buffer.alloc(8);
+  requiredAmountBuf.writeBigUInt64LE(requiredDepositAmount);
+  const data = Buffer.concat([
+    DISCRIMINATORS.update_salary_rate_v4,
+    employeeIndexBuf,
+    lenBuf,
+    encryptedSalary,
+    requiredAmountBuf,
+  ]);
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: true }, // caller
+      { pubkey: masterVaultPDA, isSigner: false, isWritable: false },
+      { pubkey: businessPDA, isSigner: false, isWritable: false },
+      { pubkey: streamConfigPDA, isSigner: false, isWritable: true },
+      { pubkey: employeePDA, isSigner: false, isWritable: true },
+      { pubkey: rateHistoryPDA, isSigner: false, isWritable: true },
+      { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // unused, kept for parity with program accounts
+      { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    programId: PAYROLL_PROGRAM_ID,
+    data,
+  });
+
+  return sendAndConfirmTransaction(connection, wallet, instruction);
 }

@@ -241,7 +241,7 @@ export default function EmployeeV4Page() {
       setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
       return;
     }
-    
+
     const { isMagicblockTeeModeEnabled, getStoredTeeToken } = await import('../lib/payroll-client');
     if (!isMagicblockTeeModeEnabled() || !getStoredTeeToken(wallet.publicKey)) {
       setError('High-speed TEE is not authorized. Please enable TEE signing in your wallet settings below.');
@@ -260,7 +260,7 @@ export default function EmployeeV4Page() {
         await initUserTokenAccountV4(connection, wallet, PAYUSD_MINT);
         registry = await getUserTokenAccountV4(connection, wallet.publicKey, PAYUSD_MINT);
       }
-      
+
       let destToken: PublicKey;
       if (registry && !registry.incoTokenAccount.equals(PublicKey.default)) {
         destToken = registry.incoTokenAccount;
@@ -302,7 +302,7 @@ export default function EmployeeV4Page() {
       // Step 4: Execute full withdrawal (process + claim + redelegate)
       setWithdrawPhase('executing');
       setWithdrawProgress('Processing withdrawal...');
-      
+
       const autoNonce = Number(Date.now() % 1_000_000);
       setNonceInput(String(autoNonce));
 
@@ -896,631 +896,630 @@ export default function EmployeeV4Page() {
         </div>
 
         {showOverview ? (
-        <section className="employee-overview-compact">
-          <div>
-            <p className="employee-overview-title">Employee setup</p>
-            <p className="employee-overview-sub">
-              Employers fund payroll using USDC. MagicBlock keeps your stream real-time. You only request and claim payouts.
-            </p>
-          </div>
-          <div className="employee-overview-status">
-            <span>Wallet: {walletConnected ? 'Connected' : 'Missing'}</span>
-            <span>TEE: {teeStatus === 'ready' ? 'Ready' : 'Needs auth'} (required)</span>
-            <span>Record: {employee ? 'Loaded' : 'Missing'}</span>
-            <span>Registry: {registryLinked ? 'Linked' : 'Not linked'}</span>
-          </div>
-        </section>
+          <section className="employee-overview-compact">
+            <div>
+              <p className="employee-overview-title">Employee setup</p>
+              <p className="employee-overview-sub">
+                Employers fund payroll using USDC. MagicBlock keeps your stream real-time. You only request and claim payouts.
+              </p>
+            </div>
+            <div className="employee-overview-status">
+              <span>Wallet: {walletConnected ? 'Connected' : 'Missing'}</span>
+              <span>TEE: {teeStatus === 'ready' ? 'Ready' : 'Needs auth'} (required)</span>
+              <span>Record: {employee ? 'Loaded' : 'Missing'}</span>
+              <span>Registry: {registryLinked ? 'Linked' : 'Not linked'}</span>
+            </div>
+          </section>
         ) : null}
 
         {showStep1 ? (
-        <StepCard
-          number={1}
-          title="Secure access"
-          description="Confirm TEE access (required) to execute confidential actions."
-          state={stepPrereqState}
-        >
-          <div className="panel-card">
-            <h2 className="text-lg font-semibold text-[#2D2D2A]">TEE Access</h2>
-            <p className="mt-1 text-sm text-gray-600">
-              TEE access is required to execute employee actions inside MagicBlock PER.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
-              <span className="text-gray-500">TEE status:</span>
-              <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
-                {teeStatus === 'ready' ? 'ready' : 'missing'}
-              </span>
-              <button
-                onClick={async () => {
-                  await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
-                  refreshTeeStatus();
-                }}
-                disabled={busy || !wallet.publicKey}
-                className="premium-btn premium-btn-secondary disabled:opacity-50"
-              >
-                {teeStatus === 'ready' ? 'Refresh TEE Auth' : 'Authorize TEE'}
-              </button>
+          <StepCard
+            number={1}
+            title="Secure access"
+            description="Confirm TEE access (required) to execute confidential actions."
+            state={stepPrereqState}
+          >
+            <div className="panel-card">
+              <h2 className="text-lg font-semibold text-[#2D2D2A]">TEE Access</h2>
+              <p className="mt-1 text-sm text-gray-600">
+                TEE access is required to execute employee actions inside MagicBlock PER.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
+                <span className="text-gray-500">TEE status:</span>
+                <span className={teeStatus === 'ready' ? 'text-emerald-600' : 'text-amber-600'}>
+                  {teeStatus === 'ready' ? 'ready' : 'missing'}
+                </span>
+                <button
+                  onClick={async () => {
+                    await runAction('Refresh TEE auth', () => ensureTeeAuthToken(wallet));
+                    refreshTeeStatus();
+                  }}
+                  disabled={busy || !wallet.publicKey}
+                  className="premium-btn premium-btn-secondary disabled:opacity-50"
+                >
+                  {teeStatus === 'ready' ? 'Refresh TEE Auth' : 'Authorize TEE'}
+                </button>
+              </div>
             </div>
-          </div>
-        </StepCard>
+          </StepCard>
         ) : null}
 
         {showStep2 ? (
-        <StepCard
-          number={2}
-          title="Locate payroll record"
-          description="Load your employee record using the business and employee index."
-          state={stepRecordState}
-        >
-          {/* ── One-Click Withdraw ── */}
-          {employee && (
-            <div className="mb-4 rounded-2xl border-2 border-emerald-400/40 bg-gradient-to-r from-emerald-50 to-teal-50 p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-bold text-emerald-800">💸 Quick Withdraw</div>
-                  <p className="mt-1 text-sm text-emerald-700/80">
-                    One click to withdraw all your earned PayUSD. Everything is handled automatically.
-                  </p>
-                </div>
-                <button
-                  onClick={() => void handleOneClickWithdraw()}
-                  disabled={busy || withdrawPhase !== 'idle' && withdrawPhase !== 'done' && withdrawPhase !== 'error'}
-                  className="premium-btn premium-btn-primary text-lg px-8 py-3 disabled:opacity-50"
-                >
-                  {withdrawPhase === 'done' ? '✅ Done' : withdrawPhase !== 'idle' && withdrawPhase !== 'error' ? '⏳ Working...' : 'Withdraw'}
-                </button>
-              </div>
-              {withdrawPhase !== 'idle' && (
-                <div className="mt-4">
-                  <div className="flex gap-1 mb-2">
-                    {(['creating_token', 'requesting', 'waiting_sync', 'executing'] as const).map((phase, i) => (
-                      <div
-                        key={phase}
-                        className={`h-2 flex-1 rounded-full transition-colors ${
-                          withdrawPhase === phase
-                            ? 'bg-emerald-500 animate-pulse'
-                            : withdrawPhase === 'done' || (['creating_token', 'requesting', 'waiting_sync', 'executing'].indexOf(withdrawPhase as any) > i)
-                              ? 'bg-emerald-400'
-                              : withdrawPhase === 'error'
-                                ? 'bg-red-300'
-                                : 'bg-gray-200'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                  <div className="text-xs text-emerald-700 font-medium">
-                    {withdrawPhase === 'creating_token' && '1/4 — Setting up token accounts...'}
-                    {withdrawPhase === 'requesting' && '2/4 — Requesting withdrawal from MagicBlock...'}
-                    {withdrawPhase === 'waiting_sync' && '3/4 — Waiting for data to sync to Solana...'}
-                    {withdrawPhase === 'executing' && '4/4 — Processing payout...'}
-                    {withdrawPhase === 'done' && '✅ Withdrawal complete!'}
-                    {withdrawPhase === 'error' && '❌ Error — see details below'}
-                  </div>
-                  {withdrawProgress && <div className="text-xs text-emerald-600 mt-1">{withdrawProgress}</div>}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Employee Record</h2>
-              <p className="mt-1 text-sm text-gray-600">Use the business index and employee index from your employer.</p>
-              <div className="mt-4 space-y-3">
-                <input
-                  value={businessIndexInput}
-                  onChange={(e) => setBusinessIndexInput(e.target.value)}
-                  placeholder="Business index"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-                <input
-                  value={employeeIndexInput}
-                  onChange={(e) => setEmployeeIndexInput(e.target.value)}
-                  placeholder="Employee index"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => void refreshEmployee()}
-                    disabled={busy || !businessPda || employeeIndex === null}
-                    className="premium-btn premium-btn-secondary disabled:opacity-50"
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    onClick={() => void handleMagicScan()}
-                    disabled={busy || scanBusy || !wallet.publicKey}
-                    className={`premium-btn ${scanSuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'premium-btn-secondary'} disabled:opacity-50 flex items-center gap-2`}
-                  >
-                    {scanBusy ? (
-                      <>
-                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
-                        Scanning...
-                      </>
-                    ) : scanSuccess ? (
-                      '🪄 Found!'
-                    ) : (
-                      '🪄 Magic Scan'
-                    )}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!businessPda) {
-                        setError('Business index is required.');
-                        return;
-                      }
-                      if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
-                        setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
-                        return;
-                      }
-                      if (!isMagicblockTeeModeEnabled() || !isStoredTeeTokenValid(wallet.publicKey!)) {
-                        setError('High-speed TEE is not authorized. Please enable TEE signing in your wallet settings below.');
-                        return;
-                      }
-                      
-                      if (businessIndex !== null && employeeIndex !== null && employee?.isDelegated) {
-                        await runAction('Commit stream (required)', () =>
-                          commitAndUndelegateStreamV4(connection, wallet, businessIndex, employeeIndex)
-                        );
-                      }
-                      await runAction('Request withdraw', () => {
-                        if (employeeIndex === null) throw new Error('Employee index is required');
-                        return requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
-                      });
-                      await refreshWithdrawRequest();
-                      await refreshPayout();
-                      await refreshPayouts();
-                    }}
-                    disabled={busy || !businessPda || employeeIndex === null}
-                    className="premium-btn premium-btn-primary disabled:opacity-50"
-                  >
-                    Request Withdraw
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Record status</h2>
-              <p className="mt-1 text-sm text-gray-600">Verification and PDA details.</p>
-              <div className="mt-4 grid gap-2 text-xs text-gray-600">
-                <div>Wallet: {walletConnected ? 'connected' : 'not connected'}</div>
-                <div>
-                  Withdraw request:{' '}
-                  {withdrawRequestLoading ? 'checking...' : withdrawRequestExists ? 'pending' : 'none'}
-                </div>
-                {employee ? (
+          <StepCard
+            number={2}
+            title="Locate payroll record"
+            description="Load your employee record using the business and employee index."
+            state={stepRecordState}
+          >
+            {/* ── One-Click Withdraw ── */}
+            {employee && (
+              <div className="mb-4 rounded-2xl border-2 border-emerald-400/40 bg-gradient-to-r from-emerald-50 to-teal-50 p-5">
+                <div className="flex items-center justify-between">
                   <div>
-                    Active: {employee.isActive ? 'yes' : 'no'} · Last settle: {employee.lastSettleTime}
+                    <div className="text-lg font-bold text-emerald-800">💸 Quick Withdraw</div>
+                    <p className="mt-1 text-sm text-emerald-700/80">
+                      One click to withdraw all your earned PayUSD. Everything is handled automatically.
+                    </p>
                   </div>
-                ) : (
-                  <div className="text-gray-500">No employee record loaded yet.</div>
+                  <button
+                    onClick={() => void handleOneClickWithdraw()}
+                    disabled={busy || withdrawPhase !== 'idle' && withdrawPhase !== 'done' && withdrawPhase !== 'error'}
+                    className="premium-btn premium-btn-primary text-lg px-8 py-3 disabled:opacity-50"
+                  >
+                    {withdrawPhase === 'done' ? '✅ Done' : withdrawPhase !== 'idle' && withdrawPhase !== 'error' ? '⏳ Working...' : 'Withdraw'}
+                  </button>
+                </div>
+                {withdrawPhase !== 'idle' && (
+                  <div className="mt-4">
+                    <div className="flex gap-1 mb-2">
+                      {(['creating_token', 'requesting', 'waiting_sync', 'executing'] as const).map((phase, i) => (
+                        <div
+                          key={phase}
+                          className={`h-2 flex-1 rounded-full transition-colors ${withdrawPhase === phase
+                              ? 'bg-emerald-500 animate-pulse'
+                              : withdrawPhase === 'done' || (['creating_token', 'requesting', 'waiting_sync', 'executing'].indexOf(withdrawPhase as any) > i)
+                                ? 'bg-emerald-400'
+                                : withdrawPhase === 'error'
+                                  ? 'bg-red-300'
+                                  : 'bg-gray-200'
+                            }`}
+                        />
+                      ))}
+                    </div>
+                    <div className="text-xs text-emerald-700 font-medium">
+                      {withdrawPhase === 'creating_token' && '1/4 — Setting up token accounts...'}
+                      {withdrawPhase === 'requesting' && '2/4 — Requesting withdrawal from MagicBlock...'}
+                      {withdrawPhase === 'waiting_sync' && '3/4 — Waiting for data to sync to Solana...'}
+                      {withdrawPhase === 'executing' && '4/4 — Processing payout...'}
+                      {withdrawPhase === 'done' && '✅ Withdrawal complete!'}
+                      {withdrawPhase === 'error' && '❌ Error — see details below'}
+                    </div>
+                    {withdrawProgress && <div className="text-xs text-emerald-600 mt-1">{withdrawProgress}</div>}
+                  </div>
                 )}
-                {employee ? (
-                  <>
-                    <div>Streaming: {employee.isDelegated ? 'MagicBlock (real-time)' : 'Base layer (paused)'}</div>
-                    <div>Last accrual: {employee.lastAccrualTime}</div>
-                  </>
-                ) : null}
-                {advancedEnabled ? (
-                  <AdvancedDetails title="Technical details">
-                    <div className="text-xs text-[var(--app-muted)] break-all">
-                      Business PDA: {businessPda ? businessPda.toBase58() : '—'}
+              </div>
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Employee Record</h2>
+                <p className="mt-1 text-sm text-gray-600">Use the business index and employee index from your employer.</p>
+                <div className="mt-4 space-y-3">
+                  <input
+                    value={businessIndexInput}
+                    onChange={(e) => setBusinessIndexInput(e.target.value)}
+                    placeholder="Business index"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={employeeIndexInput}
+                    onChange={(e) => setEmployeeIndexInput(e.target.value)}
+                    placeholder="Employee index"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => void refreshEmployee()}
+                      disabled={busy || !businessPda || employeeIndex === null}
+                      className="premium-btn premium-btn-secondary disabled:opacity-50"
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      onClick={() => void handleMagicScan()}
+                      disabled={busy || scanBusy || !wallet.publicKey}
+                      className={`premium-btn ${scanSuccess ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'premium-btn-secondary'} disabled:opacity-50 flex items-center gap-2`}
+                    >
+                      {scanBusy ? (
+                        <>
+                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                          Scanning...
+                        </>
+                      ) : scanSuccess ? (
+                        '🪄 Found!'
+                      ) : (
+                        '🪄 Magic Scan'
+                      )}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!businessPda) {
+                          setError('Business index is required.');
+                          return;
+                        }
+                        if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
+                          setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
+                          return;
+                        }
+                        if (!isMagicblockTeeModeEnabled() || !isStoredTeeTokenValid(wallet.publicKey!)) {
+                          setError('High-speed TEE is not authorized. Please enable TEE signing in your wallet settings below.');
+                          return;
+                        }
+
+                        if (businessIndex !== null && employeeIndex !== null && employee?.isDelegated) {
+                          await runAction('Commit stream (required)', () =>
+                            commitAndUndelegateStreamV4(connection, wallet, businessIndex, employeeIndex)
+                          );
+                        }
+                        await runAction('Request withdraw', () => {
+                          if (employeeIndex === null) throw new Error('Employee index is required');
+                          return requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
+                        });
+                        await refreshWithdrawRequest();
+                        await refreshPayout();
+                        await refreshPayouts();
+                      }}
+                      disabled={busy || !businessPda || employeeIndex === null}
+                      className="premium-btn premium-btn-primary disabled:opacity-50"
+                    >
+                      Request Withdraw
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Record status</h2>
+                <p className="mt-1 text-sm text-gray-600">Verification and PDA details.</p>
+                <div className="mt-4 grid gap-2 text-xs text-gray-600">
+                  <div>Wallet: {walletConnected ? 'connected' : 'not connected'}</div>
+                  <div>
+                    Withdraw request:{' '}
+                    {withdrawRequestLoading ? 'checking...' : withdrawRequestExists ? 'pending' : 'none'}
+                  </div>
+                  {employee ? (
+                    <div>
+                      Active: {employee.isActive ? 'yes' : 'no'} · Last settle: {employee.lastSettleTime}
                     </div>
-                    <div className="text-xs text-[var(--app-muted)] break-all">
-                      Employee PDA: {employeePda ? employeePda.toBase58() : '—'}
-                    </div>
-                  </AdvancedDetails>
-                ) : null}
+                  ) : (
+                    <div className="text-gray-500">No employee record loaded yet.</div>
+                  )}
+                  {employee ? (
+                    <>
+                      <div>Streaming: {employee.isDelegated ? 'MagicBlock (real-time)' : 'Base layer (paused)'}</div>
+                      <div>Last accrual: {employee.lastAccrualTime}</div>
+                    </>
+                  ) : null}
+                  {advancedEnabled ? (
+                    <AdvancedDetails title="Technical details">
+                      <div className="text-xs text-[var(--app-muted)] break-all">
+                        Business PDA: {businessPda ? businessPda.toBase58() : '—'}
+                      </div>
+                      <div className="text-xs text-[var(--app-muted)] break-all">
+                        Employee PDA: {employeePda ? employeePda.toBase58() : '—'}
+                      </div>
+                    </AdvancedDetails>
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
-        </StepCard>
+          </StepCard>
         ) : null}
 
         {showStep3 ? (
-        <StepCard
-          number={3}
-          title="Claim payout"
-          description="Use the payout nonce from the withdrawal flow to claim to your destination token account."
-          state={stepPayoutState}
-        >
-          <div className="panel-card">
-            <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout timeline</h2>
-            <p className="mt-1 text-sm text-gray-600">
-              Track your withdraw request as it moves through buffering and claim.
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-gray-600">
-              {[
-                { label: 'Requested', active: withdrawRequestExists || Boolean(payout) },
-                { label: 'Buffered', active: Boolean(payout) },
-                { label: 'Claimed', active: Boolean(payout?.claimed) },
-              ].map((step, idx) => (
-                <div key={step.label} className="flex items-center gap-3">
-                  <div
-                    className={`h-2.5 w-2.5 rounded-full border ${step.active ? 'bg-emerald-500 border-emerald-400' : 'bg-gray-200 border-gray-300'
-                      }`}
-                  />
-                  <span className={step.active ? 'text-emerald-700 font-semibold' : 'text-gray-500'}>
-                    {step.label}
-                  </span>
-                  {idx < 2 ? <span className="text-gray-300">—</span> : null}
-                </div>
-              ))}
-              {withdrawRequestLoading ? <span className="text-gray-400">Checking request…</span> : null}
-            </div>
-            {payout ? (
-              <div className="mt-4 grid gap-2 text-xs text-gray-600">
-                <div>Nonce: {payout.nonce}</div>
-                <div>
-                  Created:{' '}
-                  {payout.createdAt
-                    ? new Date(payout.createdAt * 1000).toLocaleString()
-                    : payout.createdAt === 0
-                      ? '0'
-                      : '—'}
-                </div>
-                <div>
-                  Expires:{' '}
-                  {payout.expiresAt
-                    ? new Date(payout.expiresAt * 1000).toLocaleString()
-                    : payout.expiresAt === 0
-                      ? '0'
-                      : '—'}
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 text-xs text-gray-500">No buffered payout loaded yet.</div>
-            )}
-            <div className="mt-5 border-t border-[var(--app-border)] pt-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-600">Recent payouts</span>
-                <button
-                  onClick={() => void refreshPayouts()}
-                  disabled={payoutsLoading || !businessPda || employeeIndex === null}
-                  className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-600"
-                >
-                  {payoutsLoading ? 'Checking...' : 'Refresh'}
-                </button>
-              </div>
-              {payouts.length ? (
-                <div className="mt-3 grid gap-2 text-xs text-gray-600">
-                  {payouts.map((item) => (
+          <StepCard
+            number={3}
+            title="Claim payout"
+            description="Use the payout nonce from the withdrawal flow to claim to your destination token account."
+            state={stepPayoutState}
+          >
+            <div className="panel-card">
+              <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout timeline</h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Track your withdraw request as it moves through buffering and claim.
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-gray-600">
+                {[
+                  { label: 'Requested', active: withdrawRequestExists || Boolean(payout) },
+                  { label: 'Buffered', active: Boolean(payout) },
+                  { label: 'Claimed', active: Boolean(payout?.claimed) },
+                ].map((step, idx) => (
+                  <div key={step.label} className="flex items-center gap-3">
                     <div
-                      key={`${item.employeeIndex}-${item.nonce}`}
-                      className="rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-alt)] p-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold">Nonce {item.nonce}</span>
-                        <span className={item.claimed ? 'text-emerald-600' : item.cancelled ? 'text-rose-600' : 'text-amber-600'}>
-                          {item.claimed ? 'claimed' : item.cancelled ? 'cancelled' : 'pending'}
-                        </span>
-                      </div>
-                      <div className="mt-2 grid gap-1">
-                        <div>
-                          Created:{' '}
-                          {item.createdAt
-                            ? new Date(item.createdAt * 1000).toLocaleString()
-                            : item.createdAt === 0
-                              ? '0'
-                              : '—'}
-                        </div>
-                        <div>
-                          Expires:{' '}
-                          {item.expiresAt
-                            ? new Date(item.expiresAt * 1000).toLocaleString()
-                            : item.expiresAt === 0
-                              ? '0'
-                              : '—'}
-                        </div>
-                        {advancedEnabled ? (
-                          <div className="break-all">Payout token: {item.payoutTokenAccount.toBase58()}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
+                      className={`h-2.5 w-2.5 rounded-full border ${step.active ? 'bg-emerald-500 border-emerald-400' : 'bg-gray-200 border-gray-300'
+                        }`}
+                    />
+                    <span className={step.active ? 'text-emerald-700 font-semibold' : 'text-gray-500'}>
+                      {step.label}
+                    </span>
+                    {idx < 2 ? <span className="text-gray-300">—</span> : null}
+                  </div>
+                ))}
+                {withdrawRequestLoading ? <span className="text-gray-400">Checking request…</span> : null}
+              </div>
+              {payout ? (
+                <div className="mt-4 grid gap-2 text-xs text-gray-600">
+                  <div>Nonce: {payout.nonce}</div>
+                  <div>
+                    Created:{' '}
+                    {payout.createdAt
+                      ? new Date(payout.createdAt * 1000).toLocaleString()
+                      : payout.createdAt === 0
+                        ? '0'
+                        : '—'}
+                  </div>
+                  <div>
+                    Expires:{' '}
+                    {payout.expiresAt
+                      ? new Date(payout.expiresAt * 1000).toLocaleString()
+                      : payout.expiresAt === 0
+                        ? '0'
+                        : '—'}
+                  </div>
                 </div>
               ) : (
-                <div className="mt-3 text-xs text-gray-500">No payout history found yet.</div>
+                <div className="mt-4 text-xs text-gray-500">No buffered payout loaded yet.</div>
               )}
-            </div>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Token registry</h2>
-              <p className="mt-1 text-sm text-gray-600">Link your destination token account before claiming.</p>
-              <div className="mt-4 space-y-3">
-                {wallet.publicKey ? (
-                  <div className="rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-gray-700">Registry status</span>
-                      <span>
-                        {registryLinked
-                          ? userTokenRegistry!.incoTokenAccount.toBase58()
-                          : 'Not linked'}
-                      </span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        onClick={async () => {
-                          await runAction('Init token registry', () =>
-                            initUserTokenAccountV4(connection, wallet, PAYUSD_MINT)
-                          );
-                          await refreshUserTokenRegistry();
-                        }}
-                        disabled={busy || userTokenRegistryLoading}
-                        className="premium-btn premium-btn-secondary disabled:opacity-50"
-                      >
-                        Init Registry
-                      </button>
-                      <button
-                        onClick={async () => {
-                          const destination = mustPubkey('destination token account', destinationTokenAccount);
-                          await runAction('Link destination token', () =>
-                            linkUserTokenAccountV4(connection, wallet, destination, PAYUSD_MINT)
-                          );
-                          await refreshUserTokenRegistry();
-                        }}
-                        disabled={busy || userTokenRegistryLoading || !destinationTokenAccount}
-                        className="premium-btn premium-btn-secondary disabled:opacity-50"
-                      >
-                        Link Destination Token
-                      </button>
-                      <button
-                        onClick={() => void refreshUserTokenRegistry()}
-                        disabled={busy || userTokenRegistryLoading}
-                        className="premium-btn premium-btn-secondary disabled:opacity-50"
-                      >
-                        Refresh Registry
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-xs text-gray-500">Connect a wallet to manage registry links.</div>
-                )}
-                <input
-                  value={destinationTokenAccount}
-                  onChange={(e) => setDestinationTokenAccount(e.target.value)}
-                  placeholder="Destination token account"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={async () => {
-                    const pk = wallet.publicKey;
-                    if (!pk) {
-                      setError('Connect wallet first.');
-                      return;
-                    }
-                    const result = await runAction('Create destination token', () =>
-                      createIncoTokenAccount(connection, wallet, pk)
-                    );
-                    if (result && typeof result === 'object' && 'tokenAccount' in result) {
-                      setDestinationTokenAccount((result as any).tokenAccount.toBase58());
-                    }
-                  }}
-                  disabled={busy}
-                  className="premium-btn premium-btn-secondary disabled:opacity-50"
-                >
-                  Create Destination Token
-                </button>
-              </div>
-            </div>
-
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout claim</h2>
-              <p className="mt-1 text-sm text-gray-600">Enter payout details from the withdrawal flow.</p>
-              <div className="mt-4 space-y-3">
-                <input
-                  value={nonceInput}
-                  onChange={(e) => setNonceInput(e.target.value)}
-                  placeholder="Payout nonce"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-                {advancedEnabled ? (
-                  <div className="text-xs text-gray-500 break-all">
-                    Payout PDA: {payoutPda ? payoutPda.toBase58() : '—'}
-                  </div>
-                ) : null}
-                <div className="flex flex-wrap gap-2">
+              <div className="mt-5 border-t border-[var(--app-border)] pt-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-600">Recent payouts</span>
                   <button
-                    onClick={() => void refreshPayout()}
-                    disabled={busy || !businessPda || employeeIndex === null || nonce === null}
-                    className="premium-btn premium-btn-secondary disabled:opacity-50"
+                    onClick={() => void refreshPayouts()}
+                    disabled={payoutsLoading || !businessPda || employeeIndex === null}
+                    className="text-[10px] font-bold uppercase tracking-wider text-gray-400 hover:text-gray-600"
                   >
-                    Refresh Payout
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!businessPda) {
-                        setError('Business index is required.');
-                        return;
-                      }
-                      if (employeeIndex === null || nonce === null) {
-                        setError('Employee index and nonce required.');
-                        return;
-                      }
-                    await runAction('Execute withdrawal', async () => {
-                      const destinationToken = mustPubkey('destination token account', destinationTokenAccount);
-                      const { executeFullWithdrawalV4 } = await import('../lib/payroll-client');
-                      
-                      // For vaultTokenAccount, we need the authority token account
-                      const master = await import('../lib/payroll-client').then(m => m.getMasterVaultV4Account(connection));
-                      const vaultToken = await import('../lib/payroll-client').then(m => m.getUserTokenAccountV4(connection, master!.authority, PAYUSD_MINT));
-                      
-                      if (!vaultToken || vaultToken.incoTokenAccount.equals(PublicKey.default)) {
-                        throw new Error("Master vault token account not found");
-                      }
-
-                      return executeFullWithdrawalV4(
-                        connection,
-                        wallet,
-                        businessPda,
-                        employeeIndex,
-                        nonce,
-                        vaultToken.incoTokenAccount, // vaultTokenAccount
-                        destinationToken
-                      );
-                    });
-                    await refreshPayout();
-                    await refreshPayouts();
-                    await refreshEmployee(); // So UI knows stream is redelegated
-                  }}
-                    disabled={
-                      busy ||
-                      !businessPda ||
-                      employeeIndex === null ||
-                      nonce === null ||
-                      !destinationTokenAccount ||
-                      (employee?.isDelegated !== false) // Employee stream must be on base layer
-                    }
-                    className="premium-btn premium-btn-primary disabled:opacity-50"
-                  >
-                    Execute Withdrawal
+                    {payoutsLoading ? 'Checking...' : 'Refresh'}
                   </button>
                 </div>
-                {employee?.isDelegated !== false && (
-                  <div className="text-xs text-amber-600 mt-2">
-                    Waiting for stream to reach Solana Base Layer... (Auto-refresh on)
-                  </div>
-                )}
-                {payout ? (
-                  <div className="text-xs text-gray-600">
-                    Claimed: {payout.claimed ? 'yes' : 'no'} · Expires: {payout.expiresAt}
+                {payouts.length ? (
+                  <div className="mt-3 grid gap-2 text-xs text-gray-600">
+                    {payouts.map((item) => (
+                      <div
+                        key={`${item.employeeIndex}-${item.nonce}`}
+                        className="rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-alt)] p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold">Nonce {item.nonce}</span>
+                          <span className={item.claimed ? 'text-emerald-600' : item.cancelled ? 'text-rose-600' : 'text-amber-600'}>
+                            {item.claimed ? 'claimed' : item.cancelled ? 'cancelled' : 'pending'}
+                          </span>
+                        </div>
+                        <div className="mt-2 grid gap-1">
+                          <div>
+                            Created:{' '}
+                            {item.createdAt
+                              ? new Date(item.createdAt * 1000).toLocaleString()
+                              : item.createdAt === 0
+                                ? '0'
+                                : '—'}
+                          </div>
+                          <div>
+                            Expires:{' '}
+                            {item.expiresAt
+                              ? new Date(item.expiresAt * 1000).toLocaleString()
+                              : item.expiresAt === 0
+                                ? '0'
+                                : '—'}
+                          </div>
+                          {advancedEnabled ? (
+                            <div className="break-all">Payout token: {item.payoutTokenAccount.toBase58()}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-gray-500">No payout loaded yet.</div>
+                  <div className="mt-3 text-xs text-gray-500">No payout history found yet.</div>
                 )}
               </div>
             </div>
-          </div>
-        </StepCard>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Token registry</h2>
+                <p className="mt-1 text-sm text-gray-600">Link your destination token account before claiming.</p>
+                <div className="mt-4 space-y-3">
+                  {wallet.publicKey ? (
+                    <div className="rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-700">Registry status</span>
+                        <span>
+                          {registryLinked
+                            ? userTokenRegistry!.incoTokenAccount.toBase58()
+                            : 'Not linked'}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          onClick={async () => {
+                            await runAction('Init token registry', () =>
+                              initUserTokenAccountV4(connection, wallet, PAYUSD_MINT)
+                            );
+                            await refreshUserTokenRegistry();
+                          }}
+                          disabled={busy || userTokenRegistryLoading}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Init Registry
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const destination = mustPubkey('destination token account', destinationTokenAccount);
+                            await runAction('Link destination token', () =>
+                              linkUserTokenAccountV4(connection, wallet, destination, PAYUSD_MINT)
+                            );
+                            await refreshUserTokenRegistry();
+                          }}
+                          disabled={busy || userTokenRegistryLoading || !destinationTokenAccount}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Link Destination Token
+                        </button>
+                        <button
+                          onClick={() => void refreshUserTokenRegistry()}
+                          disabled={busy || userTokenRegistryLoading}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Refresh Registry
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">Connect a wallet to manage registry links.</div>
+                  )}
+                  <input
+                    value={destinationTokenAccount}
+                    onChange={(e) => setDestinationTokenAccount(e.target.value)}
+                    placeholder="Destination token account"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  <button
+                    onClick={async () => {
+                      const pk = wallet.publicKey;
+                      if (!pk) {
+                        setError('Connect wallet first.');
+                        return;
+                      }
+                      const result = await runAction('Create destination token', () =>
+                        createIncoTokenAccount(connection, wallet, pk)
+                      );
+                      if (result && typeof result === 'object' && 'tokenAccount' in result) {
+                        setDestinationTokenAccount((result as any).tokenAccount.toBase58());
+                      }
+                    }}
+                    disabled={busy}
+                    className="premium-btn premium-btn-secondary disabled:opacity-50"
+                  >
+                    Create Destination Token
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Payout claim</h2>
+                <p className="mt-1 text-sm text-gray-600">Enter payout details from the withdrawal flow.</p>
+                <div className="mt-4 space-y-3">
+                  <input
+                    value={nonceInput}
+                    onChange={(e) => setNonceInput(e.target.value)}
+                    placeholder="Payout nonce"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  {advancedEnabled ? (
+                    <div className="text-xs text-gray-500 break-all">
+                      Payout PDA: {payoutPda ? payoutPda.toBase58() : '—'}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => void refreshPayout()}
+                      disabled={busy || !businessPda || employeeIndex === null || nonce === null}
+                      className="premium-btn premium-btn-secondary disabled:opacity-50"
+                    >
+                      Refresh Payout
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!businessPda) {
+                          setError('Business index is required.');
+                          return;
+                        }
+                        if (employeeIndex === null || nonce === null) {
+                          setError('Employee index and nonce required.');
+                          return;
+                        }
+                        await runAction('Execute withdrawal', async () => {
+                          const destinationToken = mustPubkey('destination token account', destinationTokenAccount);
+                          const { executeFullWithdrawalV4 } = await import('../lib/payroll-client');
+
+                          // For vaultTokenAccount, we need the authority token account
+                          const master = await import('../lib/payroll-client').then(m => m.getMasterVaultV4Account(connection));
+                          const vaultToken = await import('../lib/payroll-client').then(m => m.getUserTokenAccountV4(connection, master!.authority, PAYUSD_MINT));
+
+                          if (!vaultToken || vaultToken.incoTokenAccount.equals(PublicKey.default)) {
+                            throw new Error("Master vault token account not found");
+                          }
+
+                          return executeFullWithdrawalV4(
+                            connection,
+                            wallet,
+                            businessPda,
+                            employeeIndex,
+                            nonce,
+                            vaultToken.incoTokenAccount, // vaultTokenAccount
+                            destinationToken
+                          );
+                        });
+                        await refreshPayout();
+                        await refreshPayouts();
+                        await refreshEmployee(); // So UI knows stream is redelegated
+                      }}
+                      disabled={
+                        busy ||
+                        !businessPda ||
+                        employeeIndex === null ||
+                        nonce === null ||
+                        !destinationTokenAccount ||
+                        (employee?.isDelegated !== false) // Employee stream must be on base layer
+                      }
+                      className="premium-btn premium-btn-primary disabled:opacity-50"
+                    >
+                      Execute Withdrawal
+                    </button>
+                  </div>
+                  {employee?.isDelegated !== false && (
+                    <div className="text-xs text-amber-600 mt-2">
+                      Waiting for stream to reach Solana Base Layer... (Auto-refresh on)
+                    </div>
+                  )}
+                  {payout ? (
+                    <div className="text-xs text-gray-600">
+                      Claimed: {payout.claimed ? 'yes' : 'no'} · Expires: {payout.expiresAt}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No payout loaded yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </StepCard>
         ) : null}
 
         {showStep4 ? (
-        <StepCard
-          number={4}
-          title="Live earnings & reports"
-          description="Decrypt live earnings and generate a signed statement."
-          state={stepEarningsState}
-        >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Live earnings</h2>
-              <p className="mt-1 text-sm text-gray-600">
-                Reveal your encrypted salary rate to see real-time earnings.
-              </p>
-              <div className="mt-4 space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={async () => {
-                      if (!businessPda || employeeIndex === null) {
-                        setError('Business and employee index are required.');
-                        return;
-                      }
-                      await runAction('Grant view access', () =>
-                        grantEmployeeViewAccessV4(connection, wallet, businessPda, employeeIndex)
-                      );
-                    }}
-                    disabled={busy || !businessPda || employeeIndex === null}
-                    className="premium-btn premium-btn-secondary disabled:opacity-50"
-                  >
-                    Grant View Access
-                  </button>
-                  <button
-                    onClick={() => void revealLiveEarnings()}
-                    disabled={revealLoading || !employee}
-                    className="premium-btn premium-btn-primary disabled:opacity-50"
-                  >
-                    {revealLoading ? 'Revealing...' : 'Reveal Live Earnings'}
-                  </button>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-white/70 p-3 text-xs text-gray-600">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Live earnings</div>
-                  <div className="mt-2 text-3xl font-semibold text-[#0B6E4F]">
-                    {revealed ? formatTokenAmount(earnedLamportsNow) : '—'}{' '}
-                    <span className="text-sm text-gray-600">USDC (confidential)</span>
+          <StepCard
+            number={4}
+            title="Live earnings & reports"
+            description="Decrypt live earnings and generate a signed statement."
+            state={stepEarningsState}
+          >
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Live earnings</h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  Reveal your encrypted salary rate to see real-time earnings.
+                </p>
+                <div className="mt-4 space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={async () => {
+                        if (!businessPda || employeeIndex === null) {
+                          setError('Business and employee index are required.');
+                          return;
+                        }
+                        await runAction('Grant view access', () =>
+                          grantEmployeeViewAccessV4(connection, wallet, businessPda, employeeIndex)
+                        );
+                      }}
+                      disabled={busy || !businessPda || employeeIndex === null}
+                      className="premium-btn premium-btn-secondary disabled:opacity-50"
+                    >
+                      Grant View Access
+                    </button>
+                    <button
+                      onClick={() => void revealLiveEarnings()}
+                      disabled={revealLoading || !employee}
+                      className="premium-btn premium-btn-primary disabled:opacity-50"
+                    >
+                      {revealLoading ? 'Revealing...' : 'Reveal Live Earnings'}
+                    </button>
                   </div>
-                  <div className="mt-1 text-[11px] text-gray-500">
-                    Live estimate · updates every second from last on-chain snapshot
-                  </div>
-                  {revealed && revealed.salaryLamportsPerSec === 0n ? (
-                    <div className="mt-2 text-[11px] text-amber-600">
-                      Salary rate is 0 — stream is paused or unfunded. Live estimate will not
-                      increase until the employer tops up and updates your rate.
+                  <div className="rounded-lg border border-gray-800 bg-transparent p-3 text-xs text-gray-400">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Live earnings</div>
+                    <div className="mt-2 text-3xl font-semibold text-emerald-400">
+                      {revealed ? formatTokenAmount(earnedLamportsNow) : '—'}{' '}
+                      <span className="text-sm text-gray-500">USDC (confidential)</span>
                     </div>
-                  ) : null}
-                  <div className="mt-2 grid gap-1">
-                    <div>
-                      Rate:{' '}
-                      {revealed ? `${formatTokenAmount(revealed.salaryLamportsPerSec)}/sec` : '—'}
+                    <div className="mt-1 text-[11px] text-gray-500">
+                      Live estimate · updates every second from last on-chain snapshot
                     </div>
-                    <div>
-                      Checkpoint:{' '}
-                      {revealed
-                        ? new Date(revealed.checkpointTime * 1000).toLocaleString()
-                        : '—'}
-                    </div>
-                    <div>
-                      On-chain snapshot:{' '}
-                      {employee?.lastAccrualTime || employee?.lastSettleTime
-                        ? new Date(
+                    {revealed && revealed.salaryLamportsPerSec === 0n ? (
+                      <div className="mt-2 text-[11px] text-amber-500">
+                        Salary rate is 0 — stream is paused or unfunded. Live estimate will not
+                        increase until the employer tops up and updates your rate.
+                      </div>
+                    ) : null}
+                    <div className="mt-2 grid gap-1">
+                      <div>
+                        Rate:{' '}
+                        {revealed ? `${formatTokenAmount(revealed.salaryLamportsPerSec)}/sec` : '—'}
+                      </div>
+                      <div>
+                        Checkpoint:{' '}
+                        {revealed
+                          ? new Date(revealed.checkpointTime * 1000).toLocaleString()
+                          : '—'}
+                      </div>
+                      <div>
+                        On-chain snapshot:{' '}
+                        {employee?.lastAccrualTime || employee?.lastSettleTime
+                          ? new Date(
                             (employee.lastAccrualTime || employee.lastSettleTime) * 1000
                           ).toLocaleString()
-                        : '—'}
+                          : '—'}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="text-xs text-gray-500">
-                  If reveal fails, we auto-refresh your access and retry.
+                  <div className="text-xs text-gray-500">
+                    If reveal fails, we auto-refresh your access and retry.
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="panel-card">
-              <h2 className="text-lg font-semibold text-[#2D2D2A]">Signed earnings statement</h2>
-              <p className="mt-1 text-sm text-gray-600">
-                Generate a signed report for a selected time window.
-              </p>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="space-y-2">
-                  <div className="text-xs font-medium text-gray-700">Start</div>
-                  <input
-                    type="datetime-local"
-                    value={payslipStart}
-                    onChange={(e) => setPayslipStart(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
+              <div className="panel-card">
+                <h2 className="text-lg font-semibold text-[#2D2D2A]">Signed earnings statement</h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  Generate a signed report for a selected time window.
+                </p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium text-gray-500">Start</div>
+                    <input
+                      type="datetime-local"
+                      value={payslipStart}
+                      onChange={(e) => setPayslipStart(e.target.value)}
+                      className="w-full rounded-lg border border-gray-800 bg-transparent px-3 py-2 text-sm text-gray-300"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium text-gray-500">End</div>
+                    <input
+                      type="datetime-local"
+                      value={payslipEnd}
+                      onChange={(e) => setPayslipEnd(e.target.value)}
+                      className="w-full rounded-lg border border-gray-800 bg-transparent px-3 py-2 text-sm text-gray-300"
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <div className="text-xs font-medium text-gray-700">End</div>
-                  <input
-                    type="datetime-local"
-                    value={payslipEnd}
-                    onChange={(e) => setPayslipEnd(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  />
+                <div className="mt-4">
+                  <button
+                    onClick={() => void generatePayslip()}
+                    disabled={payslipLoading || !employee}
+                    className="w-full premium-btn premium-btn-primary disabled:opacity-50"
+                  >
+                    {payslipLoading ? 'Generating...' : 'Generate Signed Statement'}
+                  </button>
                 </div>
-              </div>
-              <div className="mt-4">
-                <button
-                  onClick={() => void generatePayslip()}
-                  disabled={payslipLoading || !employee}
-                  className="w-full premium-btn premium-btn-primary disabled:opacity-50"
-                >
-                  {payslipLoading ? 'Generating...' : 'Generate Signed Statement'}
-                </button>
-              </div>
-              {payslipJson ? (
-                <pre className="mt-4 max-h-80 overflow-auto rounded-lg bg-[#0B1320] p-4 text-xs text-[#E6EDF3]">
-                  {payslipJson}
-                </pre>
-              ) : null}
-              <div className="mt-3 text-xs text-gray-500">
-                Uses the current encrypted salary rate (v4 rate history is not yet exposed in the UI).
+                {payslipJson ? (
+                  <pre className="mt-4 max-h-80 overflow-auto rounded-lg bg-[#0B1320] p-4 text-xs text-[#E6EDF3]">
+                    {payslipJson}
+                  </pre>
+                ) : null}
+                <div className="mt-3 text-xs text-gray-500">
+                  Uses the current encrypted salary rate (v4 rate history is not yet exposed in the UI).
+                </div>
               </div>
             </div>
-          </div>
-        </StepCard>
+          </StepCard>
         ) : null}
       </div>
     </ExpenseeShell>
