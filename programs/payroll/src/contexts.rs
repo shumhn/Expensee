@@ -472,6 +472,7 @@ pub struct ProcessWithdrawRequestV4<'info> {
 
     #[account(
         mut,
+        close = payer,
         seeds = [WITHDRAW_REQUEST_V4_SEED, business_v4.key().as_ref(), &employee_index.to_le_bytes()],
         bump = withdraw_request_v4.bump
     )]
