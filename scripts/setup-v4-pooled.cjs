@@ -52,7 +52,7 @@ function loadEnvFile(filePath) {
 }
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-loadEnvFile(path.join(repoRoot, 'frontend', '.env.local'));
+loadEnvFile(path.join(repoRoot, 'app', '.env.local'));
 loadEnvFile(path.join(repoRoot, '.env'));
 
 function discriminator(name) {

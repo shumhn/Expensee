@@ -42,7 +42,7 @@ function loadEnvFile(filePath) {
   }
 }
 
-loadEnvFile(path.join(repoRoot, 'frontend', '.env.local'));
+loadEnvFile(path.join(repoRoot, 'app', '.env.local'));
 loadEnvFile(path.join(repoRoot, '.env'));
 
 function envFlag(name, fallback = true) {

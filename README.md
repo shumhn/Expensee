@@ -12,6 +12,7 @@
   <a href="#competitive-landscape">Competitors</a> •
   <a href="#go-to-market-strategy">GTM</a> •
   <a href="#business-model">Business Model</a> •
+  <a href="#magicblock-integration">MagicBlock</a> •
   <a href="#how-it-works">How It Works</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#roadmap">Roadmap</a> •
@@ -23,6 +24,8 @@
 ## Overview
 
 **Expensee** is a confidential, real-time salary streaming protocol on Solana. Employers fund an encrypted vault, add employees with FHE-encrypted salary rates, and salaries accrue every second inside MagicBlock TEE enclaves. Employees can auto-detect their record with **Magic Scan**, reveal their live earnings, and withdraw — all without exposing compensation data on-chain.
+
+> Expensee uses MagicBlock as the real-time execution layer, specifically through Ephemeral Rollups, TEE execution, router-based scheduling, and delegated stream settlement.
 
 ### Key Features
 
@@ -36,6 +39,38 @@
 | **Keeper-Free Design** | Fully on-chain crank-based settlements — no off-chain servers or relay services required |
 
 > *Expensee: Private, real-time payroll infrastructure on Solana.*
+
+---
+
+## MagicBlock Integration
+
+MagicBlock is not a decorative dependency in Expensee. It powers the v4 real-time streaming path end-to-end:
+
+1. The employer delegates an employee stream to a MagicBlock validator.
+2. The payroll program schedules the autonomous crank on the MagicBlock router.
+3. The TEE accrues salary in the delegated execution environment.
+4. The stream is committed back to Solana base layer when settlement or mutation is needed.
+5. The stream is redelegated so real-time payroll resumes.
+
+If you want the fastest way to understand the integration, start here:
+
+- [docs/MAGICBLOCK.md](docs/MAGICBLOCK.md)
+- [`app/lib/magicblock/index.ts`](app/lib/magicblock/index.ts)
+- [`app/lib/payroll-client.ts`](app/lib/payroll-client.ts)
+- [`app/pages/employer.tsx`](app/pages/employer.tsx)
+- [`app/pages/employee.tsx`](app/pages/employee.tsx)
+- [`programs/payroll/src/lib.rs`](programs/payroll/src/lib.rs)
+- [`app/pages/api/magicblock`](app/pages/api/magicblock)
+
+```mermaid
+flowchart LR
+  Employer --> Delegate["Delegate stream"]
+  Delegate --> Router["MagicBlock router"]
+  Router --> TEE["TEE crank / accrual"]
+  TEE --> Commit["Commit + undelegate"]
+  Commit --> Base["Solana base layer"]
+  Base --> Redelegate["Redelegate to ER"]
+```
 
 ---
 
@@ -483,7 +518,7 @@ Wrap/unwrap interface for converting standard SPL tokens (public USDC) to/from c
 npm install
 
 # Frontend
-cd frontend && npm install && cd ..
+cd app && npm install && cd ..
 
 # Landing Page
 cd landingpage && npm install && cd ..
@@ -492,13 +527,13 @@ cd landingpage && npm install && cd ..
 ### 2. Configure Environment
 
 ```bash
-cp frontend/.env.local.example frontend/.env.local
+cp app/.env.local.example app/.env.local
 ```
 
 ### 3. Run Frontend
 
 ```bash
-cd frontend && npm run dev
+cd app && npm run dev
 ```
 
 ### 4. Demo Walkthrough
@@ -528,7 +563,7 @@ expensee/
 │       ├── events.rs              # On-chain events
 │       └── helpers.rs             # Inco CPI builders, FHE utilities
 │
-├── frontend/                      # Next.js application
+├── app/                           # Next.js application
 │   ├── pages/
 │   │   ├── employer.tsx           # Employer dashboard
 │   │   ├── employee.tsx           # Employee dashboard (Magic Scan, withdraw, payslip)

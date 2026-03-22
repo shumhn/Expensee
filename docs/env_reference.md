@@ -2,7 +2,7 @@
 
 This document provides a comprehensive reference for all environment variables used in the Expensee project.
 
-## Component: Frontend (`frontend/.env.local`)
+## Component: App (`app/.env.local`)
 
 These variables are primarily used by the Next.js application for interacting with the Solana blockchain and external APIs.
 

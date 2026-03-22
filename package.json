@@ -12,10 +12,10 @@
   "author": "Expensee Team",
   "license": "MIT",
   "scripts": {
-    "dev": "cd frontend && npm run dev",
-    "build": "anchor build && cd frontend && npm run build",
+    "dev": "cd app && npm run dev",
+    "build": "anchor build && cd app && npm run build",
     "test": "anchor test",
-    "lint": "cd frontend && npm run lint",
+    "lint": "cd app && npm run lint",
     "deploy": "anchor deploy",
     "keeper:dev": "set -a && . backend/keeper/.env && set +a && npx ts-node --prefer-ts-exts -P backend/keeper/tsconfig.json backend/keeper/src/index.ts",
     "keeper:health": "node scripts/keeper-healthcheck.cjs",

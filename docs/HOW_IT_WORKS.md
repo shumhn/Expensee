@@ -204,15 +204,15 @@ Implementation note (devnet v1 reliability):
 
 ---
 
-### 2. Frontend App ([frontend/](file:///Users/sumangiri/Desktop/expensee/app))
+### 2. App ([app/](file:///Users/sumangiri/Desktop/expensee/app))
 
 **Next.js + Tailwind** with three pages:
 
 | Page | File | What It Does |
 |---|---|---|
-| **Landing** | [index.tsx](file:///Users/sumangiri/Desktop/expensee/frontend/pages/index.tsx) | Entry point with links to employer/employee panels |
-| **Employer** | [employer.tsx](file:///Users/sumangiri/Desktop/expensee/frontend/pages/employer.tsx) | Full management dashboard |
-| **Employee** | [employee.tsx](file:///Users/sumangiri/Desktop/expensee/frontend/pages/employee.tsx) | Earnings viewer + withdraw |
+| **Landing** | [index.tsx](file:///Users/sumangiri/Desktop/expensee/app/pages/index.tsx) | Entry point with links to employer/employee panels |
+| **Employer** | [employer.tsx](file:///Users/sumangiri/Desktop/expensee/app/pages/employer.tsx) | Full management dashboard |
+| **Employee** | [employee.tsx](file:///Users/sumangiri/Desktop/expensee/app/pages/employee.tsx) | Earnings viewer + withdraw |
 
 **Employer Dashboard can:**
 - Register business, init vault, deposit funds
@@ -228,7 +228,7 @@ Implementation note (devnet v1 reliability):
 - Submit withdraw request
 - Track withdrawal progress (pending → undelegated → settled → re-delegated)
 
-The client library ([payroll-client.ts](file:///Users/sumangiri/Desktop/expensee/frontend/lib/payroll-client.ts)) handles all PDA derivation, Inco encryption, transaction building, and account parsing.
+The client library ([payroll-client.ts](file:///Users/sumangiri/Desktop/expensee/app/lib/payroll-client.ts)) handles all PDA derivation, Inco encryption, transaction building, and account parsing.
 
 ---
 

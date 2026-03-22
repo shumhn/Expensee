@@ -30,7 +30,7 @@ upgradeable = false
 
 [test.validator]
 bind_address = "0.0.0.0"
-url = "https://devnet.helius-rpc.com/?api-key=06227422-9d57-42de-a7b3-92f1491c58af"
+url = "https://api.devnet.solana.com"
 ledger = ".anchor/test-ledger"
 rpc_port = 8899
 

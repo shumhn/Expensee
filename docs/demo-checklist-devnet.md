@@ -77,7 +77,7 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
    - If you created/own the mint authority, you can mint to your source token account:
      ```bash
      cd /Users/sumangiri/Desktop/expensee
-     set -a; source frontend/.env.local; set +a
+     set -a; source app/.env.local; set +a
      DEST_TOKEN_ACCOUNT=YOUR_SOURCE_TOKEN_ACCOUNT AMOUNT=100 node scripts/mint-payusd.cjs
      ```
      If your mint authority is not `~/.config/solana/id.json`, set:
@@ -91,7 +91,7 @@ Go to `http://localhost:3000/employer` and connect **Employer wallet**.
        npx ts-node scripts/create-new-mint.ts
        ```
      - Update `NEXT_PUBLIC_PAYUSD_MINT` in:
-       - `/Users/sumangiri/Desktop/expensee/frontend/.env.local`
+       - `/Users/sumangiri/Desktop/expensee/app/.env.local`
        - `/Users/sumangiri/Desktop/expensee/backend/keeper/.env` (via `NEXT_PUBLIC_PAYUSD_MINT` only if you reference it elsewhere; keeper uses on-chain vault mint)
      - Restart app + keeper, then mint to your source token account using `scripts/mint-payusd.cjs`.
 6. **Deposit to Vault**
