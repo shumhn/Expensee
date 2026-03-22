@@ -57,6 +57,7 @@ macro_rules! privacy_msg {
         privacy_msg!($($arg)*);
     };
 }
+
 #[cfg(not(feature = "privacy_logs"))]
 macro_rules! privacy_msg {
     ($($arg:tt)*) => {};
@@ -1582,4 +1583,3 @@ mod tests {
         );
     }
 }
-
