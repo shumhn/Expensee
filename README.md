@@ -52,6 +52,12 @@ MagicBlock is not a decorative dependency in Expensee. It powers the v4 real-tim
 4. The stream is committed back to Solana base layer when settlement or mutation is needed.
 5. The stream is redelegated so real-time payroll resumes.
 
+### End-to-End Flow
+
+<p align="center">
+  <img src="docs/expensee_end_to_end_flow.png" alt="Expensee End-to-End Flow" width="800" />
+</p>
+
 If you want the fastest way to understand the integration, start here:
 
 - [docs/MAGICBLOCK.md](docs/MAGICBLOCK.md)
