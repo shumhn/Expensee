@@ -956,6 +956,7 @@ export interface BusinessV4Account {
   encryptedEmployerId: Uint8Array;
   depositAuthority: PublicKey;
   encryptedBalance: Uint8Array;
+  encryptedReservedBalance: Uint8Array;
   encryptedEmployeeCount: Uint8Array;
   nextEmployeeIndex: number;
   isActive: boolean;
@@ -1020,6 +1021,7 @@ export async function getBusinessV4Account(
       encryptedEmployerId: data.slice(48, 80),
       depositAuthority: PublicKey.default,
       encryptedBalance: data.slice(80, 112),
+      encryptedReservedBalance: new Uint8Array(32),
       encryptedEmployeeCount: data.slice(112, 144),
       nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
       isActive: data[152] === 1,
@@ -1038,6 +1040,7 @@ export async function getBusinessV4Account(
     nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
     isActive: data[184] === 1,
     bump: data[185],
+    encryptedReservedBalance: data.slice(186, 218),
   };
 }
 
@@ -1058,6 +1061,7 @@ export async function getBusinessV4AccountByAddress(
       encryptedEmployerId: data.slice(48, 80),
       depositAuthority: PublicKey.default,
       encryptedBalance: data.slice(80, 112),
+      encryptedReservedBalance: new Uint8Array(32),
       encryptedEmployeeCount: data.slice(112, 144),
       nextEmployeeIndex: Number(data.readBigUInt64LE(144)),
       isActive: data[152] === 1,
@@ -1076,6 +1080,7 @@ export async function getBusinessV4AccountByAddress(
     nextEmployeeIndex: Number(data.readBigUInt64LE(176)),
     isActive: data[184] === 1,
     bump: data[185],
+    encryptedReservedBalance: data.slice(186, 218),
   };
 }
 
@@ -1087,6 +1092,7 @@ export interface EmployeeV4Account {
   encryptedEmployeeId: Uint8Array;
   encryptedSalaryRate: Uint8Array;
   encryptedAccrued: Uint8Array;
+  encryptedRemainingBudget: Uint8Array;
   lastAccrualTime: number;
   lastSettleTime: number;
   isActive: boolean;
@@ -1124,6 +1130,7 @@ export async function getEmployeeV4Account(
     bump: data[162],
     periodStart: Number(data.readBigInt64LE(163)),
     periodEnd: Number(data.readBigInt64LE(171)),
+    encryptedRemainingBudget: data.slice(179, 211),
   };
 }
 
@@ -1303,23 +1310,11 @@ export interface RateHistoryV4Account {
 }
 
 export function extractHandleFromCiphertext32(data: Uint8Array | Buffer): bigint {
-  const bytes = Buffer.from(data).subarray(0, 32);
-  let result = 0n;
-  // Read full 32 bytes for 256-bit handle
-  for (let i = 31; i >= 0; i -= 1) {
-    result = result * 256n + BigInt(bytes[i] || 0);
-  }
-  return result;
+  return readU128LEFrom16(Buffer.from(data));
 }
 
 export function readU128LEFrom32(handle32: Buffer): bigint {
-  const b = handle32.subarray(0, 32);
-  let out = 0n;
-  // Read full 32 bytes for 256-bit handle
-  for (let i = 31; i >= 0; i -= 1) {
-    out = out * 256n + BigInt(b[i] || 0);
-  }
-  return out;
+  return readU128LEFrom16(handle32);
 }
 
 function readU128LEFrom16(bytes: Buffer): bigint {
@@ -2470,7 +2465,26 @@ export async function requestWithdrawV4(
     throw new Error('Wallet not connected');
   }
 
-  const [masterVaultPDA] = getMasterVaultV4PDA();
+  const businessInfo = await connection.getAccountInfo(businessPDA, 'confirmed');
+  if (!businessInfo) {
+    throw new Error('Business v4 not found');
+  }
+  if (!businessInfo.owner.equals(PAYROLL_PROGRAM_ID)) {
+    throw new Error('Selected business record is not a payroll business account. Refresh Step 2 and try again.');
+  }
+  if (businessInfo.data.length < 218) {
+    throw new Error('Selected business record uses a legacy layout. Re-register the business in Step 2 before withdrawing.');
+  }
+
+  const business = await getBusinessV4AccountByAddress(connection, businessPDA);
+  if (!business) {
+    throw new Error('Business v4 not found');
+  }
+  if (!business.masterVault.equals(getMasterVaultV4PDA()[0])) {
+    throw new Error('Selected business record does not belong to the current master vault.');
+  }
+
+  const masterVaultPDA = business.masterVault;
   const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
   const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
   const [withdrawRequestPDA] = getWithdrawRequestV4PDA(businessPDA, employeeIndex);
@@ -2522,7 +2536,7 @@ export async function requestWithdrawV4(
   });
 
   const tx = new Transaction().add(requestInstruction);
-  return sendAndConfirmTransaction(connection, wallet, tx, "request_withdraw");
+  return sendAndConfirmTransaction(connection, wallet, tx, "request_withdraw", { forceBase: true });
 }
 
 /**
@@ -2668,6 +2682,7 @@ export async function claimPayoutV4(
 
   const [masterVaultPDA] = getMasterVaultV4PDA();
   const [shieldedPayoutPDA] = getShieldedPayoutV4PDA(businessPDA, employeeIndex, nonce);
+  const [userTokenRegistryPDA] = getUserTokenV4PDA(wallet.publicKey, PAYUSD_MINT);
   const payout = await getShieldedPayoutV4Account(connection, businessPDA, employeeIndex, nonce);
   if (!payout) {
     throw new Error(`v4 shielded payout ${employeeIndex}/${nonce} not found`);
@@ -2688,6 +2703,7 @@ export async function claimPayoutV4(
       { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true },
       { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
       { pubkey: claimerTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: userTokenRegistryPDA, isSigner: false, isWritable: true },
       { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
       { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
@@ -2716,6 +2732,7 @@ export async function executeFullWithdrawalV4(
   const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
   const [withdrawRequestPDA] = getWithdrawRequestV4PDA(businessPDA, employeeIndex);
   const [shieldedPayoutPDA] = getShieldedPayoutV4PDA(businessPDA, employeeIndex, nonce);
+  const [userTokenRegistryPDA] = getUserTokenV4PDA(wallet.publicKey, PAYUSD_MINT);
 
   // 1. Generate Payout Token Account (key order: token, mint, owner, payer, system, incoLightning)
   const payoutTokenKeypair = Keypair.generate();
@@ -2773,6 +2790,7 @@ export async function executeFullWithdrawalV4(
       { pubkey: shieldedPayoutPDA, isSigner: false, isWritable: true },
       { pubkey: payoutTokenAccount, isSigner: false, isWritable: true },
       { pubkey: claimerTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: userTokenRegistryPDA, isSigner: false, isWritable: true },
       { pubkey: employeeIdAllowance, isSigner: false, isWritable: false },
       { pubkey: INCO_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: INCO_LIGHTNING_ID, isSigner: false, isWritable: false },
@@ -2846,7 +2864,8 @@ export async function executeFullWithdrawalV4(
   tx.add(initIx, processIx, claimIx, redelegateIx);
   // We must sign with the payoutTokenKeypair since it's initializing
   if (!wallet.signTransaction) throw new Error('Wallet sign transaction required');
-  const blockhash = await connection.getLatestBlockhash('confirmed');
+  const writeConnection = getBaseWriteConnection();
+  const blockhash = await writeConnection.getLatestBlockhash('confirmed');
   tx.recentBlockhash = blockhash.blockhash;
   tx.feePayer = wallet.publicKey;
   
@@ -2854,11 +2873,11 @@ export async function executeFullWithdrawalV4(
   tx.partialSign(payoutTokenKeypair);
   const signedTx = await wallet.signTransaction(tx);
   
-  const txid = await connection.sendRawTransaction(signedTx.serialize(), {
+  const txid = await writeConnection.sendRawTransaction(signedTx.serialize(), {
     skipPreflight: false,
     preflightCommitment: 'confirmed'
   });
-  await connection.confirmTransaction({
+  await writeConnection.confirmTransaction({
     signature: txid,
     blockhash: blockhash.blockhash,
     lastValidBlockHeight: blockhash.lastValidBlockHeight
@@ -2891,15 +2910,29 @@ export async function createIncoTokenAccount(
     throw new Error('Wallet not connected');
   }
 
+  const ownerIsWallet = owner.equals(wallet.publicKey);
+
   // ── IMPORTANT FIX: Check if they already have one registered ──
   try {
-    const existingRegistry = await getUserTokenAccountV4(connection, owner, mint);
+    const existingRegistry = ownerIsWallet ? await getUserTokenAccountV4(connection, owner, mint) : null;
     if (existingRegistry && existingRegistry.incoTokenAccount && !existingRegistry.incoTokenAccount.equals(PublicKey.default)) {
       console.log('Found existing Inco token account:', existingRegistry.incoTokenAccount.toBase58());
       return { txid: 'existing', tokenAccount: existingRegistry.incoTokenAccount };
     }
   } catch (e) {
     console.warn('Error checking existing user token account, proceeding with creation:', e);
+  }
+
+  // Ensure the wallet-owned registry exists before creating and linking a depositor token account.
+  if (ownerIsWallet) {
+    try {
+      const registry = await getUserTokenAccountV4(connection, wallet.publicKey, mint);
+      if (!registry) {
+        await initUserTokenAccountV4(connection, wallet, mint);
+      }
+    } catch (e) {
+      console.warn('Error initializing user token registry, continuing with token creation:', e);
+    }
   }
 
   // Generate a new keypair for the token account address.
@@ -2963,12 +2996,14 @@ export async function createIncoTokenAccount(
     throw new Error(`Token account creation failed: ${JSON.stringify(confirmation.value.err)}`);
   }
 
-  // Also try to automatically link it if they didn't have one
-  try {
-    await linkUserTokenAccountV4(connection, wallet, tokenAccountKeypair.publicKey, mint);
-    console.log('Automatically linked new token account to registry');
-  } catch (e) {
-    console.warn('Failed to auto-link new token account, user may need to click Link manually:', e);
+  // Also try to automatically link wallet-owned token accounts so the app can rediscover them later.
+  if (ownerIsWallet) {
+    try {
+      await linkUserTokenAccountV4(connection, wallet, tokenAccountKeypair.publicKey, mint);
+      console.log('Automatically linked new token account to registry');
+    } catch (e) {
+      console.warn('Failed to auto-link new token account, user may need to click Link manually:', e);
+    }
   }
 
   return { txid, tokenAccount: tokenAccountKeypair.publicKey };
@@ -3149,23 +3184,28 @@ export interface EmployeeV4DecryptHandles {
   employeeIdHandle: string;
   accruedHandle: string;
   salaryHandle: string;
+  remainingBudgetHandle: string;
   employeeIdHandleValue: bigint;
   accruedHandleValue: bigint;
   salaryHandleValue: bigint;
+  remainingBudgetHandleValue: bigint;
 }
 
 export function getEmployeeV4DecryptHandles(employee: EmployeeV4Account): EmployeeV4DecryptHandles {
   const employeeIdValue = readU128LEFrom32(Buffer.from(employee.encryptedEmployeeId));
   const accruedValue = readU128LEFrom32(Buffer.from(employee.encryptedAccrued));
   const salaryValue = readU128LEFrom32(Buffer.from(employee.encryptedSalaryRate));
+  const remainingBudgetValue = readU128LEFrom32(Buffer.from(employee.encryptedRemainingBudget));
 
   return {
     employeeIdHandle: employeeIdValue.toString(),
     accruedHandle: accruedValue.toString(),
     salaryHandle: salaryValue.toString(),
+    remainingBudgetHandle: remainingBudgetValue.toString(),
     employeeIdHandleValue: employeeIdValue,
     accruedHandleValue: accruedValue,
     salaryHandleValue: salaryValue,
+    remainingBudgetHandleValue: remainingBudgetValue,
   };
 }
 
@@ -3733,6 +3773,16 @@ export async function findEmploymentRecordV4(
 
   if (authorizedCandidates.length === 0) return null;
 
+  const isCiphertextMissingError = (error: unknown): boolean => {
+    const message =
+      typeof error === 'string'
+        ? error
+        : error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: unknown }).message || '')
+          : '';
+    return message.toLowerCase().includes('no ciphertext found');
+  };
+
   try {
     // 4. One single signature request for all AUTHORIZED candidates
     const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
@@ -3743,20 +3793,48 @@ export async function findEmploymentRecordV4(
       const chunkOptions = handlesToDecrypt.slice(i, i + CHUNK_SIZE);
       const chunkCandidates = authorizedCandidates.slice(i, i + CHUNK_SIZE);
 
-      const results = await decrypt(chunkOptions, {
-        address: wallet.publicKey,
-        signMessage: wallet.signMessage,
-      });
+      try {
+        const results = await decrypt(chunkOptions, {
+          address: wallet.publicKey,
+          signMessage: wallet.signMessage,
+        });
 
-      if (results && results.plaintexts) {
-        for (let j = 0; j < results.plaintexts.length; j += 1) {
-          const plainText = BigInt(results.plaintexts[j]);
-          if (plainText === myHash) {
-            // MATCH FOUND!
-            return {
-              businessIndex: chunkCandidates[j].businessIndex,
-              employeeIndex: chunkCandidates[j].employeeIndex,
-            };
+        if (results && results.plaintexts) {
+          for (let j = 0; j < results.plaintexts.length; j += 1) {
+            const plainText = BigInt(results.plaintexts[j]);
+            if (plainText === myHash) {
+              return {
+                businessIndex: chunkCandidates[j].businessIndex,
+                employeeIndex: chunkCandidates[j].employeeIndex,
+              };
+            }
+          }
+        }
+      } catch (chunkErr) {
+        if (!isCiphertextMissingError(chunkErr)) {
+          throw chunkErr;
+        }
+
+        console.warn('Magic Scan skipped a non-materialized ciphertext chunk:', chunkErr);
+        for (let j = 0; j < chunkOptions.length; j += 1) {
+          try {
+            const singleResult = await decrypt([chunkOptions[j]!], {
+              address: wallet.publicKey,
+              signMessage: wallet.signMessage,
+            });
+            const plainText = BigInt(singleResult?.plaintexts?.[0] || '0');
+            if (plainText === myHash) {
+              return {
+                businessIndex: chunkCandidates[j]!.businessIndex,
+                employeeIndex: chunkCandidates[j]!.employeeIndex,
+              };
+            }
+          } catch (singleErr) {
+            if (isCiphertextMissingError(singleErr)) {
+              console.warn('Magic Scan skipped a non-materialized ciphertext handle:', singleErr);
+              continue;
+            }
+            throw singleErr;
           }
         }
       }
@@ -3782,6 +3860,11 @@ export async function initRateHistoryV4(
   const [streamConfigPDA] = getStreamConfigV4PDA(businessPDA);
   const [employeePDA] = getEmployeeV4PDA(businessPDA, employeeIndex);
   const [rateHistoryPDA] = getRateHistoryV4PDA(businessPDA, employeeIndex);
+
+  const existing = await getAccountInfoWithFallback(connection, rateHistoryPDA);
+  if (existing) {
+    return { txid: 'existing', rateHistoryPDA };
+  }
 
   const employeeIndexBuf = Buffer.alloc(8);
   employeeIndexBuf.writeBigUInt64LE(BigInt(employeeIndex));

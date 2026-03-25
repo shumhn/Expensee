@@ -63,19 +63,33 @@ function formatTokenAmount(lamports: bigint): string {
   return negative ? `-${out}` : out;
 }
 
+function toDateTimeLocalValue(unixSec: number): string {
+  if (!Number.isFinite(unixSec) || unixSec <= 0) return '';
+  const date = new Date(unixSec * 1000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
 function estimateEarnedLamports(
   accruedCheckpoint: bigint,
   salaryPerSecond: bigint,
+  remainingBudgetCheckpoint: bigint,
   checkpointTime: number,
   nowSec: number
 ): bigint {
   const dt = Math.max(0, nowSec - checkpointTime);
-  return accruedCheckpoint + salaryPerSecond * BigInt(dt);
+  const uncapped = accruedCheckpoint + salaryPerSecond * BigInt(dt);
+  const ceiling = accruedCheckpoint + remainingBudgetCheckpoint;
+  return uncapped > ceiling ? ceiling : uncapped;
 }
 
 function isPermissionError(message: string): boolean {
   const msg = message.toLowerCase();
   return msg.includes('not allowed') || msg.includes('permission') || msg.includes('view access');
+}
+
+function isCiphertextMissingError(message: string): boolean {
+  return message.toLowerCase().includes('no ciphertext found');
 }
 
 type WithdrawPhase = 'idle' | 'creating_token' | 'requesting' | 'waiting_sync' | 'executing' | 'done' | 'error';
@@ -119,9 +133,11 @@ export default function EmployeeV4Page() {
   const [revealed, setRevealed] = useState<{
     salaryLamportsPerSec: bigint;
     accruedLamportsCheckpoint: bigint;
+    remainingBudgetCheckpoint: bigint;
     checkpointTime: number;
     revealedAt: number;
   } | null>(null);
+  const [liveEarningsNote, setLiveEarningsNote] = useState('');
   const [earnedLamportsNow, setEarnedLamportsNow] = useState<bigint>(0n);
   const earnedTimerRef = useRef<number | null>(null);
   const [payslipStart, setPayslipStart] = useState('');
@@ -130,47 +146,100 @@ export default function EmployeeV4Page() {
   const [payslipLoading, setPayslipLoading] = useState(false);
   const [registryBalanceRevealed, setRegistryBalanceRevealed] = useState<bigint | null>(null);
   const [registryBalanceLoading, setRegistryBalanceLoading] = useState(false);
+  const [latestPayoutAmountRevealed, setLatestPayoutAmountRevealed] = useState<bigint | null>(null);
+  const [latestPayoutAmountLoading, setLatestPayoutAmountLoading] = useState(false);
+  const [settledWithdrawalAmount, setSettledWithdrawalAmount] = useState<bigint | null>(null);
+  const [triggerReveal, setTriggerReveal] = useState(false);
 
 
+  const walletScope = wallet.publicKey?.toBase58() ?? null;
   const businessIndex = useMemo(() => parseIndex(businessIndexInput), [businessIndexInput]);
   const employeeIndex = useMemo(() => parseIndex(employeeIndexInput), [employeeIndexInput]);
+  const businessIndexStorageKey = useMemo(
+    () => (walletScope ? `expensee.employee.businessIndex.${walletScope}` : null),
+    [walletScope]
+  );
+  const employeeIndexStorageKey = useMemo(
+    () => (walletScope ? `expensee.employee.employeeIndex.${walletScope}` : null),
+    [walletScope]
+  );
   const nonce = useMemo(() => {
     // Auto-generate nonce if not manually set
     if (!nonceInput) return null;
     return parseIndex(nonceInput);
   }, [nonceInput]);
+  const latestPayout = useMemo(() => (payouts.length ? payouts[0] : null), [payouts]);
 
   // ── URL query param auto-fill + localStorage persistence ──
   useEffect(() => {
     if (!router.isReady) return;
     const qBi = router.query.bi;
     const qEi = router.query.ei;
+    if (!walletScope) {
+      setBusinessIndexInput('');
+      setEmployeeIndexInput('');
+      return;
+    }
     if (typeof qBi === 'string' && qBi.trim().length > 0) {
       setBusinessIndexInput(qBi.trim());
     } else {
-      const stored = typeof window !== 'undefined' ? window.localStorage.getItem('expensee.emp.bi') : null;
+      const stored = typeof window !== 'undefined' && businessIndexStorageKey
+        ? window.localStorage.getItem(businessIndexStorageKey)
+        : null;
       if (stored) setBusinessIndexInput(stored);
+      else setBusinessIndexInput('');
     }
     if (typeof qEi === 'string' && qEi.trim().length > 0) {
       setEmployeeIndexInput(qEi.trim());
     } else {
-      const stored = typeof window !== 'undefined' ? window.localStorage.getItem('expensee.emp.ei') : null;
+      const stored = typeof window !== 'undefined' && employeeIndexStorageKey
+        ? window.localStorage.getItem(employeeIndexStorageKey)
+        : null;
       if (stored) setEmployeeIndexInput(stored);
+      else setEmployeeIndexInput('');
     }
-  }, [router.isReady, router.query.bi, router.query.ei]);
+  }, [router.isReady, router.query.bi, router.query.ei, walletScope, businessIndexStorageKey, employeeIndexStorageKey]);
+
+  useEffect(() => {
+    setEmployee(null);
+    setPayout(null);
+    setWithdrawRequestExists(false);
+    setWithdrawRequestLoading(false);
+    setPayouts([]);
+    setPayoutsLoading(false);
+    setRegistryBalanceRevealed(null);
+    setRegistryBalanceLoading(false);
+    setLatestPayoutAmountRevealed(null);
+    setLatestPayoutAmountLoading(false);
+    setSettledWithdrawalAmount(null);
+    setTriggerReveal(false);
+    setRevealLoading(false);
+    setRevealed(null);
+    setLiveEarningsNote('');
+    setEarnedLamportsNow(0n);
+    setMessage('');
+    setError('');
+  }, [walletScope]);
 
   // Save indexes to localStorage whenever they change
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (businessIndexInput) window.localStorage.setItem('expensee.emp.bi', businessIndexInput);
-    if (employeeIndexInput) window.localStorage.setItem('expensee.emp.ei', employeeIndexInput);
-  }, [businessIndexInput, employeeIndexInput]);
+    if (typeof window === 'undefined' || !businessIndexStorageKey) return;
+    if (businessIndexInput) window.localStorage.setItem(businessIndexStorageKey, businessIndexInput);
+  }, [businessIndexInput, businessIndexStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !employeeIndexStorageKey) return;
+    if (employeeIndexInput) window.localStorage.setItem(employeeIndexStorageKey, employeeIndexInput);
+  }, [employeeIndexInput, employeeIndexStorageKey]);
+
+
 
   const [masterVaultPda] = useMemo(() => getMasterVaultV4PDA(), []);
   const businessPda = useMemo(() => {
     if (businessIndex === null) return null;
     return getBusinessV4PDA(masterVaultPda, businessIndex)[0];
   }, [businessIndex, masterVaultPda]);
+  const canonicalBusinessPda = useMemo(() => employee?.business ?? businessPda, [employee, businessPda]);
   const employeePda = useMemo(() => {
     if (!businessPda || employeeIndex === null) return null;
     return getEmployeeV4PDA(businessPda, employeeIndex)[0];
@@ -209,7 +278,7 @@ export default function EmployeeV4Page() {
 
   // ── One-click withdraw state machine ──
   const handleOneClickWithdraw = useCallback(async () => {
-    if (!wallet.publicKey || !businessPda || employeeIndex === null) {
+    if (!wallet.publicKey || !canonicalBusinessPda || employeeIndex === null) {
       setError('Connect wallet and load your employee record first.');
       return;
     }
@@ -217,6 +286,9 @@ export default function EmployeeV4Page() {
     setWithdrawProgress('');
     setError('');
     setMessage('');
+    setSettledWithdrawalAmount(null);
+    setLatestPayoutAmountRevealed(null);
+    setRegistryBalanceRevealed(null);
 
     if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
       setError('System Error: TEE environment is not explicitly enabled. Cannot safely execute withdrawal.');
@@ -261,26 +333,62 @@ export default function EmployeeV4Page() {
 
       // Step 3: Wait for stream to return to base layer
       setWithdrawPhase('waiting_sync');
-      setWithdrawProgress('Waiting for stream to reach Solana...');
-      const employeePdaLocal = getEmployeeV4PDA(businessPda, employeeIndex)[0];
-      const PAYROLL_PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PAYROLL_PROGRAM_ID || '97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU');
+      setWithdrawProgress('Waiting for MagicBlock commit to finalize on Solana...');
+      const employeePdaLocal = employee?.address || getEmployeeV4PDA(canonicalBusinessPda, employeeIndex)[0];
       let syncReady = false;
-      for (let i = 0; i < 30; i++) {
-        const info = await connection.getAccountInfo(employeePdaLocal, 'confirmed');
-        if (info && info.owner.equals(PAYROLL_PROGRAM_ID)) {
-          syncReady = true;
-          break;
+      let committedEmployee: Awaited<ReturnType<typeof getEmployeeV4Account>> = null;
+      for (let i = 0; i < 45; i++) {
+        let delegatedOnRouter: boolean | null = null;
+        try {
+          const res = await fetch(`/api/magicblock/delegation-status?pubkey=${employeePdaLocal.toBase58()}`);
+          if (res.ok) {
+            const json = await res.json();
+            delegatedOnRouter =
+              json?.result?.isDelegated ?? json?.result?.delegated ?? json?.sdk?.delegated ?? null;
+          }
+        } catch {
+          // Best effort only; we'll still rely on account state below.
         }
-        setWithdrawProgress(`Waiting for stream to reach Solana... (${i + 1}s)`);
+
+        const latestEmployee = await getEmployeeV4Account(connection, canonicalBusinessPda, employeeIndex);
+        if (latestEmployee) {
+          setEmployee(latestEmployee);
+          const delegatedOnAccount = latestEmployee.isDelegated;
+          const baseReady =
+            delegatedOnAccount === false &&
+            (delegatedOnRouter === false || delegatedOnRouter === null);
+          if (baseReady) {
+            committedEmployee = latestEmployee;
+            syncReady = true;
+            break;
+          }
+        }
+
+        setWithdrawProgress(
+          `Waiting for MagicBlock commit to finalize on Solana... (${i + 1}/45)`
+        );
         await new Promise((r) => setTimeout(r, 2000));
       }
       if (!syncReady) {
-        throw new Error('Stream did not return to base layer in time. Try again in a minute.');
+        throw new Error('MagicBlock commit did not finalize on base layer in time. Please retry once the stream shows Base Layer status.');
       }
+
+      const computedSettledAmount =
+        revealed && committedEmployee
+          ? estimateEarnedLamports(
+              revealed.accruedLamportsCheckpoint,
+              revealed.salaryLamportsPerSec,
+              revealed.remainingBudgetCheckpoint,
+              revealed.checkpointTime,
+              committedEmployee.lastAccrualTime,
+            )
+          : revealed
+            ? earnedLamportsNow
+            : null;
 
       setWithdrawPhase('requesting');
       setWithdrawProgress('Requesting withdrawal from Solana...');
-      await requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
+      await requestWithdrawV4(connection, wallet, canonicalBusinessPda, employeeIndex, true);
 
       // Step 4: Execute full withdrawal (process + claim + redelegate)
       setWithdrawPhase('executing');
@@ -299,16 +407,31 @@ export default function EmployeeV4Page() {
       await executeFullWithdrawalV4(
         connection,
         wallet,
-        businessPda,
+        canonicalBusinessPda,
         employeeIndex,
         autoNonce,
         vaultTokenAccount,
         destToken
       );
 
+      const refreshedRegistry = await getUserTokenAccountV4(connection, wallet.publicKey, PAYUSD_MINT);
+      setUserTokenRegistry(refreshedRegistry);
+      if (
+        refreshedRegistry &&
+        !refreshedRegistry.incoTokenAccount.equals(PublicKey.default)
+      ) {
+        setDestinationTokenAccount(refreshedRegistry.incoTokenAccount.toBase58());
+      }
+      const refreshedEmployee = await getEmployeeV4Account(connection, canonicalBusinessPda, employeeIndex);
+      setEmployee(refreshedEmployee);
+      const refreshedPayouts = await getPayoutsForEmployeeV4(connection, canonicalBusinessPda, employeeIndex, { limit: 5 });
+      setPayouts(refreshedPayouts);
+      setRegistryBalanceRevealed(null);
+      setSettledWithdrawalAmount(computedSettledAmount);
+      setMessage('✅ Withdrawal complete! PayUSD deposited to your private wallet.');
+
       setWithdrawPhase('done');
       setWithdrawProgress('');
-      setMessage('✅ Withdrawal complete! PayUSD deposited to your private wallet.');
     } catch (e: any) {
       setWithdrawPhase('error');
       setWithdrawProgress('');
@@ -316,7 +439,7 @@ export default function EmployeeV4Page() {
     } finally {
       setBusy(false);
     }
-  }, [wallet, connection, businessPda, businessIndex, employeeIndex, employee?.isDelegated]);
+  }, [wallet, connection, canonicalBusinessPda, businessIndex, employeeIndex, employee, revealed, earnedLamportsNow]);
 
 
 
@@ -375,6 +498,7 @@ export default function EmployeeV4Page() {
     await runAction('Refresh employee', async () => {
       const account = await getEmployeeV4Account(connection, businessPda, employeeIndex);
       setEmployee(account);
+      setScanError('');
       return account;
     });
     await refreshWithdrawRequest();
@@ -393,29 +517,41 @@ export default function EmployeeV4Page() {
     try {
       const result = await findEmploymentRecordV4(connection, wallet);
       if (result) {
+        const [scannedBusinessPda] = getBusinessV4PDA(masterVaultPda, result.businessIndex);
         setBusinessIndexInput(result.businessIndex.toString());
         setEmployeeIndexInput(result.employeeIndex.toString());
+        setScanError('');
         setScanSuccess(true);
         setMessage(`Success! Found Business ${result.businessIndex}, Employee ${result.employeeIndex}`);
-        // Trigger localized refreshes
-        setTimeout(() => {
-          refreshEmployee();
-        }, 100);
+        try {
+          const account = await getEmployeeV4Account(connection, scannedBusinessPda, result.employeeIndex);
+          setEmployee(account);
+          await refreshWithdrawRequest();
+          await refreshPayouts();
+        } catch {
+          // Let the normal state-driven refresh path populate the account on the next render.
+        }
       } else {
         setScanError('No employment record found for this wallet.');
       }
     } catch (err: any) {
-      setScanError(err.message || 'Scan failed.');
+      const msg = err?.message || 'Scan failed.';
+      setScanError(
+        isCiphertextMissingError(msg)
+          ? 'Magic Scan found a matching record, but one older encrypted handle is not currently readable from the covalidator. Your record is still safe. Try Find Record or continue to Step 3.'
+          : msg
+      );
     } finally {
       setScanBusy(false);
     }
-  }, [connection, wallet, refreshEmployee]);
+  }, [connection, masterVaultPda, refreshPayouts, refreshWithdrawRequest, wallet]);
 
   const loadEmployeeSilent = useCallback(async () => {
     if (!businessPda || employeeIndex === null) return;
     try {
       const account = await getEmployeeV4Account(connection, businessPda, employeeIndex);
       setEmployee(account);
+      setScanError('');
     } catch {
       // silent refresh
     }
@@ -455,6 +591,7 @@ export default function EmployeeV4Page() {
       return;
     }
     setUserTokenRegistryLoading(true);
+    setRegistryBalanceRevealed(null);
     try {
       const registry = await getUserTokenAccountV4(connection, wallet.publicKey, PAYUSD_MINT);
       setUserTokenRegistry(registry);
@@ -526,14 +663,15 @@ export default function EmployeeV4Page() {
 
     const tick = () => {
       const now = Math.floor(Date.now() / 1000);
-      setEarnedLamportsNow(
-        estimateEarnedLamports(
-          revealed.accruedLamportsCheckpoint,
-          revealed.salaryLamportsPerSec,
-          revealed.checkpointTime,
-          now
-        )
-      );
+        setEarnedLamportsNow(
+          estimateEarnedLamports(
+            revealed.accruedLamportsCheckpoint,
+            revealed.salaryLamportsPerSec,
+            revealed.remainingBudgetCheckpoint,
+            revealed.checkpointTime,
+            now
+          )
+        );
     };
 
     tick();
@@ -547,6 +685,28 @@ export default function EmployeeV4Page() {
       }
     };
   }, [revealed]);
+
+  useEffect(() => {
+    if (!employee) return;
+    if (payslipStart && payslipEnd) return;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const checkpointSec = Math.max(employee.lastAccrualTime || 0, employee.lastSettleTime || 0, 0);
+    const defaultEndSec = nowSec;
+    const defaultStartSec =
+      employee.lastSettleTime > 0 && employee.lastSettleTime < defaultEndSec
+        ? employee.lastSettleTime
+        : checkpointSec > 0 && checkpointSec < defaultEndSec
+          ? checkpointSec
+          : Math.max(defaultEndSec - 3600, 1);
+
+    if (!payslipStart) {
+      setPayslipStart(toDateTimeLocalValue(defaultStartSec));
+    }
+    if (!payslipEnd) {
+      setPayslipEnd(toDateTimeLocalValue(defaultEndSec));
+    }
+  }, [employee, payslipEnd, payslipStart]);
 
 
 
@@ -575,47 +735,217 @@ export default function EmployeeV4Page() {
     [wallet]
   );
 
-  const revealRegistryBalance = useCallback(async () => {
+  const revealRegistryBalance = useCallback(async (optimisticBalance?: bigint | any) => {
     if (!wallet.publicKey || !userTokenRegistry) return;
     setRegistryBalanceLoading(true);
+    if (typeof optimisticBalance === 'bigint') {
+      setRegistryBalanceRevealed(optimisticBalance);
+      setMessage('Verifying your new balance with the Inco FHE Coprocessor...');
+    } else {
+      setRegistryBalanceRevealed(null);
+      setMessage('');
+    }
+    setError('');
     try {
-      const { readU128LEFrom32, checkAllowanceStale, grantIncoDecryptAccessForHandle } = await import('../lib/payroll-client');
+      const {
+        readU128LEFrom32,
+        checkAllowanceStale,
+        grantIncoDecryptAccessForHandle,
+      } = await import('../lib/payroll-client');
 
-      // Fetch the live Inco Token Account data to get the latest encrypted balance handle
-      const accountInfo = await connection.getAccountInfo(userTokenRegistry.incoTokenAccount, 'confirmed');
-      if (!accountInfo) throw new Error('Inco Token Account not found');
-      
-      const handleData = accountInfo.data.slice(72, 104);
-      const handleValue = readU128LEFrom32(Buffer.from(handleData));
-      
+      const readCurrentHandle = async (): Promise<bigint> => {
+        const liveRegistry = await getUserTokenAccountV4(connection, wallet.publicKey!, PAYUSD_MINT);
+        if (liveRegistry) {
+          setUserTokenRegistry(liveRegistry);
+          if (!liveRegistry.incoTokenAccount.equals(PublicKey.default)) {
+            setDestinationTokenAccount(liveRegistry.incoTokenAccount.toBase58());
+          }
+          return readU128LEFrom32(Buffer.from(liveRegistry.encryptedBalance));
+        }
+        return 0n;
+      };
+
+      let handleValue = await readCurrentHandle();
+
       if (handleValue === 0n) {
         setRegistryBalanceRevealed(0n);
         setMessage('Private balance is zero.');
         return;
       }
 
-      // 1. Check if we have permission to view this handle on the TEE
-      const isStale = await checkAllowanceStale(connection, handleValue, wallet.publicKey);
-      if (isStale) {
-        setMessage('Proof of ownership required. Please sign to grant TEE view access...');
-        await grantIncoDecryptAccessForHandle(connection, wallet, handleValue);
-      }
-      
-      // 2. Request decryption using the SDK helper
-      const result = await decryptHandlesLocal([handleValue.toString()]);
-      
-      if (result?.plaintexts?.[0] !== undefined) {
-        setRegistryBalanceRevealed(BigInt(result.plaintexts[0]));
+      const decryptHandle = async (value: bigint): Promise<bigint> => {
+        const result = await decryptHandlesLocal([value.toString()]);
+        if (result?.plaintexts?.[0] === undefined) {
+          throw new Error('Failed to decrypt balance');
+        }
+        return BigInt(result.plaintexts[0]);
+      };
+
+      const tryReveal = async (value: bigint): Promise<bigint | null> => {
+        const isStale = await checkAllowanceStale(connection, value, wallet.publicKey!);
+        if (isStale) {
+          setMessage('Proof of ownership required. Please sign to grant TEE view access...');
+          await grantIncoDecryptAccessForHandle(connection, wallet, value);
+        }
+
+        try {
+          return await decryptHandle(value);
+        } catch (decryptErr: any) {
+          const msg = decryptErr?.message || 'Failed to reveal private balance';
+          if (isPermissionError(msg)) {
+            setMessage('Refreshing TEE view access and retrying private balance...');
+            await grantIncoDecryptAccessForHandle(connection, wallet, value);
+            return decryptHandle(value);
+          }
+          if (isCiphertextMissingError(msg)) {
+            return null;
+          }
+          throw decryptErr;
+        }
+      };
+
+      // First attempt
+      const revealed = await tryReveal(handleValue);
+      if (revealed !== null) {
+        setRegistryBalanceRevealed(revealed);
         setMessage('Private balance revealed!');
-      } else {
-        throw new Error('Failed to decrypt balance');
+        return;
       }
+
+      // Poll the covalidator: retry up to 25 times with 3-second delays (≈75s total)
+      const MAX_POLL_ATTEMPTS = 25;
+      const POLL_DELAY_MS = 3_000;
+
+      for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
+        setMessage(
+          `Inco FHE Coprocessor is computing your new private balance... (${attempt}/${MAX_POLL_ATTEMPTS})`
+        );
+        await new Promise((r) => setTimeout(r, POLL_DELAY_MS));
+
+        // Re-read handle — it may change between polls
+        handleValue = await readCurrentHandle();
+        if (handleValue === 0n) {
+          setRegistryBalanceRevealed(0n);
+          setMessage('Private balance is zero.');
+          return;
+        }
+
+        const retried = await tryReveal(handleValue);
+        if (retried !== null) {
+          setRegistryBalanceRevealed(retried);
+          setMessage('Private balance revealed!');
+          return;
+        }
+      }
+
+      // All retries exhausted — surface a clearer message
+      throw new Error(
+        'The Inco FHE network is taking longer than expected to process your encrypted balance. ' +
+        'Your funds have been successfully transferred, but the ciphertext is not ready for decryption yet. Please check back in a minute.'
+      );
     } catch (e: any) {
       setError(e?.message || 'Failed to reveal private balance');
     } finally {
       setRegistryBalanceLoading(false);
     }
   }, [connection, decryptHandlesLocal, userTokenRegistry, wallet]);
+
+  useEffect(() => {
+    if (triggerReveal) {
+      setTriggerReveal(false);
+      // We pass the current optimistic balance down to keep the UI stable while it polls
+      const optimistic = typeof registryBalanceRevealed === 'bigint' ? registryBalanceRevealed : undefined;
+      revealRegistryBalance(optimistic);
+    }
+  }, [triggerReveal, revealRegistryBalance, registryBalanceRevealed]);
+
+  const revealLatestPayoutAmount = useCallback(async () => {
+    if (!wallet.publicKey) {
+      setError('Connect wallet first.');
+      return;
+    }
+    if (!latestPayout) {
+      setError('No recent payout found yet.');
+      return;
+    }
+
+    setLatestPayoutAmountLoading(true);
+    setLatestPayoutAmountRevealed(null);
+    setError('');
+    try {
+      const { readU128LEFrom32, checkAllowanceStale, grantIncoDecryptAccessForHandle } = await import('../lib/payroll-client');
+      const handleValue = readU128LEFrom32(Buffer.from(latestPayout.encryptedAmount));
+      if (handleValue === 0n) {
+        setLatestPayoutAmountRevealed(0n);
+        setMessage('Latest payout amount is zero.');
+        return;
+      }
+
+      const stale = await checkAllowanceStale(connection, handleValue, wallet.publicKey);
+      if (stale) {
+        setMessage('Proof of ownership required. Please sign to reveal the latest payout amount...');
+        await grantIncoDecryptAccessForHandle(connection, wallet, handleValue);
+      }
+
+      const decryptOne = async (): Promise<bigint> => {
+        const result = await decryptHandlesLocal([handleValue.toString()]);
+        if (result?.plaintexts?.[0] === undefined) {
+          throw new Error('Failed to decrypt payout amount');
+        }
+        return BigInt(result.plaintexts[0]);
+      };
+
+      const tryDecrypt = async (): Promise<bigint | null> => {
+        try {
+          return await decryptOne();
+        } catch (decryptErr: any) {
+          const msg = decryptErr?.message || 'Failed to decrypt payout amount';
+          if (isPermissionError(msg)) {
+            await grantIncoDecryptAccessForHandle(connection, wallet, handleValue);
+            return decryptOne();
+          }
+          if (isCiphertextMissingError(msg)) {
+            return null;
+          }
+          throw decryptErr;
+        }
+      };
+
+      // First attempt
+      const firstResult = await tryDecrypt();
+      if (firstResult !== null) {
+        setLatestPayoutAmountRevealed(firstResult);
+        setMessage('Latest withdrawal amount revealed.');
+        return;
+      }
+
+      // Poll the covalidator: retry up to 20 times with 3-second delays
+      const MAX_POLL = 20;
+      const POLL_DELAY = 3_000;
+      for (let attempt = 1; attempt <= MAX_POLL; attempt++) {
+        setMessage(
+          `Inco FHE Coprocessor is computing the payout amount... (${attempt}/${MAX_POLL})`
+        );
+        await new Promise((r) => setTimeout(r, POLL_DELAY));
+
+        const retried = await tryDecrypt();
+        if (retried !== null) {
+          setLatestPayoutAmountRevealed(retried);
+          setMessage('Latest withdrawal amount revealed.');
+          return;
+        }
+      }
+
+      throw new Error(
+        'The Inco FHE network is taking longer than expected to process your payout amount. ' +
+        'Please wait a minute and try again.'
+      );
+    } catch (e: any) {
+      setError(e?.message || 'Failed to reveal latest withdrawal amount');
+    } finally {
+      setLatestPayoutAmountLoading(false);
+    }
+  }, [connection, decryptHandlesLocal, latestPayout, wallet]);
 
   const revealLiveEarnings = useCallback(async () => {
     if (!wallet.publicKey) {
@@ -630,41 +960,138 @@ export default function EmployeeV4Page() {
       setError('Load employee record first.');
       return;
     }
+    if (!businessPda || employeeIndex === null) {
+      setError('Business and employee index are required.');
+      return;
+    }
 
     setRevealLoading(true);
     setError('');
+    setLiveEarningsNote('');
     try {
-      const handles = getEmployeeV4DecryptHandles(employee);
-      const result = await decryptHandlesLocal([handles.salaryHandle, handles.accruedHandle]);
-      const salary = BigInt(result?.plaintexts?.[0] || '0');
-      const accrued = BigInt(result?.plaintexts?.[1] || '0');
-      const checkpointTime = employee.lastAccrualTime > 0 ? employee.lastAccrualTime : employee.lastSettleTime;
+      const latestEmployee =
+        (await getEmployeeV4Account(connection, businessPda, employeeIndex)) || employee;
+      if (latestEmployee !== employee) {
+        setEmployee(latestEmployee);
+      }
+
+      const handles = getEmployeeV4DecryptHandles(latestEmployee);
+      const decryptOne = async (handle: string): Promise<bigint> => {
+        const result = await decryptHandlesLocal([handle]);
+        return BigInt(result?.plaintexts?.[0] || '0');
+      };
+
+      let salary: bigint | null = null;
+      let accrued: bigint | null = null;
+      let remainingBudget: bigint | null = null;
+      let usedCiphertextFallback = false;
+
+      try {
+        salary = await decryptOne(handles.salaryHandle);
+      } catch (salaryErr: any) {
+        const salaryMsg = salaryErr?.message || 'Failed to decrypt salary handle';
+        if (isPermissionError(salaryMsg)) {
+          await refreshEmployeeViewAccess();
+          salary = await decryptOne(handles.salaryHandle);
+        } else if (isCiphertextMissingError(salaryMsg)) {
+          salary = 0n;
+          usedCiphertextFallback = true;
+        } else {
+          throw salaryErr;
+        }
+      }
+
+      try {
+        accrued = await decryptOne(handles.accruedHandle);
+      } catch (accruedErr: any) {
+        const accruedMsg = accruedErr?.message || 'Failed to decrypt accrued handle';
+        if (isPermissionError(accruedMsg)) {
+          await refreshEmployeeViewAccess();
+          accrued = await decryptOne(handles.accruedHandle);
+        } else if (isCiphertextMissingError(accruedMsg)) {
+          accrued = 0n;
+          usedCiphertextFallback = true;
+        } else {
+          throw accruedErr;
+        }
+      }
+
+      try {
+        remainingBudget = await decryptOne(handles.remainingBudgetHandle);
+      } catch (remainingErr: any) {
+        const remainingMsg = remainingErr?.message || 'Failed to decrypt remaining budget handle';
+        if (isPermissionError(remainingMsg)) {
+          await refreshEmployeeViewAccess();
+          remainingBudget = await decryptOne(handles.remainingBudgetHandle);
+        } else if (isCiphertextMissingError(remainingMsg)) {
+          remainingBudget = 0n;
+          usedCiphertextFallback = true;
+        } else {
+          throw remainingErr;
+        }
+      }
+
+      if (salary === null || accrued === null || remainingBudget === null) {
+        throw new Error('Live earnings are temporarily unavailable for this stream state.');
+      }
+
+      const checkpointTime =
+        latestEmployee.lastAccrualTime > 0 ? latestEmployee.lastAccrualTime : latestEmployee.lastSettleTime;
       setRevealed({
         salaryLamportsPerSec: salary,
         accruedLamportsCheckpoint: accrued,
+        remainingBudgetCheckpoint: remainingBudget,
         checkpointTime,
         revealedAt: Math.floor(Date.now() / 1000),
       });
-      setMessage('Live earnings revealed.');
+      setLiveEarningsNote(
+        usedCiphertextFallback
+          ? 'One or more encrypted checkpoints were not materialized by the covalidator yet, so this snapshot may be partial.'
+          : ''
+      );
+      setMessage(
+        usedCiphertextFallback
+          ? 'Live earnings opened with a zero fallback for a non-materialized ciphertext handle. The stream is readable, but one encrypted checkpoint is not currently available from the covalidator.'
+          : 'Live earnings revealed.'
+      );
     } catch (e: any) {
       const msg = e?.message || 'Failed to reveal live earnings';
-      if (isPermissionError(msg)) {
+      if (isPermissionError(msg) || isCiphertextMissingError(msg)) {
         try {
+          const refreshedEmployee =
+            (await getEmployeeV4Account(connection, businessPda, employeeIndex)) || employee;
+          if (refreshedEmployee !== employee) {
+            setEmployee(refreshedEmployee);
+          }
           await refreshEmployeeViewAccess();
-          const handles = getEmployeeV4DecryptHandles(employee);
-          const retried = await decryptHandlesLocal([handles.salaryHandle, handles.accruedHandle]);
-          const salary = BigInt(retried?.plaintexts?.[0] || '0');
-          const accrued = BigInt(retried?.plaintexts?.[1] || '0');
-          const checkpointTime = employee.lastAccrualTime > 0 ? employee.lastAccrualTime : employee.lastSettleTime;
+          const handles = getEmployeeV4DecryptHandles(refreshedEmployee);
+          const retriedSalary = await decryptHandlesLocal([handles.salaryHandle]).catch(() => ({ plaintexts: ['0'] }));
+          const retriedAccrued = await decryptHandlesLocal([handles.accruedHandle]).catch(() => ({ plaintexts: ['0'] }));
+          const retriedRemaining = await decryptHandlesLocal([handles.remainingBudgetHandle]).catch(() => ({ plaintexts: ['0'] }));
+          const salary = BigInt(retriedSalary?.plaintexts?.[0] || '0');
+          const accrued = BigInt(retriedAccrued?.plaintexts?.[0] || '0');
+          const remainingBudget = BigInt(retriedRemaining?.plaintexts?.[0] || '0');
+          const checkpointTime =
+            refreshedEmployee.lastAccrualTime > 0
+              ? refreshedEmployee.lastAccrualTime
+              : refreshedEmployee.lastSettleTime;
           setRevealed({
             salaryLamportsPerSec: salary,
             accruedLamportsCheckpoint: accrued,
+            remainingBudgetCheckpoint: remainingBudget,
             checkpointTime,
             revealedAt: Math.floor(Date.now() / 1000),
           });
-          setMessage('View access refreshed.');
+          setLiveEarningsNote(
+            'One or more encrypted checkpoints were not materialized by the covalidator yet, so this snapshot may be partial.'
+          );
+          setMessage('Refreshed the employee stream state and retried the live reveal.');
         } catch (retryErr: any) {
-          setError(retryErr?.message || msg);
+          setError(
+            isCiphertextMissingError(msg)
+              ? 'The current stream uses an encrypted handle that the covalidator cannot reveal yet. Try again after the next sync/settle, or use the withdraw flow to bring the stream back to base before revealing.'
+              : retryErr?.message || msg
+          );
         }
       } else {
         setError(msg);
@@ -673,10 +1100,15 @@ export default function EmployeeV4Page() {
       setRevealLoading(false);
     }
   }, [
+    businessPda,
+    connection,
     decryptHandlesLocal,
     employee,
+    employeeIndex,
     refreshEmployeeViewAccess,
     wallet.publicKey,
+    wallet.signMessage,
+    setLiveEarningsNote,
   ]);
 
   const generatePayslip = useCallback(async () => {
@@ -688,14 +1120,18 @@ export default function EmployeeV4Page() {
       setError('Load employee record first.');
       return;
     }
+    if (!payslipStart || !payslipEnd) {
+      setError('Choose both the start and end time for the signed statement.');
+      return;
+    }
     const startSec = Math.floor(new Date(payslipStart).getTime() / 1000);
     const endSec = Math.floor(new Date(payslipEnd).getTime() / 1000);
     if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec <= 0 || endSec <= 0) {
-      setError('Invalid statement time window');
+      setError('Choose a valid statement time window.');
       return;
     }
     if (endSec <= startSec) {
-      setError('End must be after start');
+      setError('End time must be after start time.');
       return;
     }
 
@@ -729,29 +1165,33 @@ export default function EmployeeV4Page() {
 
       const uniqueHandles = Array.from(new Set(effectiveRates.map((r) => r.handle)));
       const plaintextByHandle = new Map<string, bigint>();
+      let usedCiphertextFallback = false;
+      let refreshedAccess = false;
 
-      const decodePlaintexts = (plaintexts: string[]) => {
-        for (let i = 0; i < uniqueHandles.length; i += 1) {
-          plaintextByHandle.set(uniqueHandles[i]!, BigInt(plaintexts[i] || '0'));
+      const decryptRateHandle = async (handle: string): Promise<bigint> => {
+        try {
+          const result = await decryptHandlesLocal([handle]);
+          return BigInt(result?.plaintexts?.[0] || '0');
+        } catch (e: any) {
+          const msg = e?.message || 'Failed to decrypt salary handle';
+          if (isPermissionError(msg)) {
+            if (!refreshedAccess) {
+              await refreshEmployeeViewAccess();
+              refreshedAccess = true;
+            }
+            const retried = await decryptHandlesLocal([handle]);
+            return BigInt(retried?.plaintexts?.[0] || '0');
+          }
+          if (isCiphertextMissingError(msg)) {
+            usedCiphertextFallback = true;
+            return 0n;
+          }
+          throw e;
         }
       };
 
-      try {
-        const result = await decryptHandlesLocal(uniqueHandles);
-        decodePlaintexts(result?.plaintexts || []);
-      } catch (e: any) {
-        const msg = e?.message || 'Failed to decrypt salary handles';
-        if (isPermissionError(msg)) {
-          try {
-            await refreshEmployeeViewAccess();
-            const retried = await decryptHandlesLocal(uniqueHandles);
-            decodePlaintexts(retried?.plaintexts || []);
-          } catch (retryErr: any) {
-            throw retryErr;
-          }
-        } else {
-          throw e;
-        }
+      for (const handle of uniqueHandles) {
+        plaintextByHandle.set(handle, await decryptRateHandle(handle));
       }
 
       let total = 0n;
@@ -782,7 +1222,9 @@ export default function EmployeeV4Page() {
         rateEntries,
         earnedLamports: total.toString(),
         earnedUi: formatTokenAmount(total),
-        note,
+        note: usedCiphertextFallback
+          ? `${note} One or more encrypted rate handles were not materialized by the covalidator, so those segments were treated as zero in this statement.`
+          : note,
       };
 
       const messageBytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -790,23 +1232,66 @@ export default function EmployeeV4Page() {
       const { default: bs58 } = await import('bs58');
       const signed = { ...payload, signer: wallet.publicKey.toBase58(), signature: bs58.encode(sigBytes) };
       setPayslipJson(JSON.stringify(signed, null, 2));
-      setMessage('Signed earnings statement generated.');
+      setMessage(
+        usedCiphertextFallback
+          ? 'Signed earnings statement generated with a zero fallback for a non-materialized encrypted rate handle.'
+          : 'Signed earnings statement generated.'
+      );
     } catch (e: any) {
       const msg = e?.message || 'Failed to generate statement';
-      setError(msg);
+      setError(
+        isCiphertextMissingError(msg)
+          ? 'One of the encrypted salary checkpoints is not currently available from the covalidator. Try again after the next sync, or generate the statement after bringing the stream back to base.'
+          : msg
+      );
     } finally {
       setPayslipLoading(false);
     }
   }, [
     businessPda,
     connection,
+    decryptHandlesLocal,
     employee,
     employeeIndex,
     payslipEnd,
     payslipStart,
-    wallet.publicKey,
-    wallet.signMessage,
+    refreshEmployeeViewAccess,
+    wallet,
   ]);
+
+  const handleDownloadPayslip = useCallback(() => {
+    if (!payslipJson) {
+      setError('Generate the signed statement first.');
+      return;
+    }
+    if (typeof window === 'undefined') return;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `expensee-signed-statement-b${businessIndex ?? 'x'}-e${employeeIndex ?? 'x'}-${timestamp}.json`;
+    const blob = new Blob([payslipJson], { type: 'application/json;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+    setMessage(`Downloaded ${filename}`);
+  }, [businessIndex, employeeIndex, payslipJson]);
+
+  const handleCopyPayslip = useCallback(async () => {
+    if (!payslipJson) {
+      setError('Generate the signed statement first.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(payslipJson);
+      setMessage('Signed statement copied to clipboard.');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to copy signed statement.');
+    }
+  }, [payslipJson]);
 
   const registryLinked = Boolean(
     userTokenRegistry && !userTokenRegistry.incoTokenAccount.equals(PublicKey.default)
@@ -1069,7 +1554,7 @@ export default function EmployeeV4Page() {
               <div className="mb-4 rounded-2xl border-2 border-emerald-400/40 bg-gradient-to-r from-emerald-50 to-teal-50 p-5">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-lg font-bold text-emerald-800">Quick Withdraw (Recommended)</div>
+                    <div className="text-lg font-bold text-emerald-800">One-Click Withdraw (Recommended)</div>
                     <p className="mt-1 text-sm text-emerald-700/80">
                       One click to withdraw all earned PayUSD. Expensee handles MagicBlock sync, payout processing, and claim preparation automatically.
                     </p>
@@ -1079,7 +1564,7 @@ export default function EmployeeV4Page() {
                     disabled={busy || withdrawPhase !== 'idle' && withdrawPhase !== 'done' && withdrawPhase !== 'error'}
                     className="premium-btn premium-btn-primary text-lg px-8 py-3 disabled:opacity-50"
                   >
-                    {withdrawPhase === 'done' ? 'Done' : withdrawPhase !== 'idle' && withdrawPhase !== 'error' ? 'Working...' : 'Withdraw'}
+                    {withdrawPhase === 'done' ? 'Done' : withdrawPhase !== 'idle' && withdrawPhase !== 'error' ? 'Working...' : 'One-Click Withdraw'}
                   </button>
                 </div>
                 {withdrawPhase !== 'idle' && (
@@ -1113,6 +1598,119 @@ export default function EmployeeV4Page() {
               </div>
             )}
 
+            <div className="mb-4 rounded-2xl border border-white/10 bg-black/20 p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-[#F5F5F5]">Private wallet summary</h2>
+                  <p className="mt-1 text-sm text-gray-400">
+                    Your withdrawn PayUSD lands in this linked private token account first.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => void revealRegistryBalance()}
+                    disabled={registryBalanceLoading || !registryLinked}
+                    className="premium-btn premium-btn-secondary disabled:opacity-50"
+                  >
+                    {registryBalanceLoading ? 'Revealing...' : 'Reveal Private Balance'}
+                  </button>
+                  <button
+                    onClick={() => void refreshUserTokenRegistry()}
+                    disabled={busy || userTokenRegistryLoading}
+                    className="premium-btn premium-btn-secondary disabled:opacity-50"
+                  >
+                    {userTokenRegistryLoading ? 'Refreshing...' : 'Refresh Wallet'}
+                  </button>
+                  {(registryBalanceRevealed !== null || settledWithdrawalAmount !== null) && registryLinked ? (
+                    <button
+                      onClick={() => {
+                        const params = new URLSearchParams();
+                        params.set('confidentialTokenAccount', userTokenRegistry!.incoTokenAccount.toBase58());
+                        params.set(
+                          'amountUi',
+                          formatTokenAmount(
+                            registryBalanceRevealed !== null ? registryBalanceRevealed : settledWithdrawalAmount || 0n
+                          )
+                        );
+                        router.push(`/bridge?${params.toString()}`);
+                      }}
+                      className="premium-btn premium-btn-primary"
+                    >
+                      Unwrap To Public
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Private balance</div>
+                  <div className="mt-2 text-2xl font-semibold text-emerald-400">
+                    {registryBalanceRevealed !== null ? `${formatTokenAmount(registryBalanceRevealed)} PayUSD` : 'Hidden'}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    {registryBalanceRevealed !== null
+                      ? 'This is your current confidential wallet balance.'
+                      : 'Click Reveal Private Balance to confirm how much PayUSD is now in your private wallet.'}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Linked private account</div>
+                  <div className="mt-2 break-all font-mono text-sm text-gray-200">
+                    {registryLinked && userTokenRegistry
+                      ? userTokenRegistry.incoTokenAccount.toBase58()
+                      : destinationTokenAccount || 'Not linked yet'}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    This is where One-Click Withdraw deposits PayUSD before any public unwrap.
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Latest withdrawal</div>
+                  <div className="mt-2 text-sm text-gray-200">
+                    {latestPayout ? `Nonce ${latestPayout.nonce}` : 'No payout recorded yet'}
+                  </div>
+                  {latestPayout ? (
+                    <div className="mt-2">
+                      <div className="text-lg font-semibold text-emerald-400">
+                        {latestPayoutAmountRevealed !== null
+                          ? `${formatTokenAmount(latestPayoutAmountRevealed)} PayUSD`
+                          : settledWithdrawalAmount !== null
+                            ? `${formatTokenAmount(settledWithdrawalAmount)} PayUSD`
+                            : 'Amount hidden'}
+                      </div>
+                      {settledWithdrawalAmount !== null && latestPayoutAmountRevealed === null ? (
+                        <div className="mt-1 text-[11px] text-cyan-300">
+                          Settled using the Step 3 reveal and the final base-layer commit timestamp.
+                        </div>
+                      ) : null}
+                      <button
+                        onClick={() => void revealLatestPayoutAmount()}
+                        disabled={latestPayoutAmountLoading}
+                        className="mt-2 text-[11px] font-bold uppercase tracking-[0.14em] text-cyan-300 transition hover:text-cyan-200 disabled:opacity-50"
+                      >
+                        {latestPayoutAmountLoading ? 'Revealing amount...' : 'Reveal latest withdrawal amount'}
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="mt-2 text-xs text-gray-400">
+                    {latestPayout
+                      ? `${latestPayout.claimed ? 'Claimed to your private wallet' : latestPayout.cancelled ? 'Cancelled' : 'Pending'} · ${latestPayout.createdAt ? new Date(latestPayout.createdAt * 1000).toLocaleString() : 'time unavailable'}`
+                      : 'After a successful withdraw, your latest payout will show up here.'}
+                  </div>
+                </div>
+              </div>
+
+              {revealed ? (
+                <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-sm text-cyan-100">
+                  Pre-withdraw snapshot: {formatTokenAmount(earnedLamportsNow)} PayUSD.
+                  If the post-claim private balance is still waiting on covalidator materialization, use this Step 3 reveal or the signed statement as your amount proof for the demo.
+                </div>
+              ) : null}
+            </div>
+
             <AdvancedDetails title="Manual withdrawal controls">
               <div className="space-y-4">
                 <div className="grid gap-4 lg:grid-cols-2">
@@ -1133,8 +1731,8 @@ export default function EmployeeV4Page() {
                       <div className="flex flex-wrap gap-2">
                         <button
                           onClick={async () => {
-                            if (!businessPda) {
-                              setError('Business index is required.');
+                            if (!canonicalBusinessPda) {
+                              setError('Load your employee record first.');
                               return;
                             }
                             if (process.env.NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED !== 'true') {
@@ -1153,13 +1751,13 @@ export default function EmployeeV4Page() {
                             }
                             await runAction('Request withdraw', () => {
                               if (employeeIndex === null) throw new Error('Employee index is required');
-                              return requestWithdrawV4(connection, wallet, businessPda, employeeIndex, true);
+                              return requestWithdrawV4(connection, wallet, canonicalBusinessPda, employeeIndex, true);
                             });
                             await refreshWithdrawRequest();
                             await refreshPayout();
                             await refreshPayouts();
                           }}
-                          disabled={busy || !businessPda || employeeIndex === null}
+                          disabled={busy || !canonicalBusinessPda || employeeIndex === null}
                           className="premium-btn premium-btn-primary disabled:opacity-50"
                         >
                           Request Withdraw
@@ -1443,8 +2041,8 @@ export default function EmployeeV4Page() {
                         </button>
                         <button
                           onClick={async () => {
-                            if (!businessPda) {
-                              setError('Business index is required.');
+                            if (!canonicalBusinessPda) {
+                              setError('Load your employee record first.');
                               return;
                             }
                             if (employeeIndex === null || nonce === null) {
@@ -1461,7 +2059,7 @@ export default function EmployeeV4Page() {
                               return executeFullWithdrawalV4(
                                 connection,
                                 wallet,
-                                businessPda,
+                                canonicalBusinessPda,
                                 employeeIndex,
                                 nonce,
                                 master.vaultTokenAccount,
@@ -1474,7 +2072,7 @@ export default function EmployeeV4Page() {
                           }}
                           disabled={
                             busy ||
-                            !businessPda ||
+                            !canonicalBusinessPda ||
                             employeeIndex === null ||
                             nonce === null ||
                             !destinationTokenAccount ||
@@ -1526,7 +2124,7 @@ export default function EmployeeV4Page() {
               <div className="panel-card">
                 <h2 className="text-lg font-semibold text-[#2D2D2A]">Live earnings</h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  Reveal your encrypted salary rate to see real-time earnings.
+                  Reveal your encrypted salary rate and funded budget to see real-time earnings capped by the employer&apos;s funded balance.
                 </p>
                 <div className="mt-4 space-y-3">
                   <div className="flex flex-wrap gap-2">
@@ -1560,12 +2158,25 @@ export default function EmployeeV4Page() {
                       <span className="text-sm text-gray-500">USDC (confidential)</span>
                     </div>
                     <div className="mt-1 text-[11px] text-gray-500">
-                      Live estimate · updates every second from last on-chain snapshot
+                      Live estimate · updates every second from the last on-chain snapshot, but never above the remaining funded budget.
                     </div>
-                    {revealed && revealed.salaryLamportsPerSec === 0n ? (
+                    {liveEarningsNote ? (
+                      <div className="mt-2 text-[11px] text-amber-500">
+                        {liveEarningsNote}
+                      </div>
+                    ) : null}
+                    {revealed && !liveEarningsNote && revealed.salaryLamportsPerSec === 0n ? (
                       <div className="mt-2 text-[11px] text-amber-500">
                         Salary rate is 0 — stream is paused or unfunded. Live estimate will not
                         increase until the employer tops up and updates your rate.
+                      </div>
+                    ) : null}
+                    {revealed &&
+                    !liveEarningsNote &&
+                    revealed.salaryLamportsPerSec > 0n &&
+                    revealed.remainingBudgetCheckpoint === 0n ? (
+                      <div className="mt-2 text-[11px] text-amber-500">
+                        The stream is active, but the remaining funded budget is 0. The employer needs to top up the pooled vault and update your salary to resume growth.
                       </div>
                     ) : null}
                     <div className="mt-2 grid gap-1">
@@ -1578,6 +2189,10 @@ export default function EmployeeV4Page() {
                         {revealed
                           ? new Date(revealed.checkpointTime * 1000).toLocaleString()
                           : '—'}
+                      </div>
+                      <div>
+                        Remaining funded budget:{' '}
+                        {revealed ? formatTokenAmount(revealed.remainingBudgetCheckpoint) : '—'}
                       </div>
                       <div>
                         On-chain snapshot:{' '}
@@ -1630,12 +2245,29 @@ export default function EmployeeV4Page() {
                   </button>
                 </div>
                 {payslipJson ? (
-                  <pre className="mt-4 max-h-80 overflow-auto rounded-lg bg-[#0B1320] p-4 text-xs text-[#E6EDF3]">
-                    {payslipJson}
-                  </pre>
+                  <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        onClick={handleDownloadPayslip}
+                        className="premium-btn premium-btn-primary"
+                      >
+                        Download JSON
+                      </button>
+                      <button
+                        onClick={() => void handleCopyPayslip()}
+                        className="premium-btn premium-btn-secondary"
+                      >
+                        Copy JSON
+                      </button>
+                    </div>
+                    <pre className="max-h-80 overflow-auto rounded-lg bg-[#0B1320] p-4 text-xs text-[#E6EDF3]">
+                      {payslipJson}
+                    </pre>
+                  </div>
                 ) : null}
                 <div className="mt-3 text-xs text-gray-500">
-                  Uses the current encrypted salary rate (v4 rate history is not yet exposed in the UI).
+                  Defaults to your last settled checkpoint through now. Uses the current encrypted salary rate when
+                  full v4 rate history is unavailable in the UI.
                 </div>
               </div>
             </div>

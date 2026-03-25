@@ -558,6 +558,19 @@ pub struct ClaimPayoutV4<'info> {
     #[account(mut)]
     pub destination_token_account: AccountInfo<'info>,
 
+    #[account(
+        mut,
+        seeds = [
+            USER_TOKEN_V4_SEED,
+            claimer.key().as_ref(),
+            master_vault_v4.mint.as_ref()
+        ],
+        bump = user_token_account_v4.bump,
+        constraint = user_token_account_v4.owner == claimer.key(),
+        constraint = user_token_account_v4.mint == master_vault_v4.mint
+    )]
+    pub user_token_account_v4: Account<'info, UserTokenAccountV4>,
+
     /// CHECK: Allowance PDA (Inco Lightning allow)
     pub allowance_account: AccountInfo<'info>,
 

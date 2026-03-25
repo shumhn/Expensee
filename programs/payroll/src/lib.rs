@@ -93,6 +93,84 @@ fn derive_permission_pda(permissioned_account: &Pubkey) -> (Pubkey, u8) {
 use helpers::*;
 use state::*;
 
+fn handle_or_zero<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    handle: &EncryptedHandle,
+) -> Result<u128> {
+    if is_handle_zero(handle) {
+        inco_as_euint128(signer, inco_lightning_program, 0, None)
+    } else {
+        Ok(handle_to_u128(handle))
+    }
+}
+
+fn accrue_employee_with_budget<'info>(
+    signer: &AccountInfo<'info>,
+    inco_lightning_program: &AccountInfo<'info>,
+    employee: &mut EmployeeEntryV4,
+    effective_to: i64,
+) -> Result<()> {
+    let mut effective_from = employee.last_accrual_time;
+    if employee.period_start > 0 && effective_from < employee.period_start {
+        effective_from = employee.period_start;
+    }
+
+    if effective_to <= effective_from {
+        return Ok(());
+    }
+
+    let elapsed = (effective_to - effective_from) as u128;
+    let salary_rate = handle_or_zero(signer, inco_lightning_program, &employee.encrypted_salary_rate)?;
+    let current_accrued = handle_or_zero(signer, inco_lightning_program, &employee.encrypted_accrued)?;
+    let current_remaining =
+        handle_or_zero(signer, inco_lightning_program, &employee.encrypted_remaining_budget)?;
+
+    let delta = inco_binary_op_u128(
+        signer,
+        inco_lightning_program,
+        "e_mul",
+        salary_rate,
+        elapsed,
+        1,
+        None,
+    )?;
+    let can_cover_delta = inco_e_ge(
+        signer,
+        inco_lightning_program,
+        current_remaining,
+        delta,
+        None,
+    )?;
+    let payable_delta = inco_e_select(
+        signer,
+        inco_lightning_program,
+        can_cover_delta,
+        delta,
+        current_remaining,
+        None,
+    )?;
+
+    let updated_accrued = inco_add_u128(
+        signer,
+        inco_lightning_program,
+        current_accrued,
+        payable_delta,
+        None,
+    )?;
+    let updated_remaining = inco_sub_u128(
+        signer,
+        inco_lightning_program,
+        current_remaining,
+        payable_delta,
+        None,
+    )?;
+
+    employee.encrypted_accrued = u128_to_handle(updated_accrued);
+    employee.encrypted_remaining_budget = u128_to_handle(updated_remaining);
+    Ok(())
+}
+
 // ============================================================
 // Program Instructions
 // ============================================================
@@ -198,6 +276,7 @@ pub mod payroll {
         let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         business.encrypted_balance = u128_to_handle(zero_handle);
         business.encrypted_employee_count = u128_to_handle(zero_handle);
+        business.encrypted_reserved_balance = u128_to_handle(zero_handle);
 
         let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
         let updated_business_count = inco_add_u128(
@@ -336,13 +415,35 @@ pub mod payroll {
             None,
         )?;
 
-        // 2. Compare: is_solvent = e_ge(business.encrypted_balance, required)
-        let balance_handle = handle_to_u128(&business.encrypted_balance);
-        let is_solvent = inco_e_ge(
+        let current_reserved = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &business.encrypted_reserved_balance,
+        )?;
+        let balance_handle = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &business.encrypted_balance,
+        )?;
+        let available_balance = inco_sub_u128(
             &signer,
             &inco_lightning_program,
             balance_handle,
-            required_handle,
+            current_reserved,
+            None,
+        )?;
+        let desired_budget = if required_deposit_amount > 0 {
+            required_handle
+        } else {
+            available_balance
+        };
+
+        // 2. Compare: is_solvent = e_ge(business.encrypted_balance, required)
+        let is_solvent = inco_e_ge(
+            &signer,
+            &inco_lightning_program,
+            available_balance,
+            desired_budget,
             None,
         )?;
 
@@ -350,7 +451,15 @@ pub mod payroll {
         //    If solvent → use the requested salary.
         //    If insolvent → salary becomes encrypted 0 (no-op stream).
         let zero_salary = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
-        let final_salary = inco_e_select(
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let has_budget = inco_e_ge(
+            &signer,
+            &inco_lightning_program,
+            desired_budget,
+            one_handle,
+            None,
+        )?;
+        let solvent_salary = inco_e_select(
             &signer,
             &inco_lightning_program,
             is_solvent,
@@ -358,13 +467,37 @@ pub mod payroll {
             zero_salary,
             None,
         )?;
+        let final_salary = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            has_budget,
+            solvent_salary,
+            zero_salary,
+            None,
+        )?;
         employee.encrypted_salary_rate = u128_to_handle(final_salary);
+        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        let final_budget = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            has_budget,
+            desired_budget,
+            zero_handle,
+            None,
+        )?;
+        employee.encrypted_remaining_budget = u128_to_handle(final_budget);
         // ── End solvency check ───────────────────────────────────────
 
-        let zero_handle = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
         employee.encrypted_accrued = u128_to_handle(zero_handle);
+        let updated_reserved = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_reserved,
+            final_budget,
+            None,
+        )?;
+        business.encrypted_reserved_balance = u128_to_handle(updated_reserved);
 
-        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
         let updated_employee_count = inco_add_u128(
             &signer,
             &inco_lightning_program,
@@ -487,57 +620,152 @@ pub mod payroll {
         let clock = Clock::get()?;
         let signer = ctx.accounts.caller.to_account_info();
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
-
-        let mut effective_from = employee.last_accrual_time;
-        if employee.period_start > 0 && effective_from < employee.period_start {
-            effective_from = employee.period_start;
-        }
         let mut effective_to = clock.unix_timestamp;
         if employee.period_end > 0 && effective_to > employee.period_end {
             effective_to = employee.period_end;
         }
-
-        if effective_to > effective_from {
-            let elapsed = (effective_to - effective_from) as u128;
-            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
-            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
-
-            let delta = inco_binary_op_u128(
-                &signer,
-                &inco_lightning_program,
-                "e_mul",
-                salary_rate,
-                elapsed,
-                1, None)?;	// scalar_byte = 1
-
-            let updated_accrued = inco_add_u128(
-                &signer,
-                &inco_lightning_program,
-                current_accrued,
-                delta, None)?;
-            employee.encrypted_accrued = u128_to_handle(updated_accrued);
-        }
+        accrue_employee_with_budget(
+            &signer,
+            &inco_lightning_program,
+            &mut employee,
+            effective_to,
+        )?;
 
         // Register new encrypted salary rate handle.
         let new_rate_handle =
             inco_new_euint128(&signer, &inco_lightning_program, encrypted_salary_rate, 0, None)?;
 
         // ── Private solvency check (Inco Lightning FHE) ──────────────
-        let required_handle = inco_as_euint128(
-            &signer, &inco_lightning_program,
-            required_deposit_amount as u128, None,
+        let current_accrued = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &employee.encrypted_accrued,
         )?;
-        let balance_handle = handle_to_u128(&ctx.accounts.business_v4.encrypted_balance);
+        let current_remaining = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &employee.encrypted_remaining_budget,
+        )?;
+        let current_employee_reserved = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_accrued,
+            current_remaining,
+            None,
+        )?;
+        let business_reserved = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &ctx.accounts.business_v4.encrypted_reserved_balance,
+        )?;
+        let business_balance = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &ctx.accounts.business_v4.encrypted_balance,
+        )?;
+        let available_balance = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            business_balance,
+            business_reserved,
+            None,
+        )?;
+        let available_plus_current = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            available_balance,
+            current_employee_reserved,
+            None,
+        )?;
+        let requested_total = if required_deposit_amount > 0 {
+            inco_as_euint128(
+                &signer,
+                &inco_lightning_program,
+                required_deposit_amount as u128,
+                None,
+            )?
+        } else {
+            available_plus_current
+        };
+        let requested_covers_accrued = inco_e_ge(
+            &signer,
+            &inco_lightning_program,
+            requested_total,
+            current_accrued,
+            None,
+        )?;
+        let desired_total_budget = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            requested_covers_accrued,
+            requested_total,
+            current_accrued,
+            None,
+        )?;
         let is_solvent = inco_e_ge(
-            &signer, &inco_lightning_program,
-            balance_handle, required_handle, None,
+            &signer,
+            &inco_lightning_program,
+            available_plus_current,
+            desired_total_budget,
+            None,
         )?;
         let zero_rate = inco_as_euint128(&signer, &inco_lightning_program, 0, None)?;
+        let provisional_rate = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            is_solvent,
+            new_rate_handle,
+            zero_rate,
+            None,
+        )?;
+        let final_total_budget = inco_e_select(
+            &signer,
+            &inco_lightning_program,
+            is_solvent,
+            desired_total_budget,
+            current_accrued,
+            None,
+        )?;
+        let final_remaining = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            final_total_budget,
+            current_accrued,
+            None,
+        )?;
+        let one_handle = inco_as_euint128(&signer, &inco_lightning_program, 1, None)?;
+        let has_future_budget = inco_e_ge(
+            &signer,
+            &inco_lightning_program,
+            final_remaining,
+            one_handle,
+            None,
+        )?;
         let final_rate = inco_e_select(
-            &signer, &inco_lightning_program,
-            is_solvent, new_rate_handle, zero_rate, None,
+            &signer,
+            &inco_lightning_program,
+            has_future_budget,
+            provisional_rate,
+            zero_rate,
+            None,
         )?;
         employee.encrypted_salary_rate = u128_to_handle(final_rate);
+        employee.encrypted_remaining_budget = u128_to_handle(final_remaining);
+        let reserved_without_employee = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            business_reserved,
+            current_employee_reserved,
+            None,
+        )?;
+        let final_reserved = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            reserved_without_employee,
+            final_total_budget,
+            None,
+        )?;
+        ctx.accounts.business_v4.encrypted_reserved_balance = u128_to_handle(final_reserved);
         // ── End solvency check ───────────────────────────────────────
 
         if effective_to > employee.last_accrual_time {
@@ -735,37 +963,16 @@ pub mod payroll {
         let clock = Clock::get()?;
         let signer = ctx.accounts.caller.to_account_info();
         let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
-
-        let mut effective_from = employee.last_accrual_time;
-        if employee.period_start > 0 && effective_from < employee.period_start {
-            effective_from = employee.period_start;
-        }
         let mut effective_to = clock.unix_timestamp;
         if employee.period_end > 0 && effective_to > employee.period_end {
             effective_to = employee.period_end;
         }
-
-        if effective_to > effective_from {
-            let elapsed = (effective_to - effective_from) as u128;
-            let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
-            let current_accrued = handle_to_u128(&employee.encrypted_accrued);
-
-            // Use scalar_byte=1 optimization for plaintext elapsed time.
-            let delta = inco_binary_op_u128(
-                &signer,
-                &inco_lightning_program,
-                "e_mul",
-                salary_rate,
-                elapsed,
-                1, None)?;	// scalar_byte = 1
-
-            let updated_accrued = inco_add_u128(
-                &signer,
-                &inco_lightning_program,
-                current_accrued,
-                delta, None)?;
-            employee.encrypted_accrued = u128_to_handle(updated_accrued);
-        }
+        accrue_employee_with_budget(
+            &signer,
+            &inco_lightning_program,
+            &mut employee,
+            effective_to,
+        )?;
 
         if effective_to > employee.last_accrual_time {
             employee.last_accrual_time = effective_to;
@@ -1167,13 +1374,17 @@ pub mod payroll {
             // Read salary rate and accrued as raw u128 from the handle bytes
             let salary_rate = handle_to_u128(&employee.encrypted_salary_rate);
             let current_accrued = handle_to_u128(&employee.encrypted_accrued);
+            let current_remaining = handle_to_u128(&employee.encrypted_remaining_budget);
 
             // delta = salary_rate * elapsed (plaintext math inside TEE)
             let delta = salary_rate.wrapping_mul(elapsed as u128);
+            let payable_delta = std::cmp::min(delta, current_remaining);
 
             // updated_accrued = current_accrued + delta
-            let updated_accrued = current_accrued.wrapping_add(delta);
+            let updated_accrued = current_accrued.wrapping_add(payable_delta);
+            let updated_remaining = current_remaining.wrapping_sub(payable_delta);
             employee.encrypted_accrued = u128_to_handle(updated_accrued);
+            employee.encrypted_remaining_budget = u128_to_handle(updated_remaining);
         }
 
         // Update timestamps 
@@ -1339,6 +1550,19 @@ pub mod payroll {
             current_balance,
             accrued_handle_at_settle, None)?;
         ctx.accounts.business_v4.encrypted_balance = u128_to_handle(updated_balance);
+        let current_reserved = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &ctx.accounts.business_v4.encrypted_reserved_balance,
+        )?;
+        let updated_reserved = inco_sub_u128(
+            &signer,
+            &inco_lightning_program,
+            current_reserved,
+            accrued_handle_at_settle,
+            None,
+        )?;
+        ctx.accounts.business_v4.encrypted_reserved_balance = u128_to_handle(updated_reserved);
 
         let total_current = if is_handle_zero(&ctx.accounts.master_vault_v4.encrypted_total_balance) {
             inco_as_euint128(&signer, &inco_lightning_program, 0, None)?
@@ -1443,6 +1667,27 @@ pub mod payroll {
             ],
             seeds,
         )?;
+
+        let signer = ctx.accounts.claimer.to_account_info();
+        let inco_lightning_program = ctx.accounts.inco_lightning_program.to_account_info();
+        let current_registry_balance = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &ctx.accounts.user_token_account_v4.encrypted_balance,
+        )?;
+        let payout_amount = handle_or_zero(
+            &signer,
+            &inco_lightning_program,
+            &ctx.accounts.shielded_payout_v4.encrypted_amount,
+        )?;
+        let updated_registry_balance = inco_add_u128(
+            &signer,
+            &inco_lightning_program,
+            current_registry_balance,
+            payout_amount,
+            None,
+        )?;
+        ctx.accounts.user_token_account_v4.encrypted_balance = u128_to_handle(updated_registry_balance);
 
         let payout_mut = &mut ctx.accounts.shielded_payout_v4;
         payout_mut.claimed = true;

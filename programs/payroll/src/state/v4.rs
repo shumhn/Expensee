@@ -91,6 +91,9 @@ pub struct BusinessEntryV4 {
 
     /// PDA bump.
     pub bump: u8,
+
+    /// ENCRYPTED reserved balance for all active employee obligations.
+    pub encrypted_reserved_balance: EncryptedHandle,
 }
 
 impl BusinessEntryV4 {
@@ -104,7 +107,7 @@ impl BusinessEntryV4 {
         8 +                      // next_employee_index
         1 +                      // is_active
         1 +                      // bump
-        32;                      // padding
+        32;                      // encrypted_reserved_balance
 }
 
 #[account]
@@ -144,6 +147,9 @@ pub struct EmployeeEntryV4 {
 
     /// Pay period end (unix timestamp). 0 = unbounded.
     pub period_end: i64,
+
+    /// ENCRYPTED remaining stream budget available for future accrual.
+    pub encrypted_remaining_budget: EncryptedHandle,
 }
 
 impl EmployeeEntryV4 {
@@ -160,7 +166,7 @@ impl EmployeeEntryV4 {
         1 +                      // bump
         8 +                      // period_start
         8 +                      // period_end
-        32;                      // padding
+        32;                      // encrypted_remaining_budget
 }
 
 // ============================================================

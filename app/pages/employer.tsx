@@ -26,6 +26,7 @@ import {
 } from '../lib/magicblock/index';
 import {
   PAYUSD_MINT,
+  INCO_TOKEN_PROGRAM_ID,
   addEmployeeV4,
   checkAllowanceStale,
   commitAndUndelegateStreamV4,
@@ -118,6 +119,12 @@ function parseUiAmount(label: string, value: string): bigint {
   return BigInt(Math.floor(n * 1_000_000_000));
 }
 
+function parsePositiveUiAmount(label: string, value: string): bigint {
+  const amount = parseUiAmount(label, value);
+  if (amount <= 0n) throw new Error(`Enter a valid ${label} amount`);
+  return amount;
+}
+
 const TOKEN_DECIMALS = 9n;
 const TOKEN_SCALE = 10n ** TOKEN_DECIMALS;
 
@@ -138,6 +145,42 @@ function extractIncoTokenHandle(data: Buffer): bigint {
     result = result * 256n + BigInt(bytes[i]);
   }
   return result;
+}
+
+function extractIncoTokenOwner(data: Buffer): PublicKey {
+  if (data.length < 72) {
+    throw new Error('Inco token account data is invalid');
+  }
+  return new PublicKey(data.subarray(40, 72));
+}
+
+async function copyTextSafe(text: string): Promise<boolean> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+
+  try {
+    if (document.hasFocus() && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back below.
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  } catch {
+    return false;
+  }
 }
 
 
@@ -161,6 +204,24 @@ function presetToPerSecond(preset: PayPreset, amount: number, days?: number): nu
   }
   return null;
 }
+
+function isPermissionError(message: string): boolean {
+  const msg = message.toLowerCase();
+  return msg.includes('not allowed') || msg.includes('permission') || msg.includes('view access');
+}
+
+function isCiphertextMissingError(message: string): boolean {
+  return message.toLowerCase().includes('no ciphertext found');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+const COVALIDATOR_POLL_ATTEMPTS = 10;
+const COVALIDATOR_POLL_DELAY_MS = 2_000;
 
 function toDateTimeLocal(seconds: string): string {
   const ts = Number(seconds);
@@ -242,7 +303,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
   const [periodEnd, setPeriodEnd] = useState('0');
   const [poolVaultTokenAccount, setPoolVaultTokenAccount] = useState('');
   const [depositorTokenAccount, setDepositorTokenAccount] = useState('');
-  const [depositAmount, setDepositAmount] = useState('10');
+  const [depositAmount, setDepositAmount] = useState('');
   const [depositHandle, setDepositHandle] = useState<bigint | null>(null);
   const [depositBalance, setDepositBalance] = useState<bigint | null>(null);
   const [depositBalanceLoading, setDepositBalanceLoading] = useState(false);
@@ -256,11 +317,13 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
   const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
   const [autoConfigBusy, setAutoConfigBusy] = useState(false);
   const [autoConfigError, setAutoConfigError] = useState('');
+  const [autoConfigRetryCount, setAutoConfigRetryCount] = useState(0);
+  const autoConfigTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showBalancePanel, setShowBalancePanel] = useState(false);
   const [mintAmount, setMintAmount] = useState('100');
   const [lastMintAmount, setLastMintAmount] = useState<number | null>(null);
   const [lastMintTx, setLastMintTx] = useState<string | null>(null);
-  const [wrapAmount, setWrapAmount] = useState('10');
+  const [wrapAmount, setWrapAmount] = useState('');
   const [lastWrapTx, setLastWrapTx] = useState<string | null>(null);
   const [publicUsdcBalance, setPublicUsdcBalance] = useState<string | null>(null);
   const [publicUsdcBalanceLoading, setPublicUsdcBalanceLoading] = useState(false);
@@ -314,16 +377,31 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
   const runIdRef = useRef(0);
-  const businessIndexPrefilledRef = useRef(false);
-  const employeeIndexPrefilledRef = useRef(false);
+  const walletScope = wallet.publicKey?.toBase58() ?? null;
   const businessIndex = useMemo(() => parseIndex(businessIndexInput), [businessIndexInput]);
   const employeeIndex = useMemo(() => parseIndex(employeeIndexInput), [employeeIndexInput]);
+  const businessIndexStorageKey = useMemo(
+    () => (walletScope ? `expensee.employer.businessIndex.${walletScope}` : null),
+    [walletScope]
+  );
+  const employeeIndexStorageKey = useMemo(
+    () => (walletScope ? `expensee.employer.employeeIndex.${walletScope}` : null),
+    [walletScope]
+  );
+  const poolVaultStorageKey = useMemo(
+    () => (walletScope ? `expensee.employer.poolVaultTokenAccount.${walletScope}` : null),
+    [walletScope]
+  );
 
   // Derive a stable localStorage key for crank schedule persistence
   const crankStorageKey = useMemo(() => {
     if (!wallet.publicKey || businessIndex === null || employeeIndex === null) return null;
     return `expensee.crankSchedule.${wallet.publicKey.toBase58()}.${businessIndex}.${employeeIndex}`;
   }, [wallet.publicKey, businessIndex, employeeIndex]);
+  const depositorTokenStorageKey = useMemo(() => {
+    if (!walletScope) return null;
+    return `expensee.employer.depositorTokenAccount.${walletScope}`;
+  }, [walletScope]);
 
   // Hydrate crank schedule info from localStorage on mount/key change
   useEffect(() => {
@@ -348,39 +426,76 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!businessIndexInput && !businessIndexPrefilledRef.current) {
-      const stored = window.localStorage.getItem('expensee.businessIndex');
-      if (stored) {
-        setBusinessIndexInput(stored);
-        businessIndexPrefilledRef.current = true;
+
+    if (!walletScope) {
+      setBusinessIndexInput('');
+      setEmployeeIndexInput('');
+      setPoolVaultTokenAccount('');
+      setDepositorTokenAccount('');
+      setBusiness(null);
+      setEmployee(null);
+      setStreamConfig(null);
+      setMasterVault(null);
+      setVaultHandle(null);
+      setVaultBalance(null);
+      setDepositHandle(null);
+      setDepositBalance(null);
+      setUserTokenRegistry(null);
+      setVaultFundingObserved(false);
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      if (router.isReady && typeof router.query.bi === 'string' && router.query.bi.trim().length > 0) {
+        setBusinessIndexInput(router.query.bi.trim());
+      } else {
+        const storedBusiness = businessIndexStorageKey ? window.localStorage.getItem(businessIndexStorageKey) : null;
+        setBusinessIndexInput(storedBusiness || '');
       }
-    }
-  }, [businessIndexInput]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (businessIndexInput) {
-      window.localStorage.setItem('expensee.businessIndex', businessIndexInput);
-    }
-  }, [businessIndexInput]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!employeeIndexInput && !employeeIndexPrefilledRef.current) {
-      const stored = window.localStorage.getItem('expensee.employeeIndex');
-      if (stored) {
-        setEmployeeIndexInput(stored);
-        employeeIndexPrefilledRef.current = true;
+      if (router.isReady && typeof router.query.ei === 'string' && router.query.ei.trim().length > 0) {
+        setEmployeeIndexInput(router.query.ei.trim());
+      } else {
+        const storedEmployee = employeeIndexStorageKey ? window.localStorage.getItem(employeeIndexStorageKey) : null;
+        setEmployeeIndexInput(storedEmployee || '');
       }
+
+      const storedPoolVault = poolVaultStorageKey ? window.localStorage.getItem(poolVaultStorageKey) : null;
+      setPoolVaultTokenAccount(storedPoolVault || '');
+
+      const storedDepositor = depositorTokenStorageKey ? window.localStorage.getItem(depositorTokenStorageKey) : null;
+      setDepositorTokenAccount(storedDepositor || '');
     }
-  }, [employeeIndexInput]);
+  }, [
+    businessIndexStorageKey,
+    depositorTokenStorageKey,
+    employeeIndexStorageKey,
+    poolVaultStorageKey,
+    router.isReady,
+    router.query.bi,
+    router.query.ei,
+    walletScope,
+  ]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (employeeIndexInput) {
-      window.localStorage.setItem('expensee.employeeIndex', employeeIndexInput);
-    }
-  }, [employeeIndexInput]);
+    if (typeof window === 'undefined' || !businessIndexStorageKey || !businessIndexInput) return;
+    window.localStorage.setItem(businessIndexStorageKey, businessIndexInput);
+  }, [businessIndexInput, businessIndexStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !employeeIndexStorageKey || !employeeIndexInput) return;
+    window.localStorage.setItem(employeeIndexStorageKey, employeeIndexInput);
+  }, [employeeIndexInput, employeeIndexStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !poolVaultStorageKey || !poolVaultTokenAccount) return;
+    window.localStorage.setItem(poolVaultStorageKey, poolVaultTokenAccount);
+  }, [poolVaultStorageKey, poolVaultTokenAccount]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !depositorTokenStorageKey || !depositorTokenAccount) return;
+    window.localStorage.setItem(depositorTokenStorageKey, depositorTokenAccount);
+  }, [depositorTokenAccount, depositorTokenStorageKey]);
 
   const waitForErAccount = useCallback(
     async (erConnection: Connection, pubkey: PublicKey, attempts = 12, delayMs = 2000) => {
@@ -544,6 +659,12 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
   const vaultExists = Boolean(
     masterVault && masterVault.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY
   );
+  const resolvedPoolVaultTokenAccount = useMemo(() => {
+    if (masterVault?.vaultTokenAccount && masterVault.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY) {
+      return masterVault.vaultTokenAccount.toBase58();
+    }
+    return poolVaultTokenAccount;
+  }, [masterVault, poolVaultTokenAccount]);
   const configExists = !!streamConfig;
   const payPresetLabel: Record<PayPreset, string> = {
     per_second: 'Per second',
@@ -701,7 +822,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       const master = await getMasterVaultV4Account(connection);
       setMasterVault(master);
       if (master?.vaultTokenAccount && master.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY) {
-        setPoolVaultTokenAccount((prev) => prev || master.vaultTokenAccount.toBase58());
+        setPoolVaultTokenAccount(master.vaultTokenAccount.toBase58());
       }
 
       if (businessPda) {
@@ -900,6 +1021,30 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     vaultFundingObserved,
   ]);
 
+  const validateDepositorTokenAccount = useCallback(async (): Promise<PublicKey> => {
+    if (!wallet.publicKey) {
+      throw new Error('Connect wallet first.');
+    }
+    if (!depositorTokenAccount.trim()) {
+      throw new Error('Depositor token account is required.');
+    }
+    const depositor = mustPubkey('depositor token account', depositorTokenAccount);
+    const account = await connection.getAccountInfo(depositor, 'confirmed');
+    if (!account) {
+      throw new Error('Depositor token account not found.');
+    }
+    if (!account.owner.equals(INCO_TOKEN_PROGRAM_ID)) {
+      throw new Error('Depositor token account is not an Inco token account.');
+    }
+    const owner = extractIncoTokenOwner(Buffer.from(account.data));
+    if (!owner.equals(wallet.publicKey)) {
+      throw new Error(
+        `Depositor token account is owned by ${owner.toBase58()}. Connect that wallet or create a new depositor token for this wallet.`
+      );
+    }
+    return depositor;
+  }, [connection, depositorTokenAccount, wallet.publicKey]);
+
   const executeAgentQueue = useCallback(
     async (mode: 'all' | 'next' = 'all') => {
       if (!wallet.publicKey) {
@@ -1069,24 +1214,29 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
             } else if (step.key === 'deposit-funds') {
               const targetBusinessPda = overrideBusinessPda || businessPda;
               if (!targetBusinessPda) throw new Error('Business index is required.');
-              if (!depositorTokenAccount.trim()) {
-                throw new Error('Depositor token account is required.');
+              const requiredAmount = parsePositiveUiAmount('deposit', depositAmount);
+              const currentBalance = await ensureDepositorBalance(requiredAmount);
+              if (currentBalance === null) {
+                return;
               }
+              const depositor = await validateDepositorTokenAccount();
               const poolToken =
-                poolVaultTokenAccount ||
-                masterVault?.vaultTokenAccount?.toBase58() ||
-                '';
+                resolvedPoolVaultTokenAccount || '';
               if (!poolToken) throw new Error('Pool vault token account is required.');
-              const amountLamports = parseUiAmount('deposit', depositAmount);
+              const amountLamports = requiredAmount;
               await depositV4(
                 connection,
                 wallet,
                 targetBusinessPda,
-                mustPubkey('depositor token account', depositorTokenAccount),
+                depositor,
                 mustPubkey('pool vault token account', poolToken),
                 amountLamports
               );
               setVaultFundingObserved(true);
+              await refreshBusiness();
+              await refreshVaultBalance();
+              void decryptDepositorBalance();
+              setMessage('Deposit submitted. The pooled-vault balance is encrypted, so click Decrypt in the Balance panel to reveal the updated amount.');
             }
 
             await loadState();
@@ -1137,13 +1287,14 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       loadState,
       masterVaultPda,
       masterVault,
-      poolVaultTokenAccount,
+      resolvedPoolVaultTokenAccount,
       periodEnd,
       periodStart,
       salaryPerSecond,
       settleIntervalSecs,
       resolveSolvencyFromTx,
       solvencyStatus,
+      validateDepositorTokenAccount,
       wallet,
     ]
   );
@@ -1206,7 +1357,8 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
 
   const handleChatExecute = useCallback(
     async (mode: 'all' | 'next' = 'all') => {
-      return await executeAgentQueue(mode);
+      const res = await executeAgentQueue(mode);
+      return res as any;
     },
     [executeAgentQueue]
   );
@@ -1252,7 +1404,8 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       setAgentPhase('greeting');
       setEmployeeWallet('');
       setDepositorTokenAccount('');
-      setDepositAmount('10');
+      setDepositAmount('');
+      setWrapAmount('');
       setEmployeeIndexInput('');
       setBusinessIndexInput('');
       setBusiness(null);
@@ -1296,8 +1449,8 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       try {
         const account = await getMasterVaultV4Account(connection);
         setMasterVault(account);
-        if (account?.vaultTokenAccount) {
-          setPoolVaultTokenAccount((prev) => prev || account.vaultTokenAccount.toBase58());
+        if (account?.vaultTokenAccount && account.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY) {
+          setPoolVaultTokenAccount(account.vaultTokenAccount.toBase58());
         }
       } catch (e) {
         console.warn(e);
@@ -1307,8 +1460,8 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     await runAction('Refresh master vault', async () => {
       const account = await getMasterVaultV4Account(connection);
       setMasterVault(account);
-      if (account?.vaultTokenAccount) {
-        setPoolVaultTokenAccount((prev) => prev || account.vaultTokenAccount.toBase58());
+      if (account?.vaultTokenAccount && account.vaultTokenAccount.toBase58() !== EMPTY_PUBKEY) {
+        setPoolVaultTokenAccount(account.vaultTokenAccount.toBase58());
       }
       return account;
     });
@@ -1551,11 +1704,31 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     }
   }, [connection, depositorTokenAccount, wallet.publicKey]);
 
-  const refreshDepositorBalance = useCallback(async () => {
+  useEffect(() => {
+    if (!wallet.publicKey) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const registry = await getUserTokenAccountV4(connection, wallet.publicKey!, PAYUSD_MINT);
+        if (cancelled) return;
+        setUserTokenRegistry(registry);
+        if (registry && !registry.incoTokenAccount.equals(PublicKey.default)) {
+          setDepositorTokenAccount((prev) => prev || registry.incoTokenAccount.toBase58());
+        }
+      } catch (e) {
+        console.warn('Failed to auto-restore depositor token account', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, wallet.publicKey]);
+
+  const refreshDepositorBalance = useCallback(async (): Promise<bigint | null> => {
     if (!depositorTokenAccount) {
       setDepositHandle(null);
       setDepositBalance(null);
-      return;
+      return null;
     }
     setDepositBalanceLoading(true);
     setDepositBalanceError('');
@@ -1565,49 +1738,141 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       const account = await connection.getAccountInfo(new PublicKey(depositorTokenAccount), 'confirmed');
       if (!account?.data) {
         setDepositHandle(null);
-        return;
+        return null;
+      }
+      if (!account.owner.equals(INCO_TOKEN_PROGRAM_ID)) {
+        throw new Error('Depositor token account is not an Inco token account.');
+      }
+      if (wallet.publicKey) {
+        const owner = extractIncoTokenOwner(Buffer.from(account.data));
+        if (!owner.equals(wallet.publicKey)) {
+          throw new Error(
+            `Depositor token account is owned by ${owner.toBase58()}. Connect that wallet or create a new depositor token for this wallet.`
+          );
+        }
       }
       const handle = extractIncoTokenHandle(Buffer.from(account.data));
       setDepositHandle(handle);
       if (handle === 0n) {
         setDepositBalance(null);
       }
+      return handle;
     } catch (e: any) {
       setDepositBalanceError(e?.message || 'Failed to load depositor balance');
+      return null;
     } finally {
       setDepositBalanceLoading(false);
     }
-  }, [connection, depositorTokenAccount]);
+  }, [connection, depositorTokenAccount, wallet.publicKey]);
 
-  const decryptDepositorBalance = useCallback(async () => {
+  const decryptDepositorBalance = useCallback(async (): Promise<bigint | null> => {
     if (!wallet.publicKey || !wallet.signMessage) {
       setDepositBalanceError('Connect a wallet that supports signMessage.');
-      return;
+      return null;
     }
     if (!depositHandle || depositHandle === 0n) {
       setDepositBalanceError('No encrypted balance handle found yet.');
-      return;
+      return null;
     }
     setDepositBalanceDecrypting(true);
     setDepositBalanceError('');
     try {
-      const stale = await checkAllowanceStale(connection, depositHandle, wallet.publicKey);
+      const refreshedHandle = await refreshDepositorBalance();
+      const handleToDecrypt = refreshedHandle ?? depositHandle;
+      if (!handleToDecrypt || handleToDecrypt === 0n) {
+        setDepositBalanceError('No encrypted balance handle found yet.');
+        return null;
+      }
+      const stale = await checkAllowanceStale(connection, handleToDecrypt, wallet.publicKey);
       if (stale) {
-        await grantIncoDecryptAccessForHandle(connection, wallet, depositHandle);
+        await grantIncoDecryptAccessForHandle(connection, wallet, handleToDecrypt);
       }
       const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-      const result = await decrypt([depositHandle.toString()], {
+      const result = await decrypt([handleToDecrypt.toString()], {
         address: wallet.publicKey,
         signMessage: wallet.signMessage,
       });
       const value = BigInt(result?.plaintexts?.[0] || '0');
       setDepositBalance(value);
+      return value;
     } catch (e: any) {
-      setDepositBalanceError(e?.message || 'Failed to decrypt balance');
+      const msg = e?.message || 'Failed to decrypt balance';
+      if (isPermissionError(msg)) {
+        try {
+          if (depositHandle && depositHandle !== 0n) {
+            await grantIncoDecryptAccessForHandle(connection, wallet, depositHandle);
+            const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+            const retried = await decrypt([depositHandle.toString()], {
+              address: wallet.publicKey,
+              signMessage: wallet.signMessage,
+            });
+            const value = BigInt(retried?.plaintexts?.[0] || '0');
+            setDepositBalance(value);
+            return value;
+          }
+        } catch (retryErr: any) {
+          setDepositBalanceError(retryErr?.message || msg);
+          return null;
+        }
+      }
+      if (isCiphertextMissingError(msg)) {
+        for (let attempt = 1; attempt <= COVALIDATOR_POLL_ATTEMPTS; attempt += 1) {
+          setDepositBalanceError(
+            `Waiting for Covalidator to materialize the depositor balance... (${attempt}/${COVALIDATOR_POLL_ATTEMPTS})`
+          );
+          await sleep(COVALIDATOR_POLL_DELAY_MS);
+          const retriedHandle = await refreshDepositorBalance();
+          const handleToDecrypt = retriedHandle ?? depositHandle;
+          if (!handleToDecrypt || handleToDecrypt === 0n) {
+            continue;
+          }
+          try {
+            const stale = await checkAllowanceStale(connection, handleToDecrypt, wallet.publicKey);
+            if (stale) {
+              await grantIncoDecryptAccessForHandle(connection, wallet, handleToDecrypt);
+            }
+            const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+            const retried = await decrypt([handleToDecrypt.toString()], {
+              address: wallet.publicKey,
+              signMessage: wallet.signMessage,
+            });
+            const value = BigInt(retried?.plaintexts?.[0] || '0');
+            setDepositBalance(value);
+            setDepositBalanceError('');
+            return value;
+          } catch (retryErr: any) {
+            if (!isCiphertextMissingError(retryErr?.message || '')) {
+              throw retryErr;
+            }
+          }
+        }
+        setDepositBalanceError(
+          'The encrypted depositor balance has not materialized in Covalidator yet. Refresh again in a moment.'
+        );
+        return null;
+      }
+      setDepositBalanceError(msg);
+      return null;
     } finally {
       setDepositBalanceDecrypting(false);
     }
-  }, [connection, depositHandle, wallet, wallet.publicKey, wallet.signMessage]);
+  }, [connection, depositHandle, refreshDepositorBalance, wallet, wallet.publicKey, wallet.signMessage]);
+
+  const ensureDepositorBalance = useCallback(
+    async (requiredAmount: bigint): Promise<bigint | null> => {
+      const currentBalance = await decryptDepositorBalance();
+      if (currentBalance === null) {
+        return null;
+      }
+      if (currentBalance < requiredAmount) {
+        throw new Error(
+          `Insufficient private depositor balance. You have ${formatTokenAmount(currentBalance)} USDC, but need ${formatTokenAmount(requiredAmount)} USDC. Wrap public USDC first, then try deposit again.`
+        );
+      }
+      return currentBalance;
+    },
+    [decryptDepositorBalance]
+  );
 
   const refreshVaultBalance = useCallback(async () => {
     if (!business) {
@@ -1619,7 +1884,10 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     setVaultBalanceError('');
     setVaultBalance(null);
     try {
-      const handle = extractHandleFromCiphertext32(business.encryptedBalance);
+      const latestBusiness = business?.address
+        ? await getBusinessV4AccountByAddress(connection, business.address)
+        : business;
+      const handle = extractHandleFromCiphertext32((latestBusiness || business).encryptedBalance);
       setVaultHandle(handle);
       if (handle === 0n) {
         setVaultBalance(null);
@@ -1629,37 +1897,119 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     } finally {
       setVaultBalanceLoading(false);
     }
-  }, [business]);
+  }, [business, connection]);
 
   const decryptVaultBalance = useCallback(async () => {
     if (!wallet.publicKey || !wallet.signMessage) {
       setVaultBalanceError('Connect a wallet that supports signMessage.');
       return;
     }
-    if (!vaultHandle || vaultHandle === 0n) {
-      setVaultBalanceError('No encrypted vault balance handle found yet.');
-      return;
-    }
     setVaultBalanceDecrypting(true);
     setVaultBalanceError('');
     try {
-      const stale = await checkAllowanceStale(connection, vaultHandle, wallet.publicKey);
+      const latestBusiness = business?.address
+        ? await getBusinessV4AccountByAddress(connection, business.address)
+        : null;
+      const handleForDecrypt = latestBusiness
+        ? extractHandleFromCiphertext32(latestBusiness.encryptedBalance)
+        : vaultHandle;
+      setVaultHandle(handleForDecrypt ?? null);
+      if (!handleForDecrypt || handleForDecrypt === 0n) {
+        setVaultBalanceError('No encrypted vault balance handle found yet.');
+        return;
+      }
+
+      const stale = await checkAllowanceStale(connection, handleForDecrypt, wallet.publicKey);
       if (stale) {
-        await grantIncoDecryptAccessForHandle(connection, wallet, vaultHandle);
+        await grantIncoDecryptAccessForHandle(connection, wallet, handleForDecrypt);
       }
       const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
-      const result = await decrypt([vaultHandle.toString()], {
+      const result = await decrypt([handleForDecrypt.toString()], {
         address: wallet.publicKey,
         signMessage: wallet.signMessage,
       });
       const value = BigInt(result?.plaintexts?.[0] || '0');
       setVaultBalance(value);
     } catch (e: any) {
-      setVaultBalanceError(e?.message || 'Failed to decrypt vault balance');
+      const msg = e?.message || 'Failed to decrypt vault balance';
+      if (isPermissionError(msg)) {
+        try {
+          const latestBusiness = business?.address
+            ? await getBusinessV4AccountByAddress(connection, business.address)
+            : null;
+          const handleToDecrypt = latestBusiness
+            ? extractHandleFromCiphertext32(latestBusiness.encryptedBalance)
+            : vaultHandle;
+          if (handleToDecrypt && handleToDecrypt !== 0n) {
+            const stale = await checkAllowanceStale(connection, handleToDecrypt, wallet.publicKey);
+            if (stale) {
+              await grantIncoDecryptAccessForHandle(connection, wallet, handleToDecrypt);
+            }
+            const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+            const retried = await decrypt([handleToDecrypt.toString()], {
+              address: wallet.publicKey,
+              signMessage: wallet.signMessage,
+            });
+            const value = BigInt(retried?.plaintexts?.[0] || '0');
+            setVaultBalance(value);
+            return;
+          }
+        } catch (retryErr: any) {
+          setVaultBalanceError(retryErr?.message || msg);
+          return;
+        }
+      }
+      if (isCiphertextMissingError(msg)) {
+        for (let attempt = 1; attempt <= COVALIDATOR_POLL_ATTEMPTS; attempt += 1) {
+          setVaultBalanceError(
+            `Waiting for Covalidator to materialize the vault balance... (${attempt}/${COVALIDATOR_POLL_ATTEMPTS})`
+          );
+          await sleep(COVALIDATOR_POLL_DELAY_MS);
+          const latestBusiness = business?.address
+            ? await getBusinessV4AccountByAddress(connection, business.address)
+            : null;
+          const handleToDecrypt = latestBusiness
+            ? extractHandleFromCiphertext32(latestBusiness.encryptedBalance)
+            : vaultHandle;
+          if (!handleToDecrypt || handleToDecrypt === 0n) {
+            continue;
+          }
+          try {
+            const stale = await checkAllowanceStale(connection, handleToDecrypt, wallet.publicKey);
+            if (stale) {
+              await grantIncoDecryptAccessForHandle(connection, wallet, handleToDecrypt);
+            }
+            const { decrypt } = await import('@inco/solana-sdk/attested-decrypt');
+            const retried = await decrypt([handleToDecrypt.toString()], {
+              address: wallet.publicKey,
+              signMessage: wallet.signMessage,
+            });
+            const value = BigInt(retried?.plaintexts?.[0] || '0');
+            setVaultBalance(value);
+            setVaultBalanceError('');
+            return;
+          } catch (retryErr: any) {
+            if (!isCiphertextMissingError(retryErr?.message || '')) {
+              throw retryErr;
+            }
+          }
+        }
+        const latestBusiness = business?.address
+          ? await getBusinessV4AccountByAddress(connection, business.address)
+          : null;
+        if (latestBusiness) {
+          setVaultHandle(extractHandleFromCiphertext32(latestBusiness.encryptedBalance));
+        }
+        setVaultBalanceError(
+          'The encrypted vault balance has not materialized in Covalidator yet. Refresh again in a moment.'
+        );
+        return;
+      }
+      setVaultBalanceError(msg);
     } finally {
       setVaultBalanceDecrypting(false);
     }
-  }, [connection, vaultHandle, wallet, wallet.publicKey, wallet.signMessage]);
+  }, [business, connection, vaultHandle, wallet, wallet.publicKey, wallet.signMessage]);
 
   const attemptAutoConfig = useCallback(
     async (force = false) => {
@@ -1680,11 +2030,14 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
         );
         if (!result) {
           setAutoConfigError('Auto-setup failed. Check your business index and retry.');
+          setAutoConfigRetryCount((count) => Math.min(count + 1, 5));
           return;
         }
         await refreshConfig();
+        setAutoConfigRetryCount(0);
       } catch (e: any) {
         setAutoConfigError(e?.message || 'Auto-setup failed. Check your business index and retry.');
+        setAutoConfigRetryCount((count) => Math.min(count + 1, 5));
       } finally {
         setAutoConfigBusy(false);
       }
@@ -1704,6 +2057,48 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
       wallet.publicKey,
     ]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (streamConfig) {
+      setAutoConfigRetryCount(0);
+      if (autoConfigTimerRef.current) {
+        clearTimeout(autoConfigTimerRef.current);
+        autoConfigTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (!businessPda || !wallet.publicKey || autoConfigBusy) {
+      return;
+    }
+
+    if (autoConfigTimerRef.current) {
+      return;
+    }
+
+    const delayMs = autoConfigAttempted ? Math.min(2000 * (autoConfigRetryCount + 1), 8000) : 0;
+    autoConfigTimerRef.current = window.setTimeout(() => {
+      autoConfigTimerRef.current = null;
+      void attemptAutoConfig(true);
+    }, delayMs) as any;
+
+    return () => {
+      if (autoConfigTimerRef.current) {
+        clearTimeout(autoConfigTimerRef.current);
+        autoConfigTimerRef.current = null;
+      }
+    };
+  }, [
+    autoConfigAttempted,
+    autoConfigBusy,
+    autoConfigRetryCount,
+    attemptAutoConfig,
+    businessPda,
+    streamConfig,
+    wallet.publicKey,
+  ]);
 
   useEffect(() => {
     if (depositorTokenAccount) {
@@ -1910,6 +2305,11 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                 <div className="expensee-sub">
                   Encrypted status: {vaultHandle && vaultHandle !== 0n ? 'ready' : 'not available'}
                 </div>
+                {vaultBalance === null && vaultHandle && vaultHandle !== 0n ? (
+                  <div className="expensee-sub">
+                    Deposit received. Click Decrypt to reveal the updated balance.
+                  </div>
+                ) : null}
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -2293,7 +2693,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                                   return sig;
                                 });
                                 if (wrapResult) {
-                                  void refreshDepositorBalance();
+                                  void decryptDepositorBalance();
                                 }
                               }}
                               disabled={busy || !wallet.publicKey || !depositorTokenAccount}
@@ -2332,18 +2732,27 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                               setError('Business index is required.');
                               return;
                             }
+                            const requiredAmount = parsePositiveUiAmount('deposit', depositAmount);
+                            const currentBalance = await ensureDepositorBalance(requiredAmount);
+                            if (currentBalance === null) {
+                              return;
+                            }
                             await runAction('Deposit to pool', () => {
-                              const depositor = mustPubkey('depositor token account', depositorTokenAccount);
-                              const poolToken = mustPubkey(
-                                'pool vault token account',
-                                poolVaultTokenAccount || masterVault?.vaultTokenAccount?.toBase58() || ''
-                              );
-                              const amount = parseUiAmount('deposit', depositAmount);
-                              return depositV4(connection, wallet, businessPda, depositor, poolToken, amount);
+                              return (async () => {
+                                const depositor = await validateDepositorTokenAccount();
+                                const poolToken = mustPubkey(
+                                  'pool vault token account',
+                                  resolvedPoolVaultTokenAccount || ''
+                                );
+                                const amount = requiredAmount;
+                                return depositV4(connection, wallet, businessPda, depositor, poolToken, amount);
+                              })();
                             });
                             setVaultFundingObserved(true);
                             await refreshBusiness();
                             await refreshVaultBalance();
+                            void decryptDepositorBalance();
+                            setMessage('Deposit submitted. The pooled-vault balance is encrypted, so click Decrypt in the Balance panel to reveal the updated amount.');
                           }}
                           disabled={busy || !businessPda}
                           className="premium-btn premium-btn-secondary disabled:opacity-50"
@@ -2960,27 +3369,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                                 await refreshEmployee();
                                 return;
                               }
-                              const delegationResult = await runAction('Auto-enable high-speed mode', () => {
-                                const validator = getMagicblockValidatorForRegion(delegateRegion);
-                              return delegateStreamV4(
-                                connection,
-                                wallet,
-                                businessIndex,
-                                createdIndex,
-                                walletKey,
-                                validator
-                              ).then(async (sig) => {
-                                await scheduleCrankOnEr(delegateRegion, businessIndex, createdIndex);
-                                return sig;
-                              });
-                            });
-                              if (!delegationResult) {
-                                setError('⚠️ MagicBlock delegation failed. Stream is NOT real-time. Please retry delegation manually.');
-                                await refreshDelegation();
-                                await refreshEmployee();
-                                return;
-                              }
-                              await waitForDelegationStatus(true, 'Delegating stream');
+                              setMessage('Employee created. Continue to Step 5 to delegate the stream and schedule the crank.');
                             }
                             if (businessPda && createdIndex !== null) {
                               try {
@@ -3027,10 +3416,14 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                                 className="flex-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 text-xs font-mono text-[var(--app-ink)]"
                               />
                               <button
-                                onClick={() => {
+                                onClick={async () => {
                                   const linkToCopy = inviteLink || (typeof window !== 'undefined' ? `${window.location.origin}/employee?bi=${businessIndex}&ei=${employeeIndex}` : '');
-                                  navigator.clipboard.writeText(linkToCopy);
-                                  setMessage('Invite link copied!');
+                                  const copied = await copyTextSafe(linkToCopy);
+                                  if (copied) {
+                                    setMessage('Invite link copied!');
+                                  } else {
+                                    setMessage('Could not copy automatically. Focus the tab and try again.');
+                                  }
                                 }}
                                 className="premium-btn premium-btn-secondary whitespace-nowrap"
                               >
@@ -3063,22 +3456,6 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                             className="w-full rounded-lg border border-[var(--app-border)] px-3 py-2 text-sm"
                           />
                           <div className="flex flex-wrap gap-2">
-                            <button
-                              onClick={async () => {
-                                if (!businessPda || employeeIndex === null) {
-                                  setError('Business and employee index are required.');
-                                  return;
-                                }
-                                await runAction('Init rate history', () =>
-                                  initRateHistoryV4(connection, wallet, businessPda, employeeIndex)
-                                );
-                                await refreshRateHistory();
-                              }}
-                              disabled={busy || !businessPda || employeeIndex === null}
-                              className="premium-btn premium-btn-secondary disabled:opacity-50"
-                            >
-                              Init Rate History
-                            </button>
                             <button
                               onClick={async () => {
                                 if (!businessPda || employeeIndex === null || businessIndex === null) {
@@ -3177,7 +3554,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                             </button>
                           </div>
                           <div className="text-xs text-[var(--app-muted)]">
-                            Rate history: {rateHistoryLoading ? 'checking…' : rateHistoryExists ? 'ready' : 'missing'}
+                            Rate history: {rateHistoryLoading ? 'checking…' : rateHistoryExists ? 'ready' : 'auto-create on update'}
                           </div>
                         </div>
                       </div>
@@ -3563,6 +3940,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                             );
                             if (result && typeof result === 'object' && 'tokenAccount' in result) {
                               setDepositorTokenAccount((result as any).tokenAccount.toBase58());
+                              void refreshUserTokenRegistry();
                               void refreshDepositorBalance();
                             }
                           }}
@@ -3653,7 +4031,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                               }
                               return sig;
                             });
-                            void refreshDepositorBalance();
+                            void decryptDepositorBalance();
                           }}
                           disabled={busy || !wallet.publicKey || !depositorTokenAccount}
                           className="premium-btn premium-btn-secondary disabled:opacity-50"
@@ -3669,33 +4047,6 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                         </button>
                         <button
                           onClick={async () => {
-                            if (!depositorTokenAccount) {
-                              setError('Create or paste a depositor token account first.');
-                              return;
-                            }
-                            await runAction('Mint test USDC', async () => {
-                              const resp = await fetch('/api/faucet/mint-payusd', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  userConfidentialTokenAccount: depositorTokenAccount,
-                                }),
-                              });
-                              const json = await resp.json();
-                              if (!resp.ok || !json?.ok) {
-                                throw new Error(json?.error || 'Faucet mint failed');
-                              }
-                              return json;
-                            });
-                            void refreshDepositorBalance();
-                          }}
-                          disabled={busy || !depositorTokenAccount}
-                          className="premium-btn premium-btn-secondary disabled:opacity-50"
-                        >
-                          Mint Test USDC
-                        </button>
-                        <button
-                          onClick={async () => {
                             if (!businessPda) {
                               setError('Business index is required.');
                               return;
@@ -3704,14 +4055,24 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                               const ready = await ensurePoolVaultSetup();
                               if (!ready) return;
                             }
+                            const requiredAmount = parsePositiveUiAmount('deposit', depositAmount);
+                            const currentBalance = await ensureDepositorBalance(requiredAmount);
+                            if (currentBalance === null) {
+                              return;
+                            }
                             await runAction('Deposit to pool', () => {
-                              const depositor = mustPubkey('depositor token account', depositorTokenAccount);
-                              const poolToken = mustPubkey('pool vault token account', poolVaultTokenAccount || masterVault?.vaultTokenAccount?.toBase58() || '');
-                              const amount = parseUiAmount('deposit', depositAmount);
-                              return depositV4(connection, wallet, businessPda, depositor, poolToken, amount);
+                              return (async () => {
+                                const depositor = await validateDepositorTokenAccount();
+                                const poolToken = mustPubkey('pool vault token account', resolvedPoolVaultTokenAccount || '');
+                                const amount = requiredAmount;
+                                return depositV4(connection, wallet, businessPda, depositor, poolToken, amount);
+                              })();
                             });
                             setVaultFundingObserved(true);
-                            void refreshDepositorBalance();
+                            await refreshBusiness();
+                            await refreshVaultBalance();
+                            void decryptDepositorBalance();
+                            setMessage('Deposit submitted. The pooled-vault balance is encrypted, so click Decrypt in the Balance panel to reveal the updated amount.');
                           }}
                           disabled={busy || !businessPda || !depositorTokenAccount}
                           className="premium-btn premium-btn-primary disabled:opacity-50"
