@@ -10,7 +10,7 @@ import { createHash } from "crypto";
  */
 
 // 4. Setup program
-const PROGRAM_ID = new PublicKey("3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn");
+const PROGRAM_ID = new PublicKey("97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU");
 const BUSINESS_SEED = Buffer.from("business");
 const SHIELDED_PAYOUT_V2_SEED = Buffer.from("shielded_payout");
 

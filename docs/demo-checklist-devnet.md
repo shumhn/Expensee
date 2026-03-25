@@ -11,7 +11,7 @@ This is a step-by-step checklist you can follow to produce a **credible demo** s
 ## 0) Preconditions
 
 1. Program is deployed/upgraded on devnet.
-   - Program ID (devnet): `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn`
+   - Program ID (devnet): `97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU`
 2. Compliance is disabled on devnet (recommended).
    - App: `NEXT_PUBLIC_COMPLIANCE_ENABLED=false`
    - Keeper: `KEEPER_COMPLIANCE_ENABLED=false`

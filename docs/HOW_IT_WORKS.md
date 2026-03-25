@@ -187,7 +187,7 @@ Implementation note (devnet v1 reliability):
 
 ### 1. On-Chain Program ([programs/payroll/src/](file:///Users/sumangiri/Desktop/expensee/programs/payroll/src/))
 
-**Modular Rust/Anchor Program** — split into 10 logical files for maintainability. Deployed at `3P3tYHEUykB2fH5vxpunHQH3C7zi9B3fFXyzaRP38bJn` on devnet.
+**Modular Rust/Anchor Program** — split into 10 logical files for maintainability. Deployed at `97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU` on devnet.
 
 | Instruction Group | Instructions | Purpose |
 |---|---|---|
