@@ -284,50 +284,57 @@ sequenceDiagram
 
 ### High-Level System Architecture
 
-```mermaid
-flowchart TB
-    subgraph FRONTEND["Frontend (Next.js)"]
-        EMPLOYER(["Employer Dashboard"])
-        EMPLOYEE(["Employee Dashboard"])
-        BRIDGE(["Token Bridge"])
-        AGENT(["AI Agent Chatbot"])
-    end
-
-    WALLET["Wallet Adapter<br/>(Phantom / Solflare)"]
-
-    subgraph SOLANA["Solana Base Layer"]
-        PAYROLL{{"Payroll Program<br/>(Anchor 0.32)"}}
-        INCO_L["Inco Lightning<br/>(FHE Engine)"]
-        INCO_T["Inco Token Program<br/>(Confidential Transfers)"]
-        MAGIC["MagicBlock TEE<br/>(Ephemeral Rollups)"]
-    end
-
-    subgraph API["Next.js API Routes"]
-        AGENT_API["/api/agent/*"]
-        BRIDGE_API["/api/bridge/*"]
-        FAUCET_API["/api/faucet/*"]
-    end
-
-    EMPLOYER --> WALLET
-    EMPLOYEE --> WALLET
-    BRIDGE --> WALLET
-    EMPLOYER --> AGENT
-    AGENT --> AGENT_API
-
-    WALLET -->|"User Signed Txns"| PAYROLL
-    BRIDGE --> BRIDGE_API
-    BRIDGE_API -->|"Wrap/Unwrap"| INCO_T
-
-    PAYROLL --> INCO_L
-    PAYROLL --> INCO_T
-    PAYROLL --> MAGIC
-
-    style SOLANA fill:#f0f0f0,stroke:#333,stroke-dasharray: 5 5
-    style PAYROLL fill:#f96,stroke:#333,stroke-width:4px
-    style INCO_L fill:#bbf,stroke:#333,stroke-width:2px
-    style INCO_T fill:#bbf,stroke:#333,stroke-width:2px
-    style MAGIC fill:#dfd,stroke:#333,stroke-width:2px
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│                     FRONTEND (Next.js)                          │
+│                                                                 │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│   │   Employer    │  │   Employee   │  │   Token Bridge       │  │
+│   │   Dashboard   │  │   Dashboard  │  │   (Wrap / Unwrap)    │  │
+│   └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
+│          │                 │                      │              │
+│   ┌──────┴─────────────────┴──────────────────────┴───────────┐  │
+│   │              Wallet Adapter (Phantom / Solflare)          │  │
+│   └──────────────────────────┬────────────────────────────────┘  │
+│                              │  User-Signed Transactions        │
+│   ┌──────────────────────────┴────────────────────────────────┐  │
+│   │           Next.js API Routes (Server-Side)                │  │
+│   │   /api/agent/*  ·  /api/bridge/*  ·  /api/faucet/*        │  │
+│   └──────────────────────────┬────────────────────────────────┘  │
+└──────────────────────────────┼──────────────────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          │         SOLANA DEVNET (Base Layer)       │
+          │                    │                     │
+          │    ┌───────────────▼──────────────────┐  │
+          │    │     🔶 Payroll Program (V4)      │  │
+          │    │     Anchor 0.32 · Rust           │  │
+          │    │     97u6CxDck3yhEP...            │  │
+          │    └──┬──────────┬──────────┬─────────┘  │
+          │       │          │          │             │
+          │       ▼          ▼          ▼             │
+          │  ┌─────────┐ ┌────────┐ ┌──────────┐     │
+          │  │🔵 Inco  │ │🔵 Inco │ │🟢 Magic  │     │
+          │  │Lightning │ │ Token  │ │  Block   │     │
+          │  │(FHE     │ │Program │ │  TEE     │     │
+          │  │ Engine) │ │(Confid.│ │(Ephemeral│     │
+          │  │         │ │Transfer│ │ Rollups) │     │
+          │  └─────────┘ └────────┘ └──────────┘     │
+          │                                          │
+          └──────────────────────────────────────────┘
+
+Legend:
+  🔶 Core program — all payroll logic lives here
+  🔵 Privacy layer — FHE encryption + confidential token transfers
+  🟢 Speed layer  — real-time streaming via delegated accounts
+```
+
+**How it flows:**
+1. Users connect their wallet (Phantom/Solflare) in the browser
+2. The frontend builds transactions that call the **Payroll Program**
+3. The Payroll Program uses **Inco Lightning** (FHE) to do math on encrypted salaries
+4. **Inco Token Program** handles confidential token transfers (deposits, payouts)
+5. **MagicBlock TEE** delegates employee accounts to Ephemeral Rollups for real-time streaming
 
 ### Key Design: Keeper-Free Architecture
 
