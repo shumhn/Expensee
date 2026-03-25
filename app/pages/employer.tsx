@@ -2011,94 +2011,7 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     }
   }, [business, connection, vaultHandle, wallet, wallet.publicKey, wallet.signMessage]);
 
-  const attemptAutoConfig = useCallback(
-    async (force = false) => {
-      if (autoConfigBusy) return;
-      const targetBusinessPda = business?.address || businessPda;
-      if (!targetBusinessPda || !wallet.publicKey) return;
-      if (!force && (streamConfig || autoConfigAttempted)) return;
-      setAutoConfigAttempted(true);
-      setAutoConfigBusy(true);
-      setAutoConfigError('');
-      try {
-        const interval = Number(settleIntervalSecs || '10');
-        if (!Number.isFinite(interval) || interval <= 0) {
-          throw new Error('Invalid cooldown interval');
-        }
-        const result = await runAction('Init payroll settings', () =>
-          initStreamConfigV4(connection, wallet, targetBusinessPda, interval)
-        );
-        if (!result) {
-          setAutoConfigError('Auto-setup failed. Check your business index and retry.');
-          setAutoConfigRetryCount((count) => Math.min(count + 1, 5));
-          return;
-        }
-        await refreshConfig();
-        setAutoConfigRetryCount(0);
-      } catch (e: any) {
-        setAutoConfigError(e?.message || 'Auto-setup failed. Check your business index and retry.');
-        setAutoConfigRetryCount((count) => Math.min(count + 1, 5));
-      } finally {
-        setAutoConfigBusy(false);
-      }
-    },
-    [
-      autoConfigAttempted,
-      autoConfigBusy,
-      business,
-      businessPda,
-      connection,
-      initStreamConfigV4,
-      refreshConfig,
-      runAction,
-      settleIntervalSecs,
-      streamConfig,
-      wallet,
-      wallet.publicKey,
-    ]
-  );
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    if (streamConfig) {
-      setAutoConfigRetryCount(0);
-      if (autoConfigTimerRef.current) {
-        clearTimeout(autoConfigTimerRef.current);
-        autoConfigTimerRef.current = null;
-      }
-      return;
-    }
-
-    if (!businessPda || !wallet.publicKey || autoConfigBusy) {
-      return;
-    }
-
-    if (autoConfigTimerRef.current) {
-      return;
-    }
-
-    const delayMs = autoConfigAttempted ? Math.min(2000 * (autoConfigRetryCount + 1), 8000) : 0;
-    autoConfigTimerRef.current = window.setTimeout(() => {
-      autoConfigTimerRef.current = null;
-      void attemptAutoConfig(true);
-    }, delayMs) as any;
-
-    return () => {
-      if (autoConfigTimerRef.current) {
-        clearTimeout(autoConfigTimerRef.current);
-        autoConfigTimerRef.current = null;
-      }
-    };
-  }, [
-    autoConfigAttempted,
-    autoConfigBusy,
-    autoConfigRetryCount,
-    attemptAutoConfig,
-    businessPda,
-    streamConfig,
-    wallet.publicKey,
-  ]);
+  // Removed attemptAutoConfig and autoConfigTimerRef to prevent aggressive auto-popups
 
   useEffect(() => {
     if (depositorTokenAccount) {
@@ -2178,38 +2091,35 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
     if (!employee) return 4;
     return 5;
   }, [masterVault, business, vaultFundingObserved, employee]);
-  const [setupStep, setSetupStep] = useState<number>(suggestedSetupStep);
-
-  useEffect(() => {
-    if (mode === 'setup') {
-      setSetupStep(suggestedSetupStep);
-    }
-  }, [mode, suggestedSetupStep]);
+  const [setupStep, setSetupStep] = useState<number>(1);
 
   useEffect(() => {
     if (!resolvedPerSecond) return;
     setSalaryPerSecond(resolvedPerSecond);
   }, [resolvedPerSecond]);
 
-  const showDashboard = mode === 'dashboard' || mode === 'all';
-  const showEmployees = mode === 'employees' || mode === 'all';
-  const showAgent = mode === 'agent' || mode === 'all';
-  const showHistory = mode === 'history' || mode === 'all';
-  const showReports = mode === 'reports' || mode === 'all';
+  const completedSteps = [step1State, step2State, step3State, step4State, step5State].filter(
+    (step) => step === 'done'
+  ).length;
+
+  const displayMode = (mode === 'all' && (!wallet.connected || completedSteps < 5)) ? 'setup' : mode;
+
+  const showDashboard = displayMode === 'dashboard' || displayMode === 'all';
+  const showEmployees = displayMode === 'employees' || displayMode === 'all';
+  const showAgent = displayMode === 'agent' || displayMode === 'all';
+  const showHistory = displayMode === 'history' || displayMode === 'all';
+  const showReports = displayMode === 'reports' || displayMode === 'all';
   const isSoloAgent = showAgent && !showDashboard;
-  const setupOnly = mode === 'setup';
+  const setupOnly = displayMode === 'setup';
   const advancedAllowed =
     process.env.NEXT_PUBLIC_ENABLE_ADVANCED === 'true' ||
     process.env.NEXT_PUBLIC_ADMIN_MODE === 'true';
   const advancedEnabled = advancedAllowed && showAdvanced;
-  const showStep1 = setupOnly ? setupStep === 1 : mode === 'vault' || mode === 'all';
-  const showStep2 = setupOnly ? setupStep === 2 : mode === 'all';
-  const showStep3 = setupOnly ? setupStep === 3 : mode === 'payments' || mode === 'all';
-  const showStep4 = setupOnly ? setupStep === 4 : mode === 'all';
-  const showStep5 = setupOnly ? setupStep === 5 : mode === 'all';
-  const completedSteps = [step1State, step2State, step3State, step4State, step5State].filter(
-    (step) => step === 'done'
-  ).length;
+  const showStep1 = setupOnly ? setupStep === 1 : displayMode === 'vault' || displayMode === 'all';
+  const showStep2 = setupOnly ? setupStep === 2 : displayMode === 'all';
+  const showStep3 = setupOnly ? setupStep === 3 : displayMode === 'payments' || displayMode === 'all';
+  const showStep4 = setupOnly ? setupStep === 4 : displayMode === 'all';
+  const showStep5 = setupOnly ? setupStep === 5 : displayMode === 'all';
   const setupSteps = [1, 2, 3, 4, 5];
   const stepNumberMap: Record<number, number> = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 };
   const currentSetupIndex = Math.max(0, setupSteps.indexOf(setupStep));
@@ -2256,7 +2166,21 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
         {error ? <div className="expensee-alert">{error}</div> : null}
         {lastTx ? <div className="expensee-alert">Last tx ({lastTx.label}): {lastTx.sig}</div> : null}
 
-        {showBalancePanel ? (
+        {!wallet.connected && !setupOnly && !showAgent ? (
+          <div className="flex flex-col items-center justify-center min-h-[50vh]">
+            <div className="expensee-card flex w-full max-w-sm flex-col items-center justify-center p-12 text-center shadow-sm">
+              <svg className="mb-4 h-12 w-12 text-[var(--app-muted)] opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              <h2 className="mb-2 text-xl font-bold text-[var(--app-ink)]">Connect Your Wallet</h2>
+              <p className="text-sm text-[var(--app-muted)]">
+                Please connect your Solana wallet to access the employer dashboard and manage your payroll.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {showBalancePanel ? (
           <section id="deposit-balance" className="expensee-card">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -3207,20 +3131,24 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
                     </p>
                     {!streamConfig ? (
                       <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                        Payroll settings are auto‑configuring. {autoConfigBusy ? 'Setting up now…' : 'Waiting for setup.'}
-                        {autoConfigError ? (
-                          <div className="mt-2 text-amber-200">{autoConfigError}</div>
-                        ) : null}
-                        <div className="mt-3">
-                          <button
-                            type="button"
-                            onClick={() => void attemptAutoConfig(true)}
-                            disabled={autoConfigBusy || !businessPda}
-                            className="premium-btn premium-btn-secondary disabled:opacity-50"
-                          >
-                            Retry Auto‑Setup
-                          </button>
-                        </div>
+                        <div className="mb-2">Payroll settings must be initialized for this business.</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const interval = Number(settleIntervalSecs || '10');
+                            if (!Number.isFinite(interval) || interval <= 0) {
+                              setError('Invalid cooldown interval');
+                              return;
+                            }
+                            void runAction('Init payroll settings', () =>
+                              initStreamConfigV4(connection, wallet, businessPda!, interval)
+                            ).then(() => refreshConfig());
+                          }}
+                          disabled={busy || !businessPda}
+                          className="premium-btn premium-btn-secondary disabled:opacity-50"
+                        >
+                          Initialize Settings
+                        </button>
                       </div>
                     ) : null}
                     <div className="mt-4 space-y-3">
@@ -4123,6 +4051,8 @@ export default function EmployerV4Page({ mode: propMode = 'all' }: EmployerV4Scr
             </p>
           </section>
         ) : null}
+          </>
+        )}
       </div>
     </ExpenseeShell>
   );
