@@ -66,6 +66,7 @@ test-ledger/
 # Keypairs (NEVER commit these!)
 *.json
 !package.json
+!package-lock.json
 !tsconfig.json
 !anchor.toml
 
