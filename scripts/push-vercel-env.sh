@@ -12,6 +12,16 @@ add_env() {
   printf '%s' "$val" | npx vercel env add "$key" production --yes --force
 }
 
+add_env_from_var() {
+  local key=$1
+  local val="${!key:-}"
+  if [ -z "$val" ]; then
+    echo "Missing required local environment variable: $key" >&2
+    exit 1
+  fi
+  add_env "$key" "$val"
+}
+
 add_env "NEXT_PUBLIC_SOLANA_RPC_URL" "https://api.devnet.solana.com"
 add_env "NEXT_PUBLIC_SOLANA_READ_RPC_URL" "https://api.devnet.solana.com"
 add_env "NEXT_PUBLIC_PAYROLL_PROGRAM_ID" "97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU"
@@ -48,7 +58,7 @@ add_env "GROQ_AGENT_MODEL" "llama-3.3-70b-versatile"
 add_env "GROQ_BASE_URL" "https://api.groq.com/openai/v1"
 add_env "GROQ_API_KEY" "your_groq_api_key_here"
 add_env "MONGODB_DB_NAME" "expensee"
-add_env "MONGODB_URI" "mongodb+srv://user:pass@cluster.mongodb.net/"
+add_env_from_var "MONGODB_URI"
 add_env "NEXT_PUBLIC_MASTER_AUTHORITY" "2QrwExUdu93o8mSdfEh6kvbNLTbN1UnVRrfyjQsDSUPE"
 add_env "NEXT_PUBLIC_DEFAULT_KEEPER_PUBKEY" "2QrwExUdu93o8mSdfEh6kvbNLTbN1UnVRrfyjQsDSUPE"
 add_env "NEXT_PUBLIC_MAGICBLOCK_ROUTER_RPC_URL" "https://devnet-router.magicblock.app"
