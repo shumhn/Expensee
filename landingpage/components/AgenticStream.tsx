@@ -43,7 +43,7 @@ export function AgenticStream() {
                         </filter>
                     </defs>
 
-                    {/* Agent -> Core (Path) */}
+                    {/* Employer -> Core (Path) */}
                     <DataBeam path="M 280 170 Q 320 170 400 300" gradient="url(#beam-indigo)" delay={0} />
 
                     {/* FHE -> Core (Path) */}
@@ -99,7 +99,7 @@ export function AgenticStream() {
 
                 </div>
 
-                {/* AI Agent Panel (Top Left) */}
+                {/* Employer Panel (Top Left) */}
                 <FloatingPanel
                     left={30} top={130}
                     delay={0}

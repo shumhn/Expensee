@@ -100,21 +100,21 @@ export function Benefits() {
                         </div>
                     </BenefitCard>
 
-                    {/* Card 3: Keeper */}
+                    {/* Card 3: Shielded payouts */}
                     <BenefitCard
-                        title="Automated Settlements"
-                        subtitle="Pooled privacy payouts let employees withdraw without exposing their wallet-to-employee link on-chain."
+                        title="Shielded Payout Flow"
+                        subtitle="Withdrawals stage through ShieldedPayoutV4 before employees claim, reducing direct wallet-to-employee linkage."
                         index={2}
                     >
                         <div className="relative w-full h-full flex flex-col p-8">
                             <div className="flex justify-between items-end mb-8">
                                 <div>
-                                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Uptime SLA</p>
-                                    <h4 className="text-3xl font-bold text-white tracking-tight">99.9%</h4>
+                                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Payout State</p>
+                                    <h4 className="text-3xl font-bold text-white tracking-tight">Buffered</h4>
                                 </div>
                                 <div className="flex items-center gap-1 px-2 py-1 rounded bg-green-500/10 border border-green-500/20 text-green-500 text-[10px] font-bold">
                                     <Zap className="w-3 h-3" />
-                                    ACTIVE
+                                    READY
                                 </div>
                             </div>
 
@@ -129,7 +129,7 @@ export function Benefits() {
                                         className={`flex-1 rounded-t-[2px] relative group/bar ${i === 7 ? 'bg-expensee-neon shadow-[0_0_20px_var(--color-expensee-neon)]' : 'bg-white/10'}`}
                                     >
                                         <div className={`absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white opacity-0 group-hover/bar:opacity-100 transition-opacity whitespace-nowrap`}>
-                                            Node {i}
+                                            Claim {i + 1}
                                         </div>
                                     </motion.div>
                                 ))}

@@ -207,7 +207,7 @@ export function GlobalScale() {
                                         </div>
                                         <div>
                                             <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Protocol</p>
-                                            <p className="text-xs text-white font-black uppercase">v2.4 SECURE</p>
+                                            <p className="text-xs text-white font-black uppercase">V4 DEVNET</p>
                                         </div>
                                     </div>
                                     <div className="w-full h-[2px] bg-white/5 relative overflow-hidden">

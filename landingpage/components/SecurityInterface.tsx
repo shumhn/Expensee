@@ -36,7 +36,7 @@ export function SecurityInterface() {
                     </div>
                     <div className="ml-auto flex items-center gap-2 text-[10px] font-mono text-zinc-400">
                         <Terminal className="w-3 h-3" />
-                        <span>audit_terminal_v2.sh</span>
+                        <span>anchor_v4_audit.sh</span>
                     </div>
                 </div>
 
@@ -50,14 +50,14 @@ export function SecurityInterface() {
                     />
 
                     <div className="space-y-1.5 text-zinc-500">
-                        <div className="flex gap-2"><span className="text-zinc-700">01</span> <span className="text-purple-400">import</span> "@openzeppelin/contracts/security/ReentrancyGuard.sol";</div>
+                        <div className="flex gap-2"><span className="text-zinc-700">01</span> <span className="text-purple-400">use</span> anchor_lang::prelude::*;</div>
                         <div className="flex gap-2"><span className="text-zinc-700">02</span> </div>
-                        <div className="flex gap-2"><span className="text-zinc-700">03</span> <span className="text-purple-400">contract</span> <span className="text-yellow-100">Vault</span> <span className="text-purple-400">is</span> ReentrancyGuard {"{"}</div>
-                        <div className="flex gap-2"><span className="text-zinc-700">04</span>    <span className="text-purple-400">mapping</span>(address ={">"} uint256) <span className="text-purple-400">private</span> _balances;</div>
+                        <div className="flex gap-2"><span className="text-zinc-700">03</span> #[account]</div>
+                        <div className="flex gap-2"><span className="text-zinc-700">04</span> <span className="text-purple-400">pub struct</span> <span className="text-yellow-100">EmployeeEntryV4</span> {"{"}</div>
                         <div className="flex gap-2"><span className="text-zinc-700">05</span> </div>
-                        <div className="flex gap-2 pl-4"><span className="text-zinc-600">// Auditing deposit function...</span></div>
-                        <div className="flex gap-2"><span className="text-zinc-700">06</span>    <span className="text-purple-400">function</span> <span className="text-blue-300">deposit</span>() <span className="text-purple-400">external payable</span> {"{"}</div>
-                        <div className="flex gap-2"><span className="text-zinc-700">07</span>       _balances[msg.sender] += msg.value;</div>
+                        <div className="flex gap-2 pl-4"><span className="text-zinc-600">// Checking encrypted payroll state...</span></div>
+                        <div className="flex gap-2"><span className="text-zinc-700">06</span>    <span className="text-blue-300">encrypted_salary_rate</span>: EncryptedHandle,</div>
+                        <div className="flex gap-2"><span className="text-zinc-700">07</span>    <span className="text-blue-300">encrypted_accrued</span>: EncryptedHandle,</div>
                         <div className="flex gap-2"><span className="text-zinc-700">08</span>    {"}"}</div>
                     </div>
 
@@ -73,7 +73,7 @@ export function SecurityInterface() {
                         </div>
                         <div className="flex flex-col">
                             <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Status</span>
-                            <span className="text-xs font-bold text-green-400">SECURE SOURCE</span>
+                            <span className="text-xs font-bold text-green-400">V4 CHECKS PASS</span>
                         </div>
                     </motion.div>
                 </div>

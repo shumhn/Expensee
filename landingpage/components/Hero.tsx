@@ -186,7 +186,7 @@ export function Hero() {
                             "Salaries encrypted end-to-end with Inco FHE. Invisible on-chain.",
                             "Earnings stream every second through MagicBlock secure vaults.",
                             "One-click Magic Scan finds your record — no setup, no friction.",
-                            "Built-in AI agent handles payroll actions through natural language.",
+                            "Built-in AI assist drafts payroll actions for wallet approval.",
                             "Pooled payouts keep your wallet anonymous. Withdraw in stealth.",
                         ].map((item, i) => (
                             <div key={i} className="flex items-center gap-3">
@@ -390,9 +390,9 @@ export function Hero() {
                                         changeColor="text-cyan-400"
                                     />
                                     <LiveStreamRow
-                                        label="AI Agent"
-                                        amount="Active"
-                                        change="ready"
+                                        label="AI Assist"
+                                        amount="Drafting"
+                                        change="review"
                                         changeColor="text-blue-400"
                                     />
                                 </div>

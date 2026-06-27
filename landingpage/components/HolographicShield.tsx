@@ -71,18 +71,18 @@ export function HolographicShield() {
                             </div>
 
                             {/* Text */}
-                            <h3 className="text-lg font-bold text-white tracking-widest uppercase mb-1 leading-tight">Expensee<br />Keeper</h3>
-                            <p className="text-[10px] text-expensee-neon font-mono tracking-widest uppercase mb-6">Decentralized Network</p>
+                            <h3 className="text-lg font-bold text-white tracking-widest uppercase mb-1 leading-tight">Shielded<br />Payouts</h3>
+                            <p className="text-[10px] text-expensee-neon font-mono tracking-widest uppercase mb-6">V4 Claim Flow</p>
 
                             {/* Stats Row - Compact & Centered */}
                             <div className="w-full max-w-[220px] grid grid-cols-2 gap-2 border-t border-white/10 pt-4">
                                 <div className="flex flex-col items-center p-2 rounded-lg bg-white/5">
-                                    <span className="text-lg font-bold text-white">99.9%</span>
-                                    <span className="text-[8px] text-zinc-400 uppercase tracking-wider">Uptime</span>
+                                    <span className="text-lg font-bold text-white">7 Day</span>
+                                    <span className="text-[8px] text-zinc-400 uppercase tracking-wider">Expiry</span>
                                 </div>
                                 <div className="flex flex-col items-center p-2 rounded-lg bg-white/5">
-                                    <span className="text-lg font-bold text-expensee-neon">1.2M+</span>
-                                    <span className="text-[8px] text-zinc-400 uppercase tracking-wider">Tx Processed</span>
+                                    <span className="text-lg font-bold text-expensee-neon">Private</span>
+                                    <span className="text-[8px] text-zinc-400 uppercase tracking-wider">Claim</span>
                                 </div>
                             </div>
                         </div>
