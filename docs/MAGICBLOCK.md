@@ -59,7 +59,7 @@ These routes query router / account state so the UI can show live delegation sta
 - `scripts/v4-crank-e2e.cjs`
 - `scripts/verify_er_cranks.cjs`
 
-These scripts are useful for demos, verification, and keeper-style automation.
+These scripts are useful for demos, verification, and local devnet automation.
 
 ## Runtime Flow
 
@@ -93,7 +93,7 @@ sequenceDiagram
 
 ## What Is Not MagicBlock-Specific
 
-- Legacy or non-v4 flows
+- Non-v4 flows
 - Base-layer withdraw processing
 - Inco FHE accounting itself
 - General app navigation and read-only UI

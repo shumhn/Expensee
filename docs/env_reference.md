@@ -1,47 +1,57 @@
 # Expensee Environment Reference
 
-This document provides a comprehensive reference for all environment variables used in the Expensee project.
+This repo contains the Anchor program, the main Next.js app, the landing page, and devnet helper scripts.
 
-## Component: App (`app/.env.local`)
+## App: `app/.env.local`
 
-These variables are primarily used by the Next.js application for interacting with the Solana blockchain and external APIs.
-
-| Variable | Description | Example Value (onyx-fii) |
+| Variable | Description | Example |
 | :--- | :--- | :--- |
-| `NEXT_PUBLIC_SOLANA_RPC_URL` | Main RPC endpoint for blockchain transactions. | `https://devnet.helius-rpc.com/...` |
-| `NEXT_PUBLIC_SOLANA_READ_RPC_URL` | Optional fallback RPC for read operations. | Same as RPC URL |
-| `NEXT_PUBLIC_PAYROLL_PROGRAM_ID` | Deployed payroll smart contract ID. | `3P3tYHEUykB2fH5vx...` |
-| `NEXT_PUBLIC_INCO_PROGRAM_ID` | Inco FHE program ID. | `5sjEbPiqgZrYwR31...` |
-| `NEXT_PUBLIC_INCO_TOKEN_PROGRAM_ID` | Inco confidential token program ID. | `4cyJHzecVWuU2xux...` |
-| `NEXT_PUBLIC_MAGICBLOCK_DELEGATION_PROGRAM` | MagicBlock delegation program. | `DELeGGvXpWV2fqJUh...` |
-| `NEXT_PUBLIC_PAYUSD_MINT` | Confidential PayUSD token mint address. | `4FVrXQpUPFKMtR2b...` |
-| `NEXT_PUBLIC_KEEPER_API_URL` | URL of the backend Keeper service. | `https://onyxfii.onrender.com` |
-| `NEXT_PUBLIC_BRIDGE_ENABLED` | Toggle for the public/confidential bridge UI. | `true` |
+| `NEXT_PUBLIC_SOLANA_RPC_URL` | Main Solana RPC used by the app for transactions. | `https://api.devnet.solana.com` |
+| `NEXT_PUBLIC_SOLANA_READ_RPC_URL` | Optional read fallback RPC. | `https://api.devnet.solana.com` |
+| `NEXT_PUBLIC_PAYROLL_PROGRAM_ID` | Deployed Expensee payroll program. | `97u6CxDck3yhEP6bcvjsMUeV6Us439Y7sSSBBj14QQuU` |
+| `NEXT_PUBLIC_INCO_PROGRAM_ID` | Inco Lightning program. | `5sjEbPiqgZrYwR31ahR6Uk9wf5awoX61YGg7jExQSwaj` |
+| `NEXT_PUBLIC_INCO_TOKEN_PROGRAM_ID` | Inco confidential token program. | `4cyJHzecVWuU2xux6bCAPAhALKQT8woBh4Vx3AGEGe5N` |
+| `NEXT_PUBLIC_MAGICBLOCK_DELEGATION_PROGRAM` | MagicBlock delegation program. | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
+| `NEXT_PUBLIC_MAGICBLOCK_MAGIC_PROGRAM` | MagicBlock scheduling program. | `Magic11111111111111111111111111111111111111` |
+| `NEXT_PUBLIC_MAGICBLOCK_MAGIC_CONTEXT` | MagicBlock global context account. | devnet context pubkey |
+| `NEXT_PUBLIC_MAGICBLOCK_VALIDATOR` | Default ER validator identity for stream delegation. | `MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e` |
+| `NEXT_PUBLIC_MAGICBLOCK_ENDPOINT` | MagicBlock endpoint used for ER/router calls. | `https://devnet-router.magicblock.app` |
+| `NEXT_PUBLIC_MAGICBLOCK_TEE_URL` | Token-gated TEE RPC endpoint. | `https://tee.magicblock.app` |
+| `NEXT_PUBLIC_MAGICBLOCK_TEE_ENABLED` | Enables TEE-authenticated transaction routing in app flows. | `true` |
+| `NEXT_PUBLIC_PAYUSD_MINT` | Confidential payroll token mint. | devnet mint pubkey |
+| `NEXT_PUBLIC_CONFIDENTIAL_USDC_MINT` | Optional alias/override for the confidential mint. | devnet mint pubkey |
+| `NEXT_PUBLIC_COMPLIANCE_ENABLED` | Enables Range compliance checks in supported flows. | `false` |
+| `NEXT_PUBLIC_RANGE_API_KEY` | Range API key when compliance is enabled. | optional |
+| `NEXT_PUBLIC_PRIVACY_ID_SALT` | Optional salt for hashed employer/employee IDs. | optional |
+| `MONGODB_URI` | Optional storage for AI assistant run state. | optional |
+| `MONGODB_DB_NAME` | MongoDB database name. | `expensee` |
 
-## Component: Keeper (`backend/keeper/.env`)
+## AI Assistant
 
-The Keeper is a Node.js service that automates confidential payroll claims and manages privacy-preserving payouts.
+The app can use these optional provider keys for `/api/agent/*` routes:
 
-| Variable | Description | Example Value |
-| :--- | :--- | :--- |
-| `KEEPER_RPC_URL` | MagicBlock router RPC for fast transaction processing. | `https://devnet-router.magicblock.app` |
-| `KEEPER_PROGRAM_ID` | Same as `NEXT_PUBLIC_PAYROLL_PROGRAM_ID`. | `3P3tYHEUykB2fH5vx...` |
-| `KEEPER_PAYER_KEYPAIR_PATH` | Path to the JSON keypair for the keeper's payer. | `~/.config/solana/id.json` |
-| `MONGODB_URI` | Connection string for persistent storage of claim states. | `mongodb+srv://...` |
-| `MONGODB_DB_NAME` | Database name for the keeper service. | `expensee` |
+- `GROQ_API_KEY`
+- `GROQ_AGENT_MODEL`
+- `OPENAI_API_KEY`
+- `OPENAI_AGENT_MODEL`
+- `OPENROUTER_API_KEY`
+- `GEMINI_API_KEY`
 
-## AI Integration Variables
+Without provider keys, the planner falls back to heuristic behavior where available.
 
-The project uses several AI models for financial assistance and audit automation.
+## Bridge Demo
 
-- `GEMINI_API_KEY`: Google Gemini Pro for reasoning tasks.
-- `GROQ_API_KEY`: Groq for low-latency Llama-3 inference.
-- `OPENROUTER_API_KEY`: OpenRouter for accessing a variety of LLMs.
+The `/bridge` page and bridge API routes are optional and custodial. They require server-controlled escrow and mint-authority keypairs.
 
-## Bridge & Escrow (Demo Mode)
+| Variable | Description |
+| :--- | :--- |
+| `NEXT_PUBLIC_BRIDGE_ENABLED` | Turns bridge UI/API usage on. |
+| `NEXT_PUBLIC_PUBLIC_USDC_MINT` | Public SPL token mint used for demo deposits/withdrawals. |
+| `BRIDGE_SOLANA_RPC_URL` | RPC used by bridge API routes. |
+| `BRIDGE_PUBLIC_DECIMALS` | Decimals for public token side. |
+| `BRIDGE_CONFIDENTIAL_DECIMALS` | Decimals for confidential token side. |
+| `BRIDGE_ESCROW_KEYPAIR_PATH` | Escrow signer keypair path or inline JSON array. |
+| `BRIDGE_CONFIDENTIAL_USDC_MINT_AUTHORITY_KEYPAIR_PATH` | Confidential mint authority keypair path or inline JSON array. |
+| `BRIDGE_CONFIDENTIAL_ESCROW_TOKEN_ACCOUNT` | Escrow's Inco token account for unwrap flows. |
 
-- `BRIDGE_ESCROW_KEYPAIR_PATH`: Secret key array for the escrow authority.
-- `BRIDGE_CONFIDENTIAL_ESCROW_TOKEN_ACCOUNT`: Inco account that receives confidential tokens.
-
----
-*Note: Sensitive variables like API keys and secret keys should NEVER be committed to version control.*
+Do not commit real secrets or production keypairs.

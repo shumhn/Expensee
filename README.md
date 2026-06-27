@@ -36,7 +36,7 @@
 | **Magic Scan** | One-click auto-detection of employment records — no manual business/employee index needed |
 | **Pooled Privacy Payouts** | Withdrawals route through a shared vault — wallet-to-employee link stays private |
 | **AI Agent Chatbot** | Built-in conversational assistant that handles payroll setup through natural language |
-| **Keeper-Free Design** | Fully on-chain crank-based settlements — no off-chain servers or relay services required |
+| **Shielded Claim Flow** | Withdrawals are staged through `ShieldedPayoutV4` accounts before employees claim |
 
 > *Expensee: Private, real-time payroll infrastructure on Solana.*
 
@@ -151,7 +151,7 @@ Expensee is the **only protocol** that combines FHE-encrypted salaries, pooled-v
 | **Real-Time Streaming** | ✅ MagicBlock TEE | ✅ Protocol-level | ✅ Smart Contract | ✅ |
 | **AI Setup Assistant** | ✅ | ❌ | ❌ | ❌ |
 | **Auto-Discovery (Magic Scan)** | ✅ | ❌ | ❌ | ❌ |
-| **Keeper-Free / Permissionless** | ✅ On-chain cranks | Partial | ✅ | ❌ Requires infra |
+| **Crank / Claim Flow** | ✅ V4 cranks + shielded claims | Partial | ✅ | ❌ Requires infra |
 | **Chain** | Solana | EVM (multi-chain) | EVM (multi-chain) | Solana / Multi |
 | **Target Users** | Startups, DAOs, remote teams | DeFi, DAOs | DAOs, vesting | Enterprise, SMBs |
 
@@ -215,7 +215,7 @@ Traditional payroll processors (ADP, Gusto, Deel) charge **$6–$12 per employee
 | Status | Milestone |
 |:------:|-----------|
 | ✅ | **Devnet live** — FHE streaming, Magic Scan, AI agent, pooled payouts fully functional |
-| ✅ | **V4 architecture** — Keeper-free, crank-based settlements, shielded payouts |
+| ✅ | **V4 architecture** — pooled vault, MagicBlock-assisted cranks, shielded payouts |
 | 🔜 | **Mainnet beta** — Production deployment on Solana mainnet |
 | 🔜 | **Multi-business batch ops** — Bulk employee onboarding, batch deposits |
 | 🔜 | **Payslip NFTs** — On-chain verifiable proof of payment for employees |
@@ -336,9 +336,9 @@ Legend:
 4. **Inco Token Program** handles confidential token transfers (deposits, payouts)
 5. **MagicBlock TEE** delegates employee accounts to Ephemeral Rollups for real-time streaming
 
-### Key Design: Keeper-Free Architecture
+### Key Design: V4 Settlement Architecture
 
-Unlike V2 which relied on an off-chain Keeper service and Umbra Relay for settlement, **V4 is fully on-chain**:
+V4 centers settlement around the on-chain pooled vault, shielded payout records, and MagicBlock-assisted stream execution:
 
 - **Crank-based settlements** — Anyone can call `crank_settle_v4` and `process_withdraw_request_v4` to process pending withdrawals
 - **No relayer needed** — Employees claim payouts directly to their own wallet
@@ -564,12 +564,10 @@ cd app && npm run dev
 expensee/
 ├── programs/payroll/              # Anchor program (Rust)
 │   └── src/
-│       ├── lib.rs                 # V4 + legacy instructions
+│       ├── lib.rs                 # V4 payroll instructions
 │       ├── state/
-│       │   ├── v4.rs              # V4 account structs (MasterVault, Business, Employee, Payout)
-│       │   ├── business.rs        # Legacy business state
-│       │   ├── employee.rs        # Legacy employee state
-│       │   └── ...
+│       │   ├── mod.rs             # State module exports
+│       │   └── v4.rs              # V4 account structs (MasterVault, Business, Employee, Payout)
 │       ├── contexts.rs            # Anchor account contexts
 │       ├── constants.rs           # PDA seeds, program IDs
 │       ├── errors.rs              # Error codes

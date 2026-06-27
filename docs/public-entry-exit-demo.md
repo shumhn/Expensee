@@ -94,10 +94,8 @@ Employer:
 Employee:
 - Reveal earnings (attested decrypt)
 - Request withdraw
-
-Keeper:
-- Processes withdraw request
-- If delegated: commit+undelegate -> settle -> redelegate
+- Process and claim the shielded payout from the app flow.
+- If delegated: commit+undelegate before settlement, then redelegate after settlement.
 
 ## 4) Unwrap: Confidential -> Public pUSDC (optional cash out)
 

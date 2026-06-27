@@ -7,8 +7,7 @@ Frontend for the v4 pooled-vault privacy flow (index-based PDAs + Inco FHE).
 - `/` Landing and product entry
 - `/employer` Business/vault/v4 setup and controls (default)
 - `/employee` v4 payroll status + withdraw request (default)
-
-Legacy consoles (advanced):
+- `/bridge` Optional devnet public/confidential token bridge
 
 
 ## Core behavior
@@ -17,7 +16,7 @@ Legacy consoles (advanced):
 - Index-based PDAs for privacy (no employee pubkey in PDA seeds).
 - Pooled vault model: a single global vault token account + per-business encrypted balances.
 - Encrypted metadata (counts, balances, IDs, salary) via Inco Lightning.
-- Employees submit a withdraw request; keeper processes and buffers payouts; employee claims.
+- Employees submit a withdraw request, the app processes it into a shielded payout, and employees claim from the payout account.
 
 ## Run
 

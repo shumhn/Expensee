@@ -1,5 +1,5 @@
 {
-  "name": "private-payroll-v2",
+  "name": "expensee",
   "version": "0.1.0",
   "description": "Private real-time payroll on Solana (Inco + MagicBlock)",
   "keywords": [
@@ -17,16 +17,6 @@
     "test": "anchor test",
     "lint": "cd app && npm run lint",
     "deploy": "anchor deploy",
-    "keeper:dev": "set -a && . backend/keeper/.env && set +a && npx ts-node --prefer-ts-exts -P backend/keeper/tsconfig.json backend/keeper/src/index.ts",
-    "keeper:health": "node scripts/keeper-healthcheck.cjs",
-    "dev:all": "node scripts/dev-all.cjs",
-    "umbra:relay:dev": "node services/umbra-relay/server.cjs",
-    "umbra:relay:self-test": "node services/umbra-relay/self-test.cjs",
-    "privacy:purge": "node scripts/purge-v2-privacy.cjs",
-    "setup:stream": "node scripts/setup-stream.cjs",
-    "withdraw:flow": "node scripts/withdraw-flow.cjs",
-    "withdraw:request": "node scripts/request-withdraw.cjs",
-    "withdraw:claim": "node scripts/claim-payout.cjs",
     "flow:v4": "node scripts/run-v4-flow.cjs"
   },
   "dependencies": {
